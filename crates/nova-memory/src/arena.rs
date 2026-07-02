@@ -73,3 +73,125 @@ impl Arena {
         ptr >= start && ptr < end
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_basic() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr = arena.allocate(64).unwrap();
+        assert!(!ptr.is_null());
+        assert!(arena.contains(ptr));
+    }
+
+    #[test]
+    fn allocate_zeroed() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr = arena.allocate_zeroed(64).unwrap();
+        assert!(!ptr.is_null());
+        unsafe {
+            for i in 0..64 {
+                assert_eq!(*ptr.add(i), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn arena_reset() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr = arena.allocate(1024).unwrap();
+        assert!(!ptr.is_null());
+        assert_eq!(arena.used(), 1024);
+        arena.reset();
+        assert_eq!(arena.used(), 0);
+        assert_eq!(arena.capacity(), 4096);
+        let ptr2 = arena.allocate(1024).unwrap();
+        assert!(!ptr2.is_null());
+    }
+
+    #[test]
+    fn multiple_allocations() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr1 = arena.allocate(64).unwrap();
+        let ptr2 = arena.allocate(64).unwrap();
+        assert_ne!(ptr1, ptr2);
+        assert!(arena.contains(ptr1));
+        assert!(arena.contains(ptr2));
+        unsafe {
+            std::ptr::write(ptr1 as *mut u64, 0xDEADBEEF);
+            std::ptr::write(ptr2 as *mut u64, 0xCAFEBABE);
+            assert_eq!(std::ptr::read(ptr1 as *mut u64), 0xDEADBEEF);
+            assert_eq!(std::ptr::read(ptr2 as *mut u64), 0xCAFEBABE);
+        }
+    }
+
+    #[test]
+    fn allocation_exhaustion() {
+        let mut arena = Arena::new("test".into(), 128).unwrap();
+        arena.allocate(128).unwrap();
+        let result = arena.allocate(1);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(RuntimeError::OutOfMemory(_))));
+    }
+
+    #[test]
+    fn allocate_size_zero() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let result = arena.allocate(0);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(RuntimeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn contains_ptr() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr = arena.allocate(64).unwrap();
+        assert!(arena.contains(ptr));
+        assert!(!arena.contains(std::ptr::null()));
+    }
+
+    #[test]
+    fn used_and_remaining() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        assert_eq!(arena.used(), 0);
+        assert_eq!(arena.remaining(), 4096);
+        arena.allocate(64).unwrap();
+        assert_eq!(arena.used(), 64);
+        assert_eq!(arena.remaining(), 4032);
+        arena.allocate(128).unwrap();
+        assert_eq!(arena.used(), 192);
+        assert_eq!(arena.remaining(), 3904);
+    }
+
+    #[test]
+    fn alignment_guarantee() {
+        let mut arena = Arena::new("test".into(), 4096).unwrap();
+        let ptr = arena.allocate(1).unwrap();
+        assert_eq!(ptr as usize % 8, 0);
+        let ptr2 = arena.allocate(3).unwrap();
+        assert_eq!(ptr2 as usize % 8, 0);
+    }
+
+    #[test]
+    fn large_allocation() {
+        let mut arena = Arena::new("test".into(), 8192).unwrap();
+        let ptr = arena.allocate(7000).unwrap();
+        assert!(!ptr.is_null());
+        assert_eq!(arena.used(), 7000);
+        unsafe {
+            std::ptr::write_bytes(ptr, 0xFF, 7000);
+        }
+    }
+
+    #[test]
+    fn allocate_after_reset_reuses_memory() {
+        let mut arena = Arena::new("test".into(), 256).unwrap();
+        let ptr1 = arena.allocate(128).unwrap();
+        unsafe { std::ptr::write(ptr1 as *mut u64, 42); }
+        arena.reset();
+        let ptr2 = arena.allocate(128).unwrap();
+        assert_eq!(ptr1, ptr2);
+    }
+}

@@ -174,3 +174,277 @@ impl Document {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use crate::document::*;
+    use crate::types::Value;
+
+    // --- Document creation ---
+
+    #[test]
+    fn test_document_new() {
+        let doc = Document::new("users");
+        assert_eq!(doc.meta.collection, "users");
+        assert_eq!(doc.meta.status, DocumentStatus::Active);
+        assert_eq!(doc.meta.version, 1);
+        assert_eq!(doc.meta.schema_version, 1);
+        assert!(doc.data.is_empty());
+    }
+
+    #[test]
+    fn test_document_new_generates_id() {
+        let doc1 = Document::new("c");
+        let doc2 = Document::new("c");
+        assert_ne!(doc1.meta.id, doc2.meta.id);
+    }
+
+    #[test]
+    fn test_document_new_sets_timestamps() {
+        let doc = Document::new("c");
+        assert!(doc.meta.created_at > 0);
+        assert_eq!(doc.meta.created_at, doc.meta.updated_at);
+    }
+
+    // --- DocumentStatus ---
+
+    #[test]
+    fn test_document_status_variants() {
+        assert_eq!(format!("{:?}", DocumentStatus::Active), "Active");
+        assert_eq!(format!("{:?}", DocumentStatus::Archived), "Archived");
+        assert_eq!(format!("{:?}", DocumentStatus::Deleted), "Deleted");
+        assert_eq!(format!("{:?}", DocumentStatus::Draft), "Draft");
+    }
+
+    // --- get_field ---
+
+    #[test]
+    fn test_get_field_top_level() {
+        let mut doc = Document::new("t");
+        doc.data.insert("name".into(), Value::String("alice".into()));
+        assert_eq!(doc.get_field("name"), Some(&Value::String("alice".into())));
+    }
+
+    #[test]
+    fn test_get_field_missing() {
+        let doc = Document::new("t");
+        assert_eq!(doc.get_field("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_get_field_nested() {
+        let mut doc = Document::new("t");
+        let mut inner = HashMap::new();
+        inner.insert("x".into(), Value::Int64(42));
+        doc.data.insert("outer".into(), Value::Object(inner));
+        assert_eq!(doc.get_field("outer.x"), Some(&Value::Int64(42)));
+    }
+
+    #[test]
+    fn test_get_field_deeply_nested() {
+        let mut doc = Document::new("t");
+        let mut level2 = HashMap::new();
+        level2.insert("z".into(), Value::String("deep".into()));
+        let mut level1 = HashMap::new();
+        level1.insert("y".into(), Value::Object(level2));
+        doc.data.insert("x".into(), Value::Object(level1));
+        assert_eq!(doc.get_field("x.y.z"), Some(&Value::String("deep".into())));
+    }
+
+    #[test]
+    fn test_get_field_empty_path() {
+        let doc = Document::new("t");
+        assert_eq!(doc.get_field(""), None);
+    }
+
+    #[test]
+    fn test_get_field_non_object_intermediate() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::Int64(1));
+        assert_eq!(doc.get_field("x.y"), None);
+    }
+
+    // --- set_field ---
+
+    #[test]
+    fn test_set_field_top_level() {
+        let mut doc = Document::new("t");
+        doc.set_field("name", Value::String("bob".into())).unwrap();
+        assert_eq!(doc.data.get("name"), Some(&Value::String("bob".into())));
+    }
+
+    #[test]
+    fn test_set_field_overwrites() {
+        let mut doc = Document::new("t");
+        doc.set_field("x", Value::Int64(1)).unwrap();
+        doc.set_field("x", Value::Int64(2)).unwrap();
+        assert_eq!(doc.data.get("x"), Some(&Value::Int64(2)));
+    }
+
+    #[test]
+    fn test_set_field_nested() {
+        let mut doc = Document::new("t");
+        let mut inner = HashMap::new();
+        inner.insert("y".into(), Value::Int64(0));
+        doc.data.insert("x".into(), Value::Object(inner));
+
+        doc.set_field("x.y", Value::Int64(42)).unwrap();
+        let outer = doc.data.get("x").unwrap();
+        if let Value::Object(map) = outer {
+            assert_eq!(map.get("y"), Some(&Value::Int64(42)));
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[test]
+    fn test_set_field_empty_path_inserts_empty_key() {
+        let mut doc = Document::new("t");
+        doc.set_field("", Value::String("val".into())).unwrap();
+        assert_eq!(doc.data.get(""), Some(&Value::String("val".into())));
+    }
+
+    #[test]
+    fn test_set_field_non_object_intermediate() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::Int64(1));
+        let result = doc.set_field("x.y", Value::Int64(2));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_field_missing_intermediate() {
+        let mut doc = Document::new("t");
+        let result = doc.set_field("a.b.c", Value::Int64(1));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_field_updates_updated_at() {
+        let mut doc = Document::new("t");
+        let before = doc.meta.updated_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        doc.set_field("x", Value::Int64(1)).unwrap();
+        assert!(doc.meta.updated_at > before);
+    }
+
+    // --- remove_field ---
+
+    #[test]
+    fn test_remove_field_top_level() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::Int64(1));
+        assert!(doc.remove_field("x"));
+        assert!(doc.data.is_empty());
+    }
+
+    #[test]
+    fn test_remove_field_missing() {
+        let mut doc = Document::new("t");
+        assert!(!doc.remove_field("nonexistent"));
+    }
+
+    #[test]
+    fn test_remove_field_empty_path() {
+        let mut doc = Document::new("t");
+        assert!(!doc.remove_field(""));
+    }
+
+    #[test]
+    fn test_remove_field_nested() {
+        let mut doc = Document::new("t");
+        let mut inner = HashMap::new();
+        inner.insert("y".into(), Value::Int64(42));
+        doc.data.insert("x".into(), Value::Object(inner));
+
+        assert!(doc.remove_field("x.y"));
+        let outer = doc.data.get("x").unwrap();
+        if let Value::Object(map) = outer {
+            assert!(map.is_empty());
+        } else {
+            panic!("expected object");
+        }
+    }
+
+    #[test]
+    fn test_remove_field_nested_missing_intermediate() {
+        let mut doc = Document::new("t");
+        assert!(!doc.remove_field("a.b"));
+    }
+
+    // --- compute_size ---
+
+    #[test]
+    fn test_compute_size_empty() {
+        let doc = Document::new("t");
+        assert!(doc.compute_size() > 0);
+    }
+
+    #[test]
+    fn test_compute_size_with_data() {
+        let mut doc = Document::new("t");
+        doc.data.insert("data".into(), Value::String("hello".repeat(100)));
+        let size = doc.compute_size();
+        assert!(size > 0);
+    }
+
+    // --- compute_checksum ---
+
+    #[test]
+    fn test_compute_checksum_consistent() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::Int64(1));
+        let c1 = doc.compute_checksum();
+        let c2 = doc.compute_checksum();
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn test_compute_checksum_changes_with_data() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::Int64(1));
+        let c1 = doc.compute_checksum();
+        doc.data.insert("y".into(), Value::Int64(2));
+        let c2 = doc.compute_checksum();
+        assert_ne!(c1, c2);
+    }
+
+    // --- DocumentMeta ---
+
+    #[test]
+    fn test_document_meta_defaults() {
+        let doc = Document::new("test_coll");
+        assert_eq!(doc.meta.collection, "test_coll");
+        assert_eq!(doc.meta.version, 1);
+        assert_eq!(doc.meta.status, DocumentStatus::Active);
+        assert_eq!(doc.meta.tags, Vec::<String>::new());
+    }
+
+    // --- Clone ---
+
+    #[test]
+    fn test_document_clone() {
+        let mut doc = Document::new("t");
+        doc.data.insert("x".into(), Value::String("val".into()));
+        let cloned = doc.clone();
+        assert_eq!(doc.data, cloned.data);
+        assert_eq!(doc.meta.id, cloned.meta.id);
+    }
+
+    // --- Serialization round-trip ---
+
+    #[test]
+    fn test_document_serialization_roundtrip() {
+        let mut doc = Document::new("roundtrip");
+        doc.meta.document_type = "profile".into();
+        doc.data.insert("name".into(), Value::String("alice".into()));
+        doc.data.insert("age".into(), Value::Int32(30));
+
+        let bytes = rmp_serde::to_vec(&doc).unwrap();
+        let back: Document = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(doc.meta.collection, back.meta.collection);
+        assert_eq!(doc.meta.document_type, back.meta.document_type);
+        assert_eq!(doc.data, back.data);
+    }
+}

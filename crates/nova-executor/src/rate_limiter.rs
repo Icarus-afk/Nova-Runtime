@@ -259,4 +259,276 @@ impl RateLimiter {
         self.global = TokenBucket::new(config.global_per_sec, config.global_burst);
         self.critical = TokenBucket::new(config.critical_per_sec, config.critical_burst);
     }
+
+    pub fn reset_key(&self, user_id: u128) {
+        self.per_user.remove(&user_id);
+    }
+
+    pub fn reset_all(&self) {
+        self.per_user.clear();
+        self.per_ip.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::OperationContextBuilder;
+    use crate::OperationRequest;
+    use crate::OperationType;
+    use crate::OperationTarget;
+    use crate::UserSession;
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+
+    fn test_addr() -> SocketAddr {
+        "127.0.0.1:8080".parse().unwrap()
+    }
+
+    #[test]
+    fn test_token_bucket_consumes_within_capacity() {
+        let bucket = TokenBucket::new(100.0, 10.0);
+        for _ in 0..10 {
+            assert!(bucket.try_consume(1.0));
+        }
+    }
+
+    #[test]
+    fn test_token_bucket_rejects_when_exhausted() {
+        let bucket = TokenBucket::new(100.0, 5.0);
+        for _ in 0..5 {
+            assert!(bucket.try_consume(1.0));
+        }
+        assert!(!bucket.try_consume(1.0));
+    }
+
+    #[test]
+    fn test_token_bucket_available_returns_remaining() {
+        let bucket = TokenBucket::new(0.0, 10.0);
+        assert_eq!(bucket.available(), 10.0);
+        assert!(bucket.try_consume(3.0));
+        assert_eq!(bucket.try_consume(7.0), true);
+        assert_eq!(bucket.try_consume(1.0), false);
+    }
+
+    #[test]
+    fn test_rate_limiter_allows_within_global_limit() {
+        let config = RateLimitConfig {
+            global_per_sec: 100.0,
+            global_burst: 100.0,
+            user_per_sec: 100.0,
+            user_burst: 100.0,
+            ip_per_sec: 100.0,
+            ip_burst: 100.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+        let ctx = OperationContextBuilder::new(test_addr())
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        for _ in 0..50 {
+            assert!(rl.check(&ctx, &req).is_ok(), "expected OK within limit");
+        }
+    }
+
+    #[test]
+    fn test_rate_limiter_rejects_above_global_limit() {
+        let config = RateLimitConfig {
+            global_per_sec: 1000.0,
+            global_burst: 5.0,
+            user_per_sec: 1000.0,
+            user_burst: 1000.0,
+            ip_per_sec: 1000.0,
+            ip_burst: 1000.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+        let ctx = OperationContextBuilder::new(test_addr())
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        for _ in 0..5 {
+            assert!(rl.check(&ctx, &req).is_ok());
+        }
+        // 6th should fail (burst exhausted)
+        assert!(rl.check(&ctx, &req).is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_per_user() {
+        let config = RateLimitConfig {
+            global_per_sec: 10000.0,
+            global_burst: 10000.0,
+            user_per_sec: 1000.0,
+            user_burst: 3.0,
+            ip_per_sec: 10000.0,
+            ip_burst: 10000.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+
+        let session = UserSession {
+            user_id: 42,
+            username: "test".into(),
+            roles: vec![],
+            permissions: vec![],
+            session_id: 1,
+            metadata: HashMap::new(),
+        };
+        let ctx = OperationContextBuilder::new(test_addr())
+            .user_session(session)
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        for _ in 0..3 {
+            assert!(rl.check(&ctx, &req).is_ok());
+        }
+        assert!(rl.check(&ctx, &req).is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_hits_counter() {
+        let config = RateLimitConfig {
+            global_per_sec: 1000.0,
+            global_burst: 2.0,
+            user_per_sec: 1000.0,
+            user_burst: 1000.0,
+            ip_per_sec: 1000.0,
+            ip_burst: 1000.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+        let ctx = OperationContextBuilder::new(test_addr())
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        assert!(rl.check(&ctx, &req).is_ok());
+        assert!(rl.check(&ctx, &req).is_ok());
+        let _ = rl.check(&ctx, &req); // 3rd should fail
+        assert!(rl.hits() >= 1);
+    }
+
+    #[test]
+    fn test_rate_limiter_reset_key() {
+        let config = RateLimitConfig {
+            global_per_sec: 10000.0,
+            global_burst: 10000.0,
+            user_per_sec: 1000.0,
+            user_burst: 1.0,
+            ip_per_sec: 10000.0,
+            ip_burst: 10000.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+
+        let session = UserSession {
+            user_id: 99,
+            username: "test".into(),
+            roles: vec![],
+            permissions: vec![],
+            session_id: 1,
+            metadata: HashMap::new(),
+        };
+        let ctx = OperationContextBuilder::new(test_addr())
+            .user_session(session)
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        assert!(rl.check(&ctx, &req).is_ok());
+        assert!(rl.check(&ctx, &req).is_err());
+
+        rl.reset_key(99);
+        // After reset, should be allowed again
+        assert!(rl.check(&ctx, &req).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limiter_reset_all() {
+        let config = RateLimitConfig {
+            global_per_sec: 10000.0,
+            global_burst: 10000.0,
+            user_per_sec: 1000.0,
+            user_burst: 1.0,
+            ip_per_sec: 1000.0,
+            ip_burst: 1.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+
+        let session = UserSession {
+            user_id: 50,
+            username: "test".into(),
+            roles: vec![],
+            permissions: vec![],
+            session_id: 1,
+            metadata: HashMap::new(),
+        };
+        let ctx = OperationContextBuilder::new(test_addr())
+            .user_session(session)
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        assert!(rl.check(&ctx, &req).is_ok());
+        assert!(rl.check(&ctx, &req).is_err());
+
+        rl.reset_all();
+        // After reset, should be allowed again
+        assert!(rl.check(&ctx, &req).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limiter_different_keys_independent() {
+        let config = RateLimitConfig {
+            global_per_sec: 10000.0,
+            global_burst: 10000.0,
+            user_per_sec: 1000.0,
+            user_burst: 2.0,
+            ip_per_sec: 10000.0,
+            ip_burst: 10000.0,
+            ..Default::default()
+        };
+        let rl = RateLimiter::new(config);
+
+        let session1 = UserSession {
+            user_id: 1,
+            username: "alice".into(),
+            roles: vec![],
+            permissions: vec![],
+            session_id: 1,
+            metadata: HashMap::new(),
+        };
+        let session2 = UserSession {
+            user_id: 2,
+            username: "bob".into(),
+            roles: vec![],
+            permissions: vec![],
+            session_id: 2,
+            metadata: HashMap::new(),
+        };
+
+        let ctx1 = OperationContextBuilder::new(test_addr())
+            .user_session(session1)
+            .operation_type(OperationType::Get)
+            .build();
+        let ctx2 = OperationContextBuilder::new(test_addr())
+            .user_session(session2)
+            .operation_type(OperationType::Get)
+            .build();
+        let req = OperationRequest::new(OperationType::Get, OperationTarget::System);
+
+        assert!(rl.check(&ctx1, &req).is_ok());
+        assert!(rl.check(&ctx1, &req).is_ok());
+        assert!(rl.check(&ctx1, &req).is_err()); // alice exhausted
+
+        assert!(rl.check(&ctx2, &req).is_ok()); // bob still has tokens
+        assert!(rl.check(&ctx2, &req).is_ok());
+        assert!(rl.check(&ctx2, &req).is_err()); // bob exhausted
+    }
 }

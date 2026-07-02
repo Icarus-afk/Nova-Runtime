@@ -283,3 +283,308 @@ impl Default for SchemaRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use crate::schema::*;
+    use crate::types::NovaType;
+    use crate::registry::SchemaRegistry;
+    use nova_core::error::RuntimeError;
+
+    fn make_schema(name: &str, version: u32) -> CollectionSchema {
+        CollectionSchema {
+            version,
+            collection: name.into(),
+            description: "".into(),
+            mode: SchemaMode::Typed,
+            fields: vec![],
+            computed_fields: vec![],
+            indexes: vec![],
+            defaults: HashMap::new(),
+            validation: vec![],
+            max_document_size: 0,
+            metadata: HashMap::new(),
+            changelog: vec![],
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    // --- register / get ---
+
+    #[test]
+    fn test_register_and_get() {
+        let registry = SchemaRegistry::new();
+        let schema = make_schema("users", 1);
+        registry.register(schema.clone()).unwrap();
+        let retrieved = registry.get("users").unwrap();
+        assert_eq!(retrieved.collection, "users");
+        assert_eq!(retrieved.version, 1);
+    }
+
+    #[test]
+    fn test_register_duplicate_errors() {
+        let registry = SchemaRegistry::new();
+        registry.register(make_schema("dup", 1)).unwrap();
+        let err = registry.register(make_schema("dup", 2)).unwrap_err();
+        assert!(matches!(err, RuntimeError::AlreadyExists(_)));
+    }
+
+    #[test]
+    fn test_get_nonexistent_errors() {
+        let registry = SchemaRegistry::new();
+        let err = registry.get("nonexistent").unwrap_err();
+        assert!(matches!(err, RuntimeError::NotFound(_)));
+    }
+
+    // --- update ---
+
+    #[test]
+    fn test_update_existing() {
+        let registry = SchemaRegistry::new();
+        registry.register(make_schema("users", 1)).unwrap();
+        registry.update("users", make_schema("users", 2)).unwrap();
+        let retrieved = registry.get("users").unwrap();
+        assert_eq!(retrieved.version, 2);
+    }
+
+    #[test]
+    fn test_update_nonexistent_errors() {
+        let registry = SchemaRegistry::new();
+        let err = registry.update("ghost", make_schema("ghost", 1)).unwrap_err();
+        assert!(matches!(err, RuntimeError::NotFound(_)));
+    }
+
+    // --- list ---
+
+    #[test]
+    fn test_list_empty() {
+        let registry = SchemaRegistry::new();
+        assert!(registry.list().is_empty());
+    }
+
+    #[test]
+    fn test_list_with_schemas() {
+        let registry = SchemaRegistry::new();
+        registry.register(make_schema("b", 1)).unwrap();
+        registry.register(make_schema("a", 1)).unwrap();
+        let names = registry.list();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    // --- delete ---
+
+    #[test]
+    fn test_delete_existing() {
+        let registry = SchemaRegistry::new();
+        registry.register(make_schema("temp", 1)).unwrap();
+        registry.delete("temp").unwrap();
+        assert!(registry.get("temp").is_err());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_errors() {
+        let registry = SchemaRegistry::new();
+        let err = registry.delete("ghost").unwrap_err();
+        assert!(matches!(err, RuntimeError::NotFound(_)));
+    }
+
+    // --- evolve ---
+
+    #[test]
+    fn test_evolve_adds_field() {
+        let registry = SchemaRegistry::new();
+        registry.register(make_schema("items", 1)).unwrap();
+
+        let evolved = registry.evolve(
+            "items",
+            vec![SchemaChangeOp::AddField {
+                field: FieldDef {
+                    name: "new_field".into(),
+                    field_type: NovaType::String { max_length: None },
+                    required: false,
+                    default: None,
+                    computed: None,
+                    description: "".into(),
+                    index: None,
+                    unique: false,
+                    sensitive: false,
+                    validate: vec![],
+                },
+                reason: "needed".into(),
+            }],
+            "add new field",
+            "dev",
+        ).unwrap();
+
+        assert_eq!(evolved.version, 2);
+        assert_eq!(evolved.fields.len(), 1);
+        assert_eq!(evolved.fields[0].name, "new_field");
+    }
+
+    #[test]
+    fn test_evolve_make_optional() {
+        let registry = SchemaRegistry::new();
+        // Start with optional field (not required) so compatibility check passes
+        let mut schema = make_schema("items", 1);
+        schema.fields.push(FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: false,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        });
+        registry.register(schema).unwrap();
+
+        let result = registry.evolve(
+            "items",
+            vec![
+                SchemaChangeOp::AddField {
+                    field: FieldDef {
+                        name: "age".into(),
+                        field_type: NovaType::Int32,
+                        required: false,
+                        default: None,
+                        computed: None,
+                        description: "".into(),
+                        index: None,
+                        unique: false,
+                        sensitive: false,
+                        validate: vec![],
+                    },
+                    reason: "add age".into(),
+                },
+            ],
+            "add age field",
+            "dev",
+        );
+
+        assert!(result.is_ok());
+        let evolved = result.unwrap();
+        assert_eq!(evolved.fields.len(), 2);
+        assert_eq!(evolved.fields[1].name, "age");
+    }
+
+    #[test]
+    fn test_evolve_nonexistent_errors() {
+        let registry = SchemaRegistry::new();
+        let err = registry.evolve("ghost", vec![], "desc", "dev").unwrap_err();
+        assert!(matches!(err, RuntimeError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_evolve_duplicate_field_errors() {
+        let registry = SchemaRegistry::new();
+        let mut schema = make_schema("items", 1);
+        schema.fields.push(FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: false,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        });
+        registry.register(schema).unwrap();
+
+        let err = registry.evolve(
+            "items",
+            vec![
+                SchemaChangeOp::AddField {
+                    field: FieldDef {
+                        name: "name".into(),
+                        field_type: NovaType::String { max_length: None },
+                        required: false,
+                        default: None,
+                        computed: None,
+                        description: "".into(),
+                        index: None,
+                        unique: false,
+                        sensitive: false,
+                        validate: vec![],
+                    },
+                    reason: "dup".into(),
+                },
+            ],
+            "dup",
+            "dev",
+        ).unwrap_err();
+        assert!(matches!(err, RuntimeError::InvalidArgument(_)));
+    }
+
+    // --- check_compatibility ---
+
+    #[test]
+    fn test_compatibility_type_widening_allowed() {
+        let old = make_schema("t", 1);
+        let mut new = make_schema("t", 2);
+        new.fields.push(FieldDef {
+            name: "count".into(),
+            field_type: NovaType::Int64,
+            required: false,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        });
+        // Adding a new field is always compatible
+        let result = SchemaRegistry::new().check_compatibility(&old, &new);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compatibility_field_removal_not_allowed() {
+        let mut old = make_schema("t", 1);
+        old.fields.push(FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: false,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        });
+        let new = make_schema("t", 2);
+        let err = SchemaRegistry::new().check_compatibility(&old, &new).unwrap_err();
+        assert!(matches!(err, RuntimeError::InvalidArgument(_)));
+    }
+
+    // --- Default impl ---
+
+    #[test]
+    fn test_registry_default() {
+        let registry = SchemaRegistry::default();
+        assert!(registry.list().is_empty());
+    }
+
+    // --- Multiple operations ---
+
+    #[test]
+    fn test_registry_register_update_get_delete_cycle() {
+        let registry = SchemaRegistry::new();
+
+        registry.register(make_schema("cycle", 1)).unwrap();
+        assert!(registry.get("cycle").is_ok());
+
+        registry.update("cycle", make_schema("cycle", 2)).unwrap();
+        assert_eq!(registry.get("cycle").unwrap().version, 2);
+
+        registry.delete("cycle").unwrap();
+        assert!(registry.get("cycle").is_err());
+    }
+}

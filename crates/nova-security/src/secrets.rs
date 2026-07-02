@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SecretValue {
     data: Vec<u8>,
 }
@@ -117,5 +117,112 @@ impl SecretsManager {
                 Ok(secrets)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let d = std::env::temp_dir().join(format!("nova_sec_test_{}_{}", label, ts));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn test_file_provider_set_and_get() {
+        let dir = temp_dir("setget");
+        let sm = SecretsManager::new(SecretsProvider::File {
+            directory: dir.to_string_lossy().to_string(),
+        });
+        sm.set_secret("my_key", b"my_value").unwrap();
+        let val = sm.get_secret("my_key").unwrap();
+        assert_eq!(val.as_bytes(), b"my_value");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_provider_get_nonexistent() {
+        let dir = temp_dir("nonexist");
+        let sm = SecretsManager::new(SecretsProvider::File {
+            directory: dir.to_string_lossy().to_string(),
+        });
+        let err = sm.get_secret("does_not_exist").unwrap_err();
+        assert!(matches!(err, SecurityError::SecretNotFound(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_provider_list_secrets() {
+        let dir = temp_dir("list");
+        let sm = SecretsManager::new(SecretsProvider::File {
+            directory: dir.to_string_lossy().to_string(),
+        });
+        sm.set_secret("alpha", b"a").unwrap();
+        sm.set_secret("beta", b"b").unwrap();
+        let list = sm.list_secrets().unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&"alpha".to_string()));
+        assert!(list.contains(&"beta".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_file_provider_list_empty() {
+        let dir = temp_dir("empty");
+        let sm = SecretsManager::new(SecretsProvider::File {
+            directory: dir.to_string_lossy().to_string(),
+        });
+        let list = sm.list_secrets().unwrap();
+        assert!(list.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_secret_value_as_bytes() {
+        let sv = SecretValue::new(b"hello".to_vec());
+        assert_eq!(sv.as_bytes(), b"hello");
+    }
+
+    #[test]
+    fn test_secret_value_as_str_valid_utf8() {
+        let sv = SecretValue::new(b"hello".to_vec());
+        assert_eq!(sv.as_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_secret_value_as_str_invalid_utf8() {
+        let sv = SecretValue::new(vec![0xFF, 0xFE]);
+        assert!(sv.as_str().is_err());
+    }
+
+    #[test]
+    fn test_secret_value_into_inner() {
+        let sv = SecretValue::new(b"data".to_vec());
+        let inner = sv.into_inner();
+        assert_eq!(inner, b"data");
+    }
+
+    #[test]
+    fn test_environment_provider_set_noop() {
+        let sm = SecretsManager::new(SecretsProvider::Environment {
+            prefix: "TEST_".to_string(),
+        });
+        assert!(sm.set_secret("SOME_KEY", b"value").is_ok());
+    }
+
+    #[test]
+    fn test_environment_provider_get_nonexistent() {
+        let sm = SecretsManager::new(SecretsProvider::Environment {
+            prefix: "UNLIKELY_PREFIX_X7K9_".to_string(),
+        });
+        let err = sm.get_secret("NONEXISTENT").unwrap_err();
+        assert!(matches!(err, SecurityError::SecretNotFound(_)));
     }
 }

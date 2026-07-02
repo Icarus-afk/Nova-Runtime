@@ -264,3 +264,178 @@ pub fn generate_key() -> KeyWrapper {
         algorithm: EncryptionAlgorithm::Aes256Gcm,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt_decrypt_round_trip() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let plaintext = b"Hello, Nova Runtime!";
+        let encrypted = engine.encrypt(plaintext).unwrap();
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_empty() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let encrypted = engine.encrypt(b"").unwrap();
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(Vec::<u8>::new(), decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_large_data() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let plaintext = vec![0xABu8; 10_000];
+        let encrypted = engine.encrypt(&plaintext).unwrap();
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_unique_nonces() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let msg = b"same plaintext";
+        let e1 = engine.encrypt(msg).unwrap();
+        let e2 = engine.encrypt(msg).unwrap();
+        assert_ne!(e1.nonce, e2.nonce);
+        assert_ne!(e1.ciphertext, e2.ciphertext);
+    }
+
+    #[test]
+    fn test_authentication_tag_protects_integrity() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let encrypted = engine.encrypt(b"integrity check").unwrap();
+        let mut tampered = EncryptedData { ..encrypted.clone() };
+        tampered.tag[0] ^= 0x01;
+        let result = engine.decrypt(&tampered);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_fails() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let encrypted = engine.encrypt(b"sensitive data").unwrap();
+        let mut tampered = EncryptedData { ..encrypted.clone() };
+        tampered.ciphertext[0] ^= 0xFF;
+        let result = engine.decrypt(&tampered);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tampered_nonce_fails() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let encrypted = engine.encrypt(b"nonce protected").unwrap();
+        let mut tampered = EncryptedData { ..encrypted.clone() };
+        tampered.nonce[0] ^= 0x01;
+        let result = engine.decrypt(&tampered);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_with_wrong_engine_fails() {
+        let key1 = generate_key();
+        let engine1 = EncryptionEngine::new(key1);
+        let encrypted = engine1.encrypt(b"secret").unwrap();
+        let key2 = generate_key();
+        let engine2 = EncryptionEngine::new(key2);
+        let result = engine2.decrypt(&encrypted);
+        assert!(matches!(result, Err(SecurityError::KeyNotFound(_))));
+    }
+
+    #[test]
+    fn test_key_not_found_error() {
+        let key = generate_key();
+        let engine = EncryptionEngine::new(key);
+        let bogus = EncryptedData {
+            key_id: KeyId([0; 8]),
+            algorithm: EncryptionAlgorithm::Aes256Gcm,
+            nonce: [0; 12],
+            ciphertext: vec![],
+            tag: [0; 16],
+        };
+        let result = engine.decrypt(&bogus);
+        assert!(matches!(result, Err(SecurityError::KeyNotFound(_))));
+    }
+
+    #[test]
+    fn test_rotate_key_then_decrypt_old_data() {
+        let key1 = generate_key();
+        let engine = EncryptionEngine::new(key1);
+        let encrypted = engine.encrypt(b"data before rotation").unwrap();
+        let key2 = generate_key();
+        engine.rotate_key(key2);
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(b"data before rotation".to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_active_key_id_after_rotation() {
+        let key1 = generate_key();
+        let engine = EncryptionEngine::new(key1);
+        let id1 = engine.active_key_id();
+        let key2 = generate_key();
+        engine.rotate_key(key2);
+        let id2 = engine.active_key_id();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_generate_key_defaults() {
+        let key = generate_key();
+        assert_eq!(key.key.len(), 32);
+        assert_eq!(key.algorithm, EncryptionAlgorithm::Aes256Gcm);
+        assert!(key.expires_at > key.created_at);
+    }
+
+    #[test]
+    fn test_generate_key_unique_ids() {
+        let k1 = generate_key();
+        let k2 = generate_key();
+        assert_ne!(k1.id, k2.id);
+    }
+
+    #[test]
+    fn test_now_ms_positive() {
+        let t = now_ms();
+        assert!(t > 1_700_000_000_000u64);
+    }
+
+    #[test]
+    fn test_encrypt_with_chacha20() {
+        let key = generate_key();
+        let chacha_key = KeyWrapper {
+            algorithm: EncryptionAlgorithm::ChaCha20Poly1305,
+            ..key
+        };
+        let engine = EncryptionEngine::new(chacha_key);
+        let plaintext = b"ChaCha20 test";
+        let encrypted = engine.encrypt(plaintext).unwrap();
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_with_aes256gcm_siv() {
+        let key = generate_key();
+        let siv_key = KeyWrapper {
+            algorithm: EncryptionAlgorithm::Aes256GcmSiv,
+            ..key
+        };
+        let engine = EncryptionEngine::new(siv_key);
+        let plaintext = b"AES256-GCM-SIV test";
+        let encrypted = engine.encrypt(plaintext).unwrap();
+        let decrypted = engine.decrypt(&encrypted).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+}

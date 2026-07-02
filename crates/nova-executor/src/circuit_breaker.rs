@@ -62,21 +62,26 @@ impl CircuitBreaker {
 
         match f() {
             Ok(result) => {
-                let mut s_count = self.success_count.write();
-                let count = s_count.entry(subsystem.clone()).or_insert(0);
-                *count += 1;
-                if *count >= self.success_threshold {
-                    if let Some(CircuitState::HalfOpen) = self.state.read().get(subsystem) {
-                        self.close(subsystem);
-                    }
+                let should_close = {
+                    let mut s_count = self.success_count.write();
+                    let count = s_count.entry(subsystem.clone()).or_insert(0);
+                    *count += 1;
+                    *count >= self.success_threshold
+                        && matches!(self.state.read().get(subsystem), Some(CircuitState::HalfOpen))
+                };
+                if should_close {
+                    self.close(subsystem);
                 }
                 Ok(result)
             }
             Err(err) if is_tracked_failure(&err) => {
-                let mut f_count = self.failure_count.write();
-                let count = f_count.entry(subsystem.clone()).or_insert(0);
-                *count += 1;
-                if *count >= self.failure_threshold {
+                let should_open = {
+                    let mut f_count = self.failure_count.write();
+                    let count = f_count.entry(subsystem.clone()).or_insert(0);
+                    *count += 1;
+                    *count >= self.failure_threshold
+                };
+                if should_open {
                     self.open(subsystem);
                 }
                 Err(CircuitError::Failure(err.to_string()))
@@ -174,3 +179,177 @@ impl std::fmt::Display for CircuitError {
 }
 
 impl std::error::Error for CircuitError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_initial_state_closed() {
+        let cb = CircuitBreaker::new(5, 3, 1000, 10000);
+        assert_eq!(cb.state(&SubsystemId::Storage), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_force_open_transitions_to_open() {
+        let cb = CircuitBreaker::new(5, 3, 1000, 10000);
+        let subsystem = SubsystemId::Storage;
+        cb.force_open(&subsystem);
+        match cb.state(&subsystem) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open state"),
+        }
+        assert_eq!(cb.opens(), 1);
+    }
+
+    #[test]
+    fn test_force_close_transitions_to_closed() {
+        let cb = CircuitBreaker::new(5, 3, 1000, 10000);
+        let subsystem = SubsystemId::Storage;
+        cb.force_open(&subsystem);
+        cb.force_close(&subsystem);
+        assert_eq!(cb.state(&subsystem), CircuitState::Closed);
+        assert_eq!(cb.closes(), 1);
+    }
+
+    #[test]
+    fn test_reset_returns_to_closed() {
+        let cb = CircuitBreaker::new(5, 3, 1000, 10000);
+        let subsystem = SubsystemId::Storage;
+        cb.force_open(&subsystem);
+        cb.reset(&subsystem);
+        assert_eq!(cb.state(&subsystem), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_threshold_failures_opens_circuit() {
+        let cb = CircuitBreaker::new(2, 1, 100, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        // First failure: still closed, count = 1
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        assert!(matches!(result, Err(CircuitError::Failure(_))));
+        assert_eq!(cb.state(&subsystem), CircuitState::Closed);
+
+        // Second failure: triggers open
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        assert!(matches!(result, Err(CircuitError::Failure(_))));
+        match cb.state(&subsystem) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open state after threshold failures"),
+        }
+        assert_eq!(cb.opens(), 1);
+    }
+
+    #[test]
+    fn test_open_rejects_requests() {
+        let cb = CircuitBreaker::new(1, 1, 100, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        let _: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        match cb.state(&subsystem) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open"),
+        }
+
+        // Request while open should be rejected
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Ok::<_, nova_core::RuntimeError>(42));
+        assert!(matches!(result, Err(CircuitError::Open)));
+        assert_eq!(cb.rejected(), 1);
+    }
+
+    #[test]
+    fn test_half_open_transitions_to_closed_on_success() {
+        let cb = CircuitBreaker::new(1, 1, 1, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        // Open the circuit
+        let _: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        match cb.state(&subsystem) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open"),
+        }
+
+        // Wait for half-open timeout
+        std::thread::sleep(Duration::from_millis(5));
+
+        // This call should see expired Open, transition to HalfOpen, succeed, and close
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Ok::<_, nova_core::RuntimeError>(42));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(cb.state(&subsystem), CircuitState::Closed);
+        assert_eq!(cb.closes(), 1);
+    }
+
+    #[test]
+    fn test_half_open_failure_returns_to_open() {
+        let cb = CircuitBreaker::new(1, 5, 1, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        // Open the circuit
+        let _: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+
+        // Wait for half-open timeout
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Failure in HalfOpen should re-open
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        assert!(matches!(result, Err(CircuitError::Failure(_))));
+        match cb.state(&subsystem) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open after failure in HalfOpen"),
+        }
+        assert_eq!(cb.opens(), 2);
+    }
+
+    #[test]
+    fn test_non_tracked_failure_does_not_open() {
+        let cb = CircuitBreaker::new(1, 1, 100, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        // InvalidArgument is not a tracked failure
+        let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::InvalidArgument("t".into())));
+        assert!(matches!(result, Err(CircuitError::Failure(_))));
+        assert_eq!(cb.state(&subsystem), CircuitState::Closed);
+        assert_eq!(cb.opens(), 0);
+    }
+
+    #[test]
+    fn test_rejected_counter_increments() {
+        let cb = CircuitBreaker::new(1, 1, 100, 10000);
+        let subsystem = SubsystemId::Storage;
+
+        let _: Result<i32, CircuitError> = cb.execute(&subsystem, || Err(nova_core::RuntimeError::Timeout("t".into())));
+
+        assert_eq!(cb.rejected(), 0); // first rejection hasn't happened yet
+        let _: Result<i32, CircuitError> = cb.execute(&subsystem, || Ok::<_, nova_core::RuntimeError>(42));
+        assert_eq!(cb.rejected(), 1);
+    }
+
+    #[test]
+    fn test_counters_initialized_to_zero() {
+        let cb = CircuitBreaker::new(5, 3, 1000, 10000);
+        assert_eq!(cb.opens(), 0);
+        assert_eq!(cb.half_opens(), 0);
+        assert_eq!(cb.closes(), 0);
+        assert_eq!(cb.rejected(), 0);
+    }
+
+    #[test]
+    fn test_mixed_subsystems_independent() {
+        let cb = CircuitBreaker::new(1, 1, 100, 10000);
+        let storage = SubsystemId::Storage;
+        let queue = SubsystemId::Queue;
+
+        // Open storage
+        let _: Result<i32, CircuitError> = cb.execute(&storage, || Err(nova_core::RuntimeError::Timeout("t".into())));
+        match cb.state(&storage) {
+            CircuitState::Open(_) => {}
+            _ => panic!("expected Open for storage"),
+        }
+
+        // Queue should still be closed
+        assert_eq!(cb.state(&queue), CircuitState::Closed);
+    }
+}

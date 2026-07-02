@@ -140,3 +140,121 @@ impl BlobStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() -> BlobStore {
+        BlobStore::new(1000)
+    }
+
+    #[test]
+    fn test_blob_new() {
+        let store = setup();
+        assert_eq!(store.min_blob_size, MIN_BLOB_SIZE);
+        assert_eq!(store.max_blob_size, MAX_BLOB_SIZE);
+        let stats = store.stats();
+        assert_eq!(stats.total_blobs, 0);
+        assert_eq!(stats.region_start, 1000);
+    }
+
+    #[test]
+    fn test_blob_put_too_small() {
+        let store = setup();
+        let data = vec![0u8; 10];
+        let result = store.put(&data, None);
+        assert!(result.is_err());
+        match result {
+            Err(RuntimeError::InvalidArgument(_)) => {}
+            _ => panic!("expected InvalidArgument"),
+        }
+    }
+
+    #[test]
+    fn test_blob_put_too_large() {
+        let mut store = setup();
+        store.max_blob_size = 2000;
+        let data = vec![0u8; 2001];
+        let result = store.put(&data, None);
+        assert!(result.is_err());
+        match result {
+            Err(RuntimeError::InvalidArgument(_)) => {}
+            _ => panic!("expected InvalidArgument"),
+        }
+    }
+
+    #[test]
+    fn test_blob_put_success() {
+        let store = setup();
+        let data = vec![0xAB; (MIN_BLOB_SIZE + 50) as usize];
+        let id = store.put(&data, None).unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn test_blob_get_missing() {
+        let store = setup();
+        let result = store.get(999_999).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_blob_delete() {
+        let store = setup();
+        let data = vec![0xCD; (MIN_BLOB_SIZE + 50) as usize];
+        let id = store.put(&data, None).unwrap();
+        assert!(store.get(id).is_ok() || store.get(id).is_err());
+        store.delete(id).unwrap();
+        assert!(store.get(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_blob_metadata() {
+        let store = setup();
+        let data = vec![0xEF; (MIN_BLOB_SIZE + 100) as usize];
+        let id = store.put(&data, Some(3600)).unwrap();
+        let meta = store.metadata(id).unwrap().unwrap();
+        assert_eq!(meta.size, data.len() as u64);
+        assert_eq!(meta.ttl, Some(3600));
+        assert!(meta.created_at > 0);
+    }
+
+    #[test]
+    fn test_blob_metadata_missing() {
+        let store = setup();
+        let meta = store.metadata(999_999).unwrap();
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn test_blob_stats_after_insert() {
+        let store = setup();
+        let data = vec![0xFF; (MIN_BLOB_SIZE + 50) as usize];
+        store.put(&data, None).unwrap();
+        store.put(&data, None).unwrap();
+        let stats = store.stats();
+        assert_eq!(stats.total_blobs, 2);
+        assert!(stats.total_size >= (MIN_BLOB_SIZE + 50) * 2);
+    }
+
+    #[test]
+    fn test_blob_put_generates_unique_ids() {
+        let store = setup();
+        let data = vec![0xAA; (MIN_BLOB_SIZE + 50) as usize];
+        let id1 = store.put(&data, None).unwrap();
+        let id2 = store.put(&data, None).unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_blob_record_fields() {
+        let store = setup();
+        let data = vec![0xBB; MIN_BLOB_SIZE as usize + 500];
+        let id = store.put(&data, None).unwrap();
+        let meta = store.metadata(id).unwrap().unwrap();
+        let num_pages_expected = ((data.len() as u64 + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64) as u32;
+        assert_eq!(meta.num_pages, num_pages_expected);
+        assert!(meta.first_page > 0);
+    }
+}

@@ -17,7 +17,7 @@ block_cache_size = 268435456
 page_cache_size = 67108864
 memtable_size = 67108864
 max_blob_size = 10737418240
-compression = "snappy"
+compression = "Snappy"
 bloom_filter_bits_per_key = 10
 
 [memory]
@@ -427,7 +427,9 @@ fn default_rate_limit_default_per_sec() -> u64 { 1000 }
 fn default_rate_limit_global_per_sec() -> u64 { 10_000 }
 fn default_rate_limit_global_burst() -> u64 { 20_000 }
 fn default_rate_limit_user_per_sec() -> u64 { 100 }
+fn default_rate_limit_user_burst() -> u64 { 200 }
 fn default_rate_limit_ip_per_sec() -> u64 { 1000 }
+fn default_rate_limit_ip_burst() -> u64 { 2000 }
 fn default_circuit_breaker_threshold() -> u64 { 50 }
 fn default_circuit_breaker_window_ms() -> u64 { 10_000 }
 fn default_circuit_breaker_half_open_timeout_ms() -> u64 { 10_000 }
@@ -467,8 +469,12 @@ pub struct ExecutionConfig {
     pub rate_limit_global_burst: u64,
     #[serde(default = "default_rate_limit_user_per_sec")]
     pub rate_limit_user_per_sec: u64,
+    #[serde(default = "default_rate_limit_user_burst")]
+    pub rate_limit_user_burst: u64,
     #[serde(default = "default_rate_limit_ip_per_sec")]
     pub rate_limit_ip_per_sec: u64,
+    #[serde(default = "default_rate_limit_ip_burst")]
+    pub rate_limit_ip_burst: u64,
     #[serde(default = "default_circuit_breaker_threshold")]
     pub circuit_breaker_threshold: u64,
     #[serde(default = "default_circuit_breaker_window_ms")]
@@ -509,7 +515,9 @@ impl Default for ExecutionConfig {
             rate_limit_global_per_sec: default_rate_limit_global_per_sec(),
             rate_limit_global_burst: default_rate_limit_global_burst(),
             rate_limit_user_per_sec: default_rate_limit_user_per_sec(),
+            rate_limit_user_burst: default_rate_limit_user_burst(),
             rate_limit_ip_per_sec: default_rate_limit_ip_per_sec(),
+            rate_limit_ip_burst: default_rate_limit_ip_burst(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),
             circuit_breaker_window_ms: default_circuit_breaker_window_ms(),
             circuit_breaker_half_open_timeout_ms: default_circuit_breaker_half_open_timeout_ms(),
@@ -564,21 +572,12 @@ impl Default for LockoutConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InternalAuthConfig {
     #[serde(default)]
     pub password_policy: PasswordPolicy,
     #[serde(default)]
     pub lockout: LockoutConfig,
-}
-
-impl Default for InternalAuthConfig {
-    fn default() -> Self {
-        InternalAuthConfig {
-            password_policy: PasswordPolicy::default(),
-            lockout: LockoutConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -595,7 +594,7 @@ impl Default for SessionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuthConfig {
     #[serde(default)]
     pub internal: InternalAuthConfig,
@@ -603,41 +602,18 @@ pub struct AuthConfig {
     pub session: SessionConfig,
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        AuthConfig {
-            internal: InternalAuthConfig::default(),
-            session: SessionConfig::default(),
-        }
-    }
-}
-
 // ---- Security ----
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EncryptionAtRestConfig {
     #[serde(default)]
     pub enabled: bool,
 }
 
-impl Default for EncryptionAtRestConfig {
-    fn default() -> Self {
-        EncryptionAtRestConfig { enabled: false }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub encryption_at_rest: EncryptionAtRestConfig,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        SecurityConfig {
-            encryption_at_rest: EncryptionAtRestConfig::default(),
-        }
-    }
 }
 
 // ---- Root Config ----
@@ -667,7 +643,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn default() -> Self {
+    pub fn from_default_toml() -> Self {
         toml::from_str(DEFAULT_TOML).expect("built-in default TOML is valid")
     }
 
@@ -899,6 +875,730 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
+        Config::from_default_toml()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // FsyncPolicy
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn fsync_policy_default() {
+        assert_eq!(FsyncPolicy::default(), FsyncPolicy::EveryNMs(100));
+    }
+
+    #[test]
+    fn fsync_policy_serde_roundtrips() {
+        let cases: Vec<(&str, FsyncPolicy)> = vec![
+            (r#"fp = "EveryWrite""#, FsyncPolicy::EveryWrite),
+            (r#"fp = { every_n_ms = 500 }"#, FsyncPolicy::EveryNMs(500)),
+            (r#"fp = "Async""#, FsyncPolicy::Async),
+        ];
+        for (toml_str, expected) in cases {
+            let table: std::collections::HashMap<String, FsyncPolicy> =
+                toml::from_str(toml_str).unwrap();
+            assert_eq!(table["fp"], expected);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sub-config defaults
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn general_config_defaults() {
+        let c = GeneralConfig::default();
+        assert_eq!(c.data_dir, PathBuf::from("/var/lib/novad"));
+        assert_eq!(c.pid_file, PathBuf::from("/var/run/novad.pid"));
+        assert_eq!(c.max_connections, 1024);
+        assert_eq!(c.shutdown_timeout_ms, 5000);
+        assert_eq!(c.startup_timeout_ms, 30000);
+    }
+
+    #[test]
+    fn storage_config_defaults() {
+        let c = StorageConfig::default();
+        assert_eq!(c.wal_dir, PathBuf::from("/var/lib/novad/wal"));
+        assert_eq!(c.wal_segment_size, 67_108_864);
+        assert_eq!(c.fsync_policy, FsyncPolicy::EveryNMs(100));
+        assert_eq!(c.block_cache_size, 268_435_456);
+        assert_eq!(c.page_cache_size, 67_108_864);
+        assert_eq!(c.memtable_size, 67_108_864);
+        assert_eq!(c.max_blob_size, 10_737_418_240);
+        assert_eq!(c.compression, nova_core::Compression::Snappy);
+        assert_eq!(c.bloom_filter_bits_per_key, 10);
+        assert_eq!(c.page_size, 8192);
+        assert_eq!(c.wal_page_size, 4096);
+        assert_eq!(c.btree_order, 4);
+        assert_eq!(c.lsm_max_level, 7);
+        assert_eq!(c.bloom_false_positive_rate, 0.01);
+        assert_eq!(c.write_buffer_size, 67_108_864);
+        assert_eq!(c.compaction_threads, 2);
+    }
+
+    #[test]
+    fn storage_config_serde_roundtrip() {
+        let c = StorageConfig::default();
+        let toml_str = toml::to_string(&c).unwrap();
+        let deserialized: StorageConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(c, deserialized);
+    }
+
+    #[test]
+    fn memory_config_defaults() {
+        let c = MemoryConfig::default();
+        assert_eq!(c.max_memory, 1_073_741_824);
+        assert_eq!(c.pressure_threshold_pct, 80);
+        assert_eq!(c.critical_threshold_pct, 95);
+        assert_eq!(c.emergency_reserve, 33_554_432);
+        assert_eq!(c.gc_threshold_pct, 70);
+    }
+
+    #[test]
+    fn listener_config_defaults() {
+        let c = ListenerConfig::default();
+        assert_eq!(c.address, ":443");
+        assert!(c.enabled);
+    }
+
+    #[test]
+    fn timeout_config_defaults() {
+        let c = TimeoutConfig::default();
+        assert_eq!(c.read_timeout_ms, 30_000);
+        assert_eq!(c.write_timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn rate_limiting_config_defaults() {
+        let c = RateLimitingConfig::default();
+        assert_eq!(c.default_tokens_per_second, 1000);
+        assert_eq!(c.default_burst_size, 2000);
+    }
+
+    #[test]
+    fn networking_config_defaults() {
+        let c = NetworkingConfig::default();
+        assert_eq!(c.listen_address, "127.0.0.1");
+        assert_eq!(c.listen_port, 8642);
+        assert!(!c.tls_enabled);
+        assert!(c.tls_cert_path.is_none());
+        assert!(c.tls_key_path.is_none());
+        assert!(c.unix_socket_path.is_none());
+        assert!(c.tcp_nodelay);
+        assert_eq!(c.keepalive_secs, 30);
+        assert_eq!(c.listeners.len(), 1);
+        assert_eq!(c.listeners[0].address, ":443");
+        assert_eq!(c.timeouts.read_timeout_ms, 30_000);
+        assert_eq!(c.rate_limiting.default_tokens_per_second, 1000);
+    }
+
+    #[test]
+    fn logging_config_defaults() {
+        let c = LoggingConfig::default();
+        assert_eq!(c.level, "info");
+        assert_eq!(c.format, "text");
+        assert!(c.file.is_none());
+    }
+
+    #[test]
+    fn subsystems_config_defaults() {
+        let c = SubsystemsConfig::default();
+        assert!(c.enable_sql);
+        assert!(c.enable_cache);
+        assert!(c.enable_queue);
+        assert!(c.enable_scheduler);
+        assert!(c.enable_search);
+        assert!(c.enable_blob);
+        assert!(c.enable_auth);
+        assert!(c.enable_dashboard);
+    }
+
+    #[test]
+    fn event_config_defaults() {
+        let c = EventConfig::default();
+        assert_eq!(c.ordering_shards, 64);
+        assert_eq!(c.default_queue_capacity, 1024);
+        assert_eq!(c.default_max_retries, 3);
+        assert_eq!(c.dlq_max_entries, 100_000);
+    }
+
+    #[test]
+    fn execution_config_defaults() {
+        let c = ExecutionConfig::default();
+        assert_eq!(c.max_concurrent, 1024);
+        assert_eq!(c.worker_threads, 4);
+        assert_eq!(c.execution_timeout_ms, 30_000);
+        assert_eq!(c.max_concurrent_ops, 256);
+        assert_eq!(c.pipeline_queue_depth, 1024);
+        assert_eq!(c.default_operation_timeout_ms, 5000);
+        assert_eq!(c.max_operation_timeout_ms, 60_000);
+        assert_eq!(c.rate_limit_default_per_sec, 1000);
+        assert_eq!(c.rate_limit_global_per_sec, 10_000);
+        assert_eq!(c.rate_limit_global_burst, 20_000);
+        assert_eq!(c.rate_limit_user_per_sec, 100);
+        assert_eq!(c.rate_limit_user_burst, 200);
+        assert_eq!(c.rate_limit_ip_per_sec, 1000);
+        assert_eq!(c.rate_limit_ip_burst, 2000);
+        assert_eq!(c.circuit_breaker_threshold, 50);
+        assert_eq!(c.circuit_breaker_window_ms, 10_000);
+        assert_eq!(c.circuit_breaker_half_open_timeout_ms, 10_000);
+        assert_eq!(c.circuit_breaker_success_threshold, 10);
+        assert!(c.audit_enabled);
+        assert!(!c.audit_include_payloads);
+        assert_eq!(c.audit_max_entry_size, 4096);
+        assert_eq!(c.idempotency_key_ttl_secs, 86_400);
+        assert_eq!(c.max_idempotency_keys, 100_000);
+        assert_eq!(c.pipeline_max_retries, 3);
+        assert_eq!(c.retry_base_delay_ms, 10);
+        assert_eq!(c.retry_max_delay_ms, 1000);
+    }
+
+    #[test]
+    fn password_policy_defaults() {
+        let c = PasswordPolicy::default();
+        assert_eq!(c.min_length, 8);
+        assert_eq!(c.max_length, 128);
+    }
+
+    #[test]
+    fn lockout_config_defaults() {
+        let c = LockoutConfig::default();
+        assert_eq!(c.max_attempts, 5);
+    }
+
+    #[test]
+    fn session_config_defaults() {
+        let c = SessionConfig::default();
+        assert_eq!(c.ttl_seconds, 86_400);
+    }
+
+    #[test]
+    fn auth_config_defaults() {
+        let c = AuthConfig::default();
+        assert_eq!(c.internal.password_policy, PasswordPolicy::default());
+        assert_eq!(c.internal.lockout, LockoutConfig::default());
+        assert_eq!(c.session, SessionConfig::default());
+    }
+
+    #[test]
+    fn security_config_defaults() {
+        let c = SecurityConfig::default();
+        assert!(!c.encryption_at_rest.enabled);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Root Config
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn config_default_matches_from_default_toml() {
+        assert_eq!(Config::default(), Config::from_default_toml());
+    }
+
+    #[test]
+    fn config_from_default_toml_validates_ok() {
+        assert!(Config::from_default_toml().validate().is_ok());
+    }
+
+    #[test]
+    fn config_default_validates_ok() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helper: build a config on the edge of validity for each dimension
+    // ---------------------------------------------------------------------------
+    fn valid_config() -> Config {
         Config::default()
+    }
+
+    // ---------------------------------------------------------------------------
+    // Storage validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_storage_page_size_must_be_power_of_2() {
+        let mut c = valid_config();
+        c.storage.page_size = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("page_size")));
+    }
+
+    #[test]
+    fn validate_storage_page_size_valid_values_ok() {
+        for &ps in &[4096u16, 8192, 16384, 32768] {
+            let mut c = valid_config();
+            c.storage.page_size = ps;
+            assert!(c.validate().is_ok(), "page_size = {} should be valid", ps);
+        }
+    }
+
+    #[test]
+    fn validate_storage_wal_segment_size_too_small() {
+        let mut c = valid_config();
+        c.storage.wal_segment_size = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("wal_segment_size") && e.contains("4096")));
+    }
+
+    #[test]
+    fn validate_storage_wal_segment_size_less_than_wal_page_size_times_64() {
+        let mut c = valid_config();
+        c.storage.wal_page_size = 8192;
+        c.storage.wal_segment_size = 8192 * 63;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("wal_segment_size") && e.contains("64")));
+    }
+
+    #[test]
+    fn validate_storage_wal_segment_size_meets_minimum_ok() {
+        let mut c = valid_config();
+        c.storage.wal_segment_size = 8192 * 64;
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_storage_btree_order_below_range() {
+        let mut c = valid_config();
+        c.storage.btree_order = 1;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("btree_order")));
+    }
+
+    #[test]
+    fn validate_storage_btree_order_above_range() {
+        let mut c = valid_config();
+        c.storage.btree_order = 33;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("btree_order")));
+    }
+
+    #[test]
+    fn validate_storage_lsm_max_level_below_range() {
+        let mut c = valid_config();
+        c.storage.lsm_max_level = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("lsm_max_level")));
+    }
+
+    #[test]
+    fn validate_storage_lsm_max_level_above_range() {
+        let mut c = valid_config();
+        c.storage.lsm_max_level = 11;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("lsm_max_level")));
+    }
+
+    #[test]
+    fn validate_storage_bloom_false_positive_rate_zero() {
+        let mut c = valid_config();
+        c.storage.bloom_false_positive_rate = 0.0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("bloom_false_positive_rate")));
+    }
+
+    #[test]
+    fn validate_storage_bloom_false_positive_rate_too_high() {
+        let mut c = valid_config();
+        c.storage.bloom_false_positive_rate = 0.2;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("bloom_false_positive_rate")));
+    }
+
+    #[test]
+    fn validate_storage_bloom_false_positive_rate_ok() {
+        let mut c = valid_config();
+        c.storage.bloom_false_positive_rate = 0.05;
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_storage_write_buffer_size_too_small() {
+        let mut c = valid_config();
+        c.storage.write_buffer_size = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("write_buffer_size")));
+    }
+
+    #[test]
+    fn validate_storage_compaction_threads_zero() {
+        let mut c = valid_config();
+        c.storage.compaction_threads = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("compaction_threads")));
+    }
+
+    #[test]
+    fn validate_storage_block_cache_size_zero() {
+        let mut c = valid_config();
+        c.storage.block_cache_size = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("block_cache_size")));
+    }
+
+    #[test]
+    fn validate_storage_bloom_filter_bits_per_key_zero() {
+        let mut c = valid_config();
+        c.storage.bloom_filter_bits_per_key = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("bloom_filter_bits_per_key")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Memory validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_memory_max_memory_zero() {
+        let mut c = valid_config();
+        c.memory.max_memory = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_memory")));
+    }
+
+    #[test]
+    fn validate_memory_pressure_not_less_than_critical() {
+        let mut c = valid_config();
+        c.memory.pressure_threshold_pct = 90;
+        c.memory.critical_threshold_pct = 85;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("pressure_threshold_pct")));
+    }
+
+    #[test]
+    fn validate_memory_critical_at_or_above_100() {
+        let mut c = valid_config();
+        c.memory.critical_threshold_pct = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("critical_threshold_pct") && e.contains("100")));
+    }
+
+    #[test]
+    fn validate_memory_gc_threshold_pct_over_100() {
+        let mut c = valid_config();
+        c.memory.gc_threshold_pct = 101;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("gc_threshold_pct")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Networking validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_networking_listener_address_empty() {
+        let mut c = valid_config();
+        c.networking.listeners = vec![ListenerConfig { address: String::new(), enabled: true }];
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("listeners") && e.contains("address")));
+    }
+
+    #[test]
+    fn validate_networking_read_timeout_too_small() {
+        let mut c = valid_config();
+        c.networking.timeouts.read_timeout_ms = 10;
+        c.networking.timeouts.write_timeout_ms = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("read_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_networking_tokens_per_second_too_small() {
+        let mut c = valid_config();
+        c.networking.rate_limiting.default_tokens_per_second = 1;
+        c.networking.rate_limiting.default_burst_size = 100;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("tokens_per_second")));
+    }
+
+    #[test]
+    fn validate_networking_listen_port_zero() {
+        let mut c = valid_config();
+        c.networking.listen_port = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("listen_port")));
+    }
+
+    #[test]
+    fn validate_networking_tls_enabled_without_cert() {
+        let mut c = valid_config();
+        c.networking.tls_enabled = true;
+        c.networking.tls_cert_path = None;
+        c.networking.tls_key_path = Some(PathBuf::from("/tmp/key.pem"));
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("tls_cert_path")));
+    }
+
+    #[test]
+    fn validate_networking_tls_enabled_without_key() {
+        let mut c = valid_config();
+        c.networking.tls_enabled = true;
+        c.networking.tls_cert_path = Some(PathBuf::from("/tmp/cert.pem"));
+        c.networking.tls_key_path = None;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("tls_key_path")));
+    }
+
+    #[test]
+    fn validate_networking_tls_enabled_with_both_ok() {
+        let mut c = valid_config();
+        c.networking.tls_enabled = true;
+        c.networking.tls_cert_path = Some(PathBuf::from("/tmp/cert.pem"));
+        c.networking.tls_key_path = Some(PathBuf::from("/tmp/key.pem"));
+        assert!(c.validate().is_ok());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Event validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_event_ordering_shards_not_power_of_2() {
+        let mut c = valid_config();
+        c.event.ordering_shards = 3;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("ordering_shards")));
+    }
+
+    #[test]
+    fn validate_event_ordering_shards_zero() {
+        let mut c = valid_config();
+        c.event.ordering_shards = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("ordering_shards")));
+    }
+
+    #[test]
+    fn validate_event_queue_capacity_too_small() {
+        let mut c = valid_config();
+        c.event.default_queue_capacity = 10;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("default_queue_capacity")));
+    }
+
+    #[test]
+    fn validate_event_max_retries_too_high() {
+        let mut c = valid_config();
+        c.event.default_max_retries = 200;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("default_max_retries")));
+    }
+
+    #[test]
+    fn validate_event_dlq_max_entries_too_high() {
+        let mut c = valid_config();
+        c.event.dlq_max_entries = 2_000_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("dlq_max_entries")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Execution validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_execution_max_concurrent_zero() {
+        let mut c = valid_config();
+        c.execution.max_concurrent = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_concurrent")));
+    }
+
+    #[test]
+    fn validate_execution_worker_threads_zero() {
+        let mut c = valid_config();
+        c.execution.worker_threads = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("worker_threads")));
+    }
+
+    #[test]
+    fn validate_execution_timeout_too_low() {
+        let mut c = valid_config();
+        c.execution.execution_timeout_ms = 50;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("execution_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_execution_timeout_too_high() {
+        let mut c = valid_config();
+        c.execution.execution_timeout_ms = 4_000_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("execution_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_execution_max_concurrent_ops_zero() {
+        let mut c = valid_config();
+        c.execution.max_concurrent_ops = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_concurrent_ops")));
+    }
+
+    #[test]
+    fn validate_execution_pipeline_queue_depth_too_small() {
+        let mut c = valid_config();
+        c.execution.pipeline_queue_depth = 8;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("pipeline_queue_depth")));
+    }
+
+    #[test]
+    fn validate_execution_default_operation_timeout_too_low() {
+        let mut c = valid_config();
+        c.execution.default_operation_timeout_ms = 50;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("default_operation_timeout_ms") && e.contains("100")));
+    }
+
+    #[test]
+    fn validate_execution_default_op_timeout_exceeds_max() {
+        let mut c = valid_config();
+        c.execution.default_operation_timeout_ms = 70_000;
+        c.execution.max_operation_timeout_ms = 60_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("default_operation_timeout_ms") && e.contains("max_operation_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_execution_max_operation_timeout_too_high() {
+        let mut c = valid_config();
+        c.execution.max_operation_timeout_ms = 4_000_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_operation_timeout_ms")));
+    }
+
+    #[test]
+    fn validate_execution_rate_limit_global_burst_too_small() {
+        let mut c = valid_config();
+        c.execution.rate_limit_global_burst = 5_000;
+        c.execution.rate_limit_global_per_sec = 10_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("rate_limit_global_burst")));
+    }
+
+    #[test]
+    fn validate_execution_circuit_breaker_threshold_zero() {
+        let mut c = valid_config();
+        c.execution.circuit_breaker_threshold = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("circuit_breaker_threshold")));
+    }
+
+    #[test]
+    fn validate_execution_circuit_breaker_window_too_short() {
+        let mut c = valid_config();
+        c.execution.circuit_breaker_window_ms = 500;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("circuit_breaker_window_ms")));
+    }
+
+    #[test]
+    fn validate_execution_circuit_breaker_success_threshold_zero() {
+        let mut c = valid_config();
+        c.execution.circuit_breaker_success_threshold = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("circuit_breaker_success_threshold")));
+    }
+
+    #[test]
+    fn validate_execution_max_idempotency_keys_too_high() {
+        let mut c = valid_config();
+        c.execution.max_idempotency_keys = 2_000_000;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_idempotency_keys")));
+    }
+
+    #[test]
+    fn validate_execution_pipeline_max_retries_too_high() {
+        let mut c = valid_config();
+        c.execution.pipeline_max_retries = 20;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("pipeline_max_retries")));
+    }
+
+    #[test]
+    fn validate_execution_retry_base_delay_zero() {
+        let mut c = valid_config();
+        c.execution.retry_base_delay_ms = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("retry_base_delay_ms")));
+    }
+
+    #[test]
+    fn validate_execution_retry_max_delay_less_than_base() {
+        let mut c = valid_config();
+        c.execution.retry_base_delay_ms = 100;
+        c.execution.retry_max_delay_ms = 50;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("retry_max_delay_ms") && e.contains("retry_base_delay_ms")));
+    }
+
+    #[test]
+    fn validate_execution_audit_max_entry_size_too_small() {
+        let mut c = valid_config();
+        c.execution.audit_max_entry_size = 10;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("audit_max_entry_size")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Auth validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_auth_password_min_exceeds_max() {
+        let mut c = valid_config();
+        c.auth.internal.password_policy.min_length = 20;
+        c.auth.internal.password_policy.max_length = 10;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("min_length")));
+    }
+
+    #[test]
+    fn validate_auth_lockout_max_attempts_zero() {
+        let mut c = valid_config();
+        c.auth.internal.lockout.max_attempts = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("lockout.max_attempts")));
+    }
+
+    #[test]
+    fn validate_auth_session_ttl_too_low() {
+        let mut c = valid_config();
+        c.auth.session.ttl_seconds = 30;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("ttl_seconds")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // General validation rules
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_general_max_connections_zero() {
+        let mut c = valid_config();
+        c.general.max_connections = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_connections")));
+    }
+
+    #[test]
+    fn validate_general_shutdown_timeout_zero() {
+        let mut c = valid_config();
+        c.general.shutdown_timeout_ms = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("shutdown_timeout_ms")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Accumulated validation: multiple errors at once
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_reports_multiple_errors() {
+        let mut c = valid_config();
+        c.storage.page_size = 100;
+        c.memory.max_memory = 0;
+        c.networking.listen_port = 0;
+        c.event.ordering_shards = 3;
+        c.execution.max_concurrent = 0;
+        let errs = c.validate().unwrap_err();
+        assert!(errs.len() >= 5, "expected at least 5 errors, got {}", errs.len());
     }
 }

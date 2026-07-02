@@ -22,7 +22,7 @@ pub enum AuditCategory {
     SystemEvent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuditAction {
     Login,
     LoginFailed,
@@ -85,7 +85,7 @@ pub struct AuditResource {
     pub collection: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AuditStatus {
     Success,
     Denied,
@@ -272,5 +272,157 @@ impl AuditLogger {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_event() -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp: 1_700_000_000_000,
+            category: AuditCategory::Authentication,
+            action: AuditAction::Login,
+            actor: AuditActor {
+                actor_type: ActorType::User,
+                id: "user_123".to_string(),
+                name: Some("testuser".to_string()),
+                ip_address: Some("192.168.1.1".to_string()),
+            },
+            resource: AuditResource {
+                resource_type: ResourceType::Session,
+                id: Some("sess_456".to_string()),
+                collection: None,
+            },
+            result: AuditResult {
+                status: AuditStatus::Success,
+                duration_ms: 42,
+                error_message: None,
+            },
+            context: HashMap::new(),
+        }
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let d = std::env::temp_dir().join(format!("nova_audit_test_{}_{}", label, ts));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn test_audit_event_creation() {
+        let event = make_event();
+        assert_eq!(event.action, AuditAction::Login);
+        assert_eq!(event.actor.id, "user_123");
+        assert_eq!(event.result.status, AuditStatus::Success);
+    }
+
+    #[test]
+    fn test_audit_event_json_round_trip() {
+        let event = make_event();
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AuditEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, event.id);
+        assert_eq!(deserialized.action, event.action);
+    }
+
+    #[test]
+    fn test_log_sync_stdout() {
+        let logger = AuditLogger::new(vec![AuditOutput::Stdout]);
+        assert!(logger.log_sync(make_event()).is_ok());
+    }
+
+    #[test]
+    fn test_write_to_file_none_rotation() {
+        let dir = temp_dir("none");
+        let path = dir.join("test.log");
+        let line = r#"{"msg":"test"}"#;
+        write_to_file_with_rotation(&path, &LogRotation::None, line).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("test"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_to_file_size_rotation() {
+        let dir = temp_dir("size");
+        let path = dir.join("sizetest.log");
+        std::fs::write(&path, vec![b'a'; 40]).unwrap();
+        write_to_file_with_rotation(
+            &path,
+            &LogRotation::Size {
+                max_bytes: 50,
+                max_files: 3,
+            },
+            "line2",
+        )
+        .unwrap();
+        assert!(dir.join("sizetest.log.1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rotate_files_creates_backup() {
+        let dir = temp_dir("rotate");
+        let path = dir.join("test.log");
+        std::fs::write(&path, b"initial content").unwrap();
+        rotate_files(&path, 3).unwrap();
+        assert!(dir.join("test.log.1").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rotate_files_respects_max_files() {
+        let dir = temp_dir("maxfiles");
+        let path = dir.join("test.log");
+        std::fs::write(&path, b"first").unwrap();
+        rotate_files(&path, 2).unwrap();
+        std::fs::write(&path, b"second").unwrap();
+        rotate_files(&path, 2).unwrap();
+        assert!(dir.join("test.log.1").exists());
+        assert!(!dir.join("test.log.2").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_should_rotate_daily_new_file() {
+        let dir = temp_dir("daily");
+        let path = dir.join("daily.log");
+        std::fs::write(&path, b"data").unwrap();
+        assert!(!should_rotate_daily(&path));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_should_rotate_daily_nonexistent() {
+        let path = PathBuf::from("/tmp/nonexistent_file_xyz_nova.log");
+        assert!(!should_rotate_daily(&path));
+    }
+
+    #[test]
+    fn test_audit_logger_log_no_panic() {
+        let logger = AuditLogger::new(vec![AuditOutput::Stdout]);
+        for _ in 0..10 {
+            logger.log(make_event());
+        }
+    }
+
+    #[test]
+    fn test_audit_event_with_error() {
+        let mut event = make_event();
+        event.result.status = AuditStatus::Error;
+        event.result.error_message = Some("connection timeout".to_string());
+        assert_eq!(event.result.status, AuditStatus::Error);
+        assert_eq!(
+            event.result.error_message.as_deref(),
+            Some("connection timeout")
+        );
     }
 }

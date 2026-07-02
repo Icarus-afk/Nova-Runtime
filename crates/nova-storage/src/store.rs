@@ -445,3 +445,56 @@ impl Store {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_storage_config_default() {
+        let config = StorageConfig::default();
+        assert_eq!(config.page_cache_size, 16384);
+        assert_eq!(config.memtable_size, 64 * 1024 * 1024);
+        assert_eq!(config.btree_order, 128);
+        assert_eq!(config.fsync_policy, FsyncPolicy::EveryNMs(100));
+    }
+
+    #[test]
+    fn test_storage_stats_default() {
+        let stats = StorageStats::default();
+        assert_eq!(stats.page_count, 0);
+        assert_eq!(stats.dirty_pages, 0);
+        assert_eq!(stats.cache_size, 0);
+        assert_eq!(stats.memtable_size, 0);
+        assert_eq!(stats.sstable_count, 0);
+        assert_eq!(stats.wal_segments, 0);
+        assert_eq!(stats.current_lsn, Lsn::ZERO);
+        assert_eq!(stats.last_checkpoint, Lsn::ZERO);
+    }
+
+    #[test]
+    fn test_write_operation_set() {
+        let op = WriteOperation::Set {
+            key: Key::from("k"),
+            value: Value::new(b"v".to_vec()),
+        };
+        match op {
+            WriteOperation::Set { ref key, ref value } => {
+                assert_eq!(key.as_bytes(), b"k");
+                assert_eq!(value.as_bytes(), b"v");
+            }
+            _ => panic!("expected Set"),
+        }
+    }
+
+    #[test]
+    fn test_write_operation_delete() {
+        let op = WriteOperation::Delete { key: Key::from("k") };
+        match op {
+            WriteOperation::Delete { ref key } => {
+                assert_eq!(key.as_bytes(), b"k");
+            }
+            _ => panic!("expected Delete"),
+        }
+    }
+}

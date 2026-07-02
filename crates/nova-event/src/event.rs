@@ -111,7 +111,7 @@ pub struct EventSource {
     pub instance_id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Serialize, Deserialize)]
 pub enum EventPriority {
     Low = 0,
     Normal = 1,
@@ -231,5 +231,279 @@ impl EventBuilder {
             },
             payload,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TopicPattern;
+
+    #[test]
+    fn test_event_id_new_is_unique() {
+        let id1 = EventId::new();
+        let id2 = EventId::new();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_event_id_default_is_unique() {
+        let id1 = EventId::default();
+        let id2 = EventId::default();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_event_id_timestamp() {
+        let id = EventId::new();
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let ts = id.timestamp();
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(ts >= before / 1000 * 1000 || ts <= after + 1000);
+    }
+
+    #[test]
+    fn test_event_id_roundtrip() {
+        let id = EventId::new();
+        let bytes = id.to_bytes();
+        let id2 = EventId::from_bytes(bytes);
+        assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn test_event_id_bytes_length() {
+        let id = EventId::new();
+        assert_eq!(id.to_bytes().len(), 16);
+    }
+
+    #[test]
+    fn test_event_type_new_valid() {
+        let et = EventType::new("test.event.created").unwrap();
+        assert_eq!(et.canonical, "test.event.created");
+        assert_eq!(et.segments, vec!["test", "event", "created"]);
+    }
+
+    #[test]
+    fn test_event_type_new_empty_rejected() {
+        let err = EventType::new("").unwrap_err();
+        assert!(matches!(err, EventError::InvalidEventType(_)));
+    }
+
+    #[test]
+    fn test_event_type_new_empty_segment_rejected() {
+        let err = EventType::new("test..event").unwrap_err();
+        assert!(matches!(err, EventError::InvalidEventType(_)));
+    }
+
+    #[test]
+    fn test_event_type_new_wildcard_rejected() {
+        let err = EventType::new("test.*.event").unwrap_err();
+        assert!(matches!(err, EventError::InvalidEventType(_)));
+    }
+
+    #[test]
+    fn test_event_type_new_plus_wildcard_rejected() {
+        let err = EventType::new("test.+.event").unwrap_err();
+        assert!(matches!(err, EventError::InvalidEventType(_)));
+    }
+
+    #[test]
+    fn test_event_type_segment() {
+        let et = EventType::new("a.b.c").unwrap();
+        assert_eq!(et.segment(0), Some("a"));
+        assert_eq!(et.segment(1), Some("b"));
+        assert_eq!(et.segment(2), Some("c"));
+        assert_eq!(et.segment(3), None);
+    }
+
+    #[test]
+    fn test_event_type_depth() {
+        let et = EventType::new("a.b.c.d").unwrap();
+        assert_eq!(et.depth(), 4);
+    }
+
+    #[test]
+    fn test_event_type_single_segment() {
+        let et = EventType::new("single").unwrap();
+        assert_eq!(et.depth(), 1);
+        assert_eq!(et.segment(0), Some("single"));
+    }
+
+    #[test]
+    fn test_event_type_matches_pattern() {
+        let et = EventType::new("test.event.created").unwrap();
+        let pattern = TopicPattern::new("test.event.created").unwrap();
+        assert!(et.matches(&pattern));
+    }
+
+    #[test]
+    fn test_event_type_not_matches_pattern() {
+        let et = EventType::new("test.event.created").unwrap();
+        let pattern = TopicPattern::new("test.event.deleted").unwrap();
+        assert!(!et.matches(&pattern));
+    }
+
+    #[test]
+    fn test_event_type_matches_wildcard() {
+        let et = EventType::new("test.event.created").unwrap();
+        let pattern = TopicPattern::new("test.+.+").unwrap();
+        assert!(et.matches(&pattern));
+    }
+
+    #[test]
+    fn test_event_type_matches_multi_wildcard() {
+        let et = EventType::new("test.event.created.extra").unwrap();
+        let pattern = TopicPattern::new("test.*").unwrap();
+        assert!(et.matches(&pattern));
+    }
+
+    #[test]
+    fn test_event_builder_defaults() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .build(vec![1, 2, 3]);
+        assert_eq!(event.metadata.event_type.canonical, "test.event");
+        assert_eq!(event.payload, vec![1, 2, 3]);
+        assert_eq!(event.metadata.content_type, "application/x-msgpack");
+        assert_eq!(event.metadata.priority, EventPriority::Normal);
+        assert_eq!(event.metadata.schema_version, 1);
+        assert!(!event.metadata.persistent);
+        assert_eq!(event.metadata.payload_size, 3);
+        assert_eq!(event.metadata.source.subsystem, Subsystem::System);
+        assert_eq!(event.metadata.source.component, "unknown");
+        assert_eq!(event.metadata.source.node_id, "local");
+        assert_eq!(event.metadata.source.instance_id, "default");
+    }
+
+    #[test]
+    fn test_event_builder_with_source() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .source(Subsystem::Storage, "blob-store", "node-1", "inst-a")
+            .build(vec![]);
+        assert_eq!(event.metadata.source.subsystem, Subsystem::Storage);
+        assert_eq!(event.metadata.source.component, "blob-store");
+        assert_eq!(event.metadata.source.node_id, "node-1");
+        assert_eq!(event.metadata.source.instance_id, "inst-a");
+    }
+
+    #[test]
+    fn test_event_builder_with_ordering_key() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .ordering_key("my-key")
+            .build(vec![]);
+        assert_eq!(event.metadata.ordering_key, Some("my-key".to_string()));
+    }
+
+    #[test]
+    fn test_event_builder_with_ttl() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .ttl(5000)
+            .build(vec![]);
+        assert_eq!(event.metadata.ttl_ms, 5000);
+    }
+
+    #[test]
+    fn test_event_builder_with_priority() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .priority(EventPriority::High)
+            .build(vec![]);
+        assert_eq!(event.metadata.priority, EventPriority::High);
+    }
+
+    #[test]
+    fn test_event_builder_persistent() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .persistent(true)
+            .build(vec![]);
+        assert!(event.metadata.persistent);
+    }
+
+    #[test]
+    fn test_event_builder_large_payload() {
+        let payload = vec![0u8; 1024 * 1024];
+        let event = EventBuilder::new("test.event").unwrap().build(payload.clone());
+        assert_eq!(event.metadata.payload_size, payload.len() as u32);
+        assert_eq!(event.payload.len(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_event_builder_rejects_empty_type() {
+        let result = EventBuilder::new("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_event_metadata_has_event_id() {
+        let event = EventBuilder::new("test.event").unwrap().build(vec![]);
+        let id = event.metadata.event_id;
+        let ts = id.timestamp();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_event_metadata_timestamp_matches_event_id() {
+        let event = EventBuilder::new("test.event").unwrap().build(vec![]);
+        assert_eq!(event.metadata.timestamp, event.metadata.event_id.timestamp());
+    }
+
+    #[test]
+    fn test_subsystem_variants() {
+        assert_eq!(Subsystem::Storage as u8, 0);
+        assert_eq!(Subsystem::Execution as u8, 1);
+        assert_eq!(Subsystem::Auth as u8, 2);
+        assert_eq!(Subsystem::Queue as u8, 3);
+        assert_eq!(Subsystem::Scheduler as u8, 4);
+        assert_eq!(Subsystem::Search as u8, 5);
+        assert_eq!(Subsystem::Blob as u8, 6);
+        assert_eq!(Subsystem::Api as u8, 7);
+        assert_eq!(Subsystem::System as u8, 8);
+    }
+
+    #[test]
+    fn test_event_priority_ordering() {
+        assert!(EventPriority::Low < EventPriority::Normal);
+        assert!(EventPriority::Normal < EventPriority::High);
+        assert!(EventPriority::High < EventPriority::Critical);
+    }
+
+    #[test]
+    fn test_event_clone() {
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .priority(EventPriority::Critical)
+            .build(vec![10, 20, 30]);
+        let cloned = event.clone();
+        assert_eq!(event.metadata.event_id, cloned.metadata.event_id);
+        assert_eq!(event.payload, cloned.payload);
+    }
+
+    #[test]
+    fn test_trace_context_default() {
+        let event = EventBuilder::new("test.event").unwrap().build(vec![]);
+        assert!(event.metadata.trace_context.is_none());
+    }
+
+    #[test]
+    fn test_event_source_debug() {
+        let source = EventSource {
+            subsystem: Subsystem::Api,
+            component: "http".into(),
+            node_id: "n1".into(),
+            instance_id: "i1".into(),
+        };
+        let debug = format!("{:?}", source);
+        assert!(debug.contains("Api"));
+        assert!(debug.contains("http"));
     }
 }

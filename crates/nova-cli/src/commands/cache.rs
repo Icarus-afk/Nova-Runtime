@@ -31,3 +31,49 @@ impl CacheCommands {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: CacheCommands,
+    }
+
+    fn parse(args: &[&str]) -> CacheCommands {
+        Cli::try_parse_from(args).unwrap().cmd
+    }
+
+    #[test]
+    fn test_stats() {
+        assert!(matches!(parse(&["test", "stats"]), CacheCommands::Stats));
+    }
+
+    #[test]
+    fn test_clear() {
+        assert!(matches!(parse(&["test", "clear"]), CacheCommands::Clear));
+    }
+
+    #[test]
+    fn test_flush() {
+        assert!(matches!(parse(&["test", "flush"]), CacheCommands::Flush));
+    }
+
+    #[test]
+    fn test_list() {
+        assert!(matches!(parse(&["test", "list"]), CacheCommands::List { pattern: None }));
+        assert!(matches!(parse(&["test", "list", "--pattern", "user:*"]), CacheCommands::List { pattern: Some(_) }));
+    }
+
+    #[test]
+    fn test_execute_stats() {
+        assert!(CacheCommands::Stats.execute().is_ok());
+        assert!(CacheCommands::Clear.execute().is_ok());
+        assert!(CacheCommands::Flush.execute().is_ok());
+        assert!(CacheCommands::List { pattern: None }.execute().is_ok());
+        assert!(CacheCommands::List { pattern: Some("user:*".into()) }.execute().is_ok());
+    }
+}

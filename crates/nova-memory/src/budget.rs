@@ -182,7 +182,7 @@ impl MemoryManager {
         let ptr = if size <= PAGE_SIZE {
             unsafe { std::alloc::alloc_zeroed(layout) }
         } else {
-            let pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+            let pages = size.div_ceil(PAGE_SIZE);
             let page_layout = Layout::from_size_align(pages * PAGE_SIZE, PAGE_SIZE)
                 .expect("page layout is valid");
             unsafe { std::alloc::alloc_zeroed(page_layout) }
@@ -215,5 +215,160 @@ impl MemoryManager {
         } else {
             MemoryPressureLevel::Normal
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_budget() {
+        let budget = MemoryBudget::new("test", 1024);
+        assert_eq!(budget.used(), 0);
+        assert_eq!(budget.peak(), 0);
+        assert_eq!(budget.available(), 1024);
+    }
+
+    #[test]
+    fn reserve_within_budget() {
+        let budget = MemoryBudget::new("test", 1024);
+        assert!(budget.reserve(512).is_ok());
+        assert_eq!(budget.used(), 512);
+    }
+
+    #[test]
+    fn reserve_exceeds_budget() {
+        let budget = MemoryBudget::new("test", 100);
+        let result = budget.reserve(200);
+        assert!(result.is_err());
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn release_frees_memory() {
+        let budget = MemoryBudget::new("test", 1024);
+        budget.reserve(500).unwrap();
+        assert_eq!(budget.used(), 500);
+        budget.release(200);
+        assert_eq!(budget.used(), 300);
+    }
+
+    #[test]
+    fn peak_tracking() {
+        let budget = MemoryBudget::new("test", 1024);
+        assert_eq!(budget.peak(), 0);
+        budget.reserve(100).unwrap();
+        assert_eq!(budget.peak(), 100);
+        budget.reserve(200).unwrap();
+        assert_eq!(budget.peak(), 300);
+        budget.release(300);
+        assert_eq!(budget.peak(), 300);
+    }
+
+    #[test]
+    fn available_tracking() {
+        let budget = MemoryBudget::new("test", 1000);
+        assert_eq!(budget.available(), 1000);
+        budget.reserve(300).unwrap();
+        assert_eq!(budget.available(), 700);
+        budget.release(100);
+        assert_eq!(budget.available(), 800);
+    }
+
+    #[test]
+    fn utilization_pct() {
+        let budget = MemoryBudget::new("test", 1000);
+        assert!((budget.utilization_pct() - 0.0).abs() < f64::EPSILON);
+        budget.reserve(250).unwrap();
+        assert!((budget.utilization_pct() - 25.0).abs() < f64::EPSILON);
+        budget.reserve(250).unwrap();
+        assert!((budget.utilization_pct() - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn is_pressured() {
+        let budget = MemoryBudget::new("test", 100);
+        assert!(!budget.is_pressured(50));
+        budget.reserve(60).unwrap();
+        assert!(budget.is_pressured(50));
+        assert!(!budget.is_pressured(70));
+    }
+
+    #[test]
+    fn reset_peak() {
+        let budget = MemoryBudget::new("test", 1024);
+        budget.reserve(500).unwrap();
+        assert_eq!(budget.peak(), 500);
+        budget.release(500);
+        budget.reset_peak();
+        assert_eq!(budget.peak(), 0);
+    }
+
+    #[test]
+    fn budget_zero_max() {
+        let budget = MemoryBudget::new("test", 0);
+        assert_eq!(budget.available(), 0);
+        assert!(budget.reserve(1).is_err());
+        assert!((budget.utilization_pct() - 100.0).abs() < f64::EPSILON);
+        assert!(budget.is_pressured(0));
+    }
+
+    #[test]
+    fn multiple_budget_operations() {
+        let budget = MemoryBudget::new("test", 1000);
+        for _ in 0..10 {
+            assert!(budget.reserve(50).is_ok());
+        }
+        assert_eq!(budget.used(), 500);
+        assert!(budget.reserve(501).is_err());
+        assert_eq!(budget.used(), 500);
+        budget.release(500);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn manager_new() {
+        let config = MemoryConfig::default();
+        let mut manager = MemoryManager::new(&config);
+        assert_eq!(manager.total_used(), 0);
+        assert_eq!(manager.emergency_reserve_size(), config.emergency_reserve);
+    }
+
+    #[test]
+    fn manager_register_budget() {
+        let config = MemoryConfig::default();
+        let mut manager = MemoryManager::new(&config);
+        let budget = manager.register_budget("workers", 500 * 1024 * 1024);
+        assert_eq!(budget.used(), 0);
+        assert_eq!(budget.available(), 500 * 1024 * 1024);
+    }
+
+    #[test]
+    fn manager_pressure_levels() {
+        let config = MemoryConfig {
+            max_memory: 1000,
+            pressure_threshold_pct: 80,
+            critical_threshold_pct: 95,
+            emergency_reserve: 100,
+        };
+        let manager = MemoryManager::new(&config);
+        assert_eq!(manager.check_pressure(), MemoryPressureLevel::Normal);
+        assert!(!manager.is_global_pressured());
+        assert!(!manager.is_global_critical());
+    }
+
+    #[test]
+    fn manager_allocate_small() {
+        let config = MemoryConfig {
+            max_memory: 1024 * 1024,
+            pressure_threshold_pct: 80,
+            critical_threshold_pct: 95,
+            emergency_reserve: 4096,
+        };
+        let mut manager = MemoryManager::new(&config);
+        let vec = manager.allocate(64).unwrap();
+        assert_eq!(vec.len(), 64);
+        assert_eq!(manager.total_used(), 64);
     }
 }

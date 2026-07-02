@@ -52,3 +52,46 @@ impl RuntimeCommands {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: RuntimeCommands,
+    }
+
+    fn parse(args: &[&str]) -> RuntimeCommands {
+        Cli::try_parse_from(args).unwrap().cmd
+    }
+
+    #[test]
+    fn test_status() {
+        assert!(matches!(parse(&["test", "status"]), RuntimeCommands::Status));
+    }
+
+    #[test]
+    fn test_start() {
+        assert!(matches!(parse(&["test", "start"]), RuntimeCommands::Start { daemonize: false }));
+        assert!(matches!(parse(&["test", "start", "--daemonize"]), RuntimeCommands::Start { daemonize: true }));
+    }
+
+    #[test]
+    fn test_stop() {
+        assert!(matches!(parse(&["test", "stop"]), RuntimeCommands::Stop { force: false }));
+        assert!(matches!(parse(&["test", "stop", "--force"]), RuntimeCommands::Stop { force: true }));
+    }
+
+    #[test]
+    fn test_restart() {
+        assert!(matches!(parse(&["test", "restart"]), RuntimeCommands::Restart));
+    }
+
+    #[test]
+    fn test_reload() {
+        assert!(matches!(parse(&["test", "reload"]), RuntimeCommands::Reload));
+    }
+}

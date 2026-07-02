@@ -225,13 +225,14 @@ impl From<PathBuf> for ConfigLoader {
 }
 
 fn dirs_config_path() -> Option<PathBuf> {
-    if let Some(config_dir) = std::env::var("XDG_CONFIG_HOME").ok() {
-        Some(PathBuf::from(config_dir).join("nova/novad.toml"))
-    } else if let Some(home) = std::env::var("HOME").ok() {
-        Some(PathBuf::from(home).join(".config/nova/novad.toml"))
-    } else {
-        None
-    }
+    std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(|config_dir| PathBuf::from(config_dir).join("nova/novad.toml"))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| PathBuf::from(home).join(".config/nova/novad.toml"))
+        })
 }
 
 fn apply_env_to_section(config: &mut Config, section: &str, field_path: &str, value: &toml::Value) {
@@ -364,8 +365,29 @@ fn apply_env_event(cfg: &mut EventConfig, field: &str, _val: &toml::Value, val_s
 fn apply_env_execution(cfg: &mut ExecutionConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
         "max_concurrent" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent = n; } }
-        "worker_threads" => { if let Ok(n) = val_str.parse::<u16>() { cfg.worker_threads = n; } }
+        "worker_threads" => { if let Ok(n) = val_str.parse::<u32>() { cfg.worker_threads = n; } }
         "execution_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.execution_timeout_ms = n; } }
+        "max_concurrent_ops" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent_ops = n; } }
+        "pipeline_queue_depth" => { if let Ok(n) = val_str.parse::<u32>() { cfg.pipeline_queue_depth = n; } }
+        "default_operation_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.default_operation_timeout_ms = n; } }
+        "max_operation_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_operation_timeout_ms = n; } }
+        "rate_limit_default_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_default_per_sec = n; } }
+        "rate_limit_global_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_global_per_sec = n; } }
+        "rate_limit_global_burst" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_global_burst = n; } }
+        "rate_limit_user_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_user_per_sec = n; } }
+        "rate_limit_ip_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_ip_per_sec = n; } }
+        "circuit_breaker_threshold" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_threshold = n; } }
+        "circuit_breaker_window_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_window_ms = n; } }
+        "circuit_breaker_half_open_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_half_open_timeout_ms = n; } }
+        "circuit_breaker_success_threshold" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_success_threshold = n; } }
+        "audit_enabled" => { if let Ok(b) = val_str.parse::<bool>() { cfg.audit_enabled = b; } }
+        "audit_include_payloads" => { if let Ok(b) = val_str.parse::<bool>() { cfg.audit_include_payloads = b; } }
+        "audit_max_entry_size" => { if let Ok(n) = val_str.parse::<u32>() { cfg.audit_max_entry_size = n; } }
+        "idempotency_key_ttl_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.idempotency_key_ttl_secs = n; } }
+        "max_idempotency_keys" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_idempotency_keys = n; } }
+        "pipeline_max_retries" | "max_retries" => { if let Ok(n) = val_str.parse::<u8>() { cfg.pipeline_max_retries = n; } }
+        "retry_base_delay_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.retry_base_delay_ms = n; } }
+        "retry_max_delay_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.retry_max_delay_ms = n; } }
         _ => { tracing::warn!("Unknown execution config field '{}'", field); }
     }
 }
@@ -478,7 +500,34 @@ fn merge_event(_base: EventConfig, overlay: EventConfig) -> EventConfig {
 }
 
 fn merge_execution(_base: ExecutionConfig, overlay: ExecutionConfig) -> ExecutionConfig {
-    overlay
+    ExecutionConfig {
+        max_concurrent: overlay.max_concurrent,
+        worker_threads: overlay.worker_threads,
+        execution_timeout_ms: overlay.execution_timeout_ms,
+        max_concurrent_ops: overlay.max_concurrent_ops,
+        pipeline_queue_depth: overlay.pipeline_queue_depth,
+        default_operation_timeout_ms: overlay.default_operation_timeout_ms,
+        max_operation_timeout_ms: overlay.max_operation_timeout_ms,
+        rate_limit_default_per_sec: overlay.rate_limit_default_per_sec,
+        rate_limit_global_per_sec: overlay.rate_limit_global_per_sec,
+        rate_limit_global_burst: overlay.rate_limit_global_burst,
+        rate_limit_user_per_sec: overlay.rate_limit_user_per_sec,
+        rate_limit_user_burst: overlay.rate_limit_user_burst,
+        rate_limit_ip_per_sec: overlay.rate_limit_ip_per_sec,
+        rate_limit_ip_burst: overlay.rate_limit_ip_burst,
+        circuit_breaker_threshold: overlay.circuit_breaker_threshold,
+        circuit_breaker_window_ms: overlay.circuit_breaker_window_ms,
+        circuit_breaker_half_open_timeout_ms: overlay.circuit_breaker_half_open_timeout_ms,
+        circuit_breaker_success_threshold: overlay.circuit_breaker_success_threshold,
+        audit_enabled: overlay.audit_enabled,
+        audit_include_payloads: overlay.audit_include_payloads,
+        audit_max_entry_size: overlay.audit_max_entry_size,
+        idempotency_key_ttl_secs: overlay.idempotency_key_ttl_secs,
+        max_idempotency_keys: overlay.max_idempotency_keys,
+        pipeline_max_retries: overlay.pipeline_max_retries,
+        retry_base_delay_ms: overlay.retry_base_delay_ms,
+        retry_max_delay_ms: overlay.retry_max_delay_ms,
+    }
 }
 
 fn merge_auth(_base: AuthConfig, overlay: AuthConfig) -> AuthConfig {
@@ -487,4 +536,775 @@ fn merge_auth(_base: AuthConfig, overlay: AuthConfig) -> AuthConfig {
 
 fn merge_security(_base: SecurityConfig, overlay: SecurityConfig) -> SecurityConfig {
     overlay
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::de::Error as SerdeError;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    /// Serialises tests that mutate environment variables.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TempConfig {
+        path: PathBuf,
+        _dir: PathBuf,
+    }
+
+    impl TempConfig {
+        fn new(content: &str) -> Self {
+            let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+            let dir = std::env::temp_dir().join(format!("nova_config_test_{}", id));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("novad.toml");
+            std::fs::write(&path, content).unwrap();
+            TempConfig { path, _dir: dir }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempConfig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self._dir);
+        }
+    }
+
+    struct EnvGuard(());
+
+    impl EnvGuard {
+        fn set(key: &str, value: &str) -> Self {
+            unsafe { std::env::set_var(key, value); }
+            EnvGuard(())
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // We intentionally do NOT clear all NOVA_ vars here because multiple
+            // guards may be live on the same thread. Instead each test is
+            // serialised via ENV_LOCK and sets only the vars it needs.
+        }
+    }
+
+    fn clear_nova_vars() {
+        let keys: Vec<String> = std::env::vars()
+            .filter(|(k, _)| k.starts_with("NOVA_"))
+            .map(|(k, _)| k)
+            .collect();
+        for k in keys {
+            unsafe { std::env::remove_var(k); }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // ConfigLoader creation
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn loader_new_has_no_path() {
+        let loader = ConfigLoader::new();
+        // No public getter for path – just verify it doesn't panic and is usable
+        assert!(loader.watcher_tx.is_none());
+    }
+
+    #[test]
+    fn loader_with_path() {
+        let path = PathBuf::from("/tmp/test_nova.toml");
+        let loader = ConfigLoader::with_path(path.clone());
+        // reload without a parsed config would fail – just check construction is fine
+        assert!(loader.watcher_tx.is_none());
+    }
+
+    #[test]
+    fn loader_from_pathbuf() {
+        let path = PathBuf::from("/tmp/test_nova.toml");
+        let loader: ConfigLoader = path.into();
+        assert!(loader.watcher_tx.is_none());
+    }
+
+    #[test]
+    fn loader_default_impl() {
+        let loader = ConfigLoader::default();
+        assert!(loader.watcher_tx.is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // parse_file
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn parse_file_valid_toml() {
+        let tf = TempConfig::new(
+            r#"
+            [general]
+            max_connections = 512
+            [storage]
+            wal_dir = "/tmp/wal"
+            "#,
+        );
+        let config = ConfigLoader::parse_file(tf.path()).unwrap();
+        assert_eq!(config.general.max_connections, 512);
+        assert_eq!(config.storage.wal_dir, PathBuf::from("/tmp/wal"));
+        // unset fields should be defaults
+        assert_eq!(config.general.data_dir, PathBuf::from("/var/lib/novad"));
+    }
+
+    #[test]
+    fn parse_file_not_found() {
+        let path = PathBuf::from("/tmp/nova_nonexistent_file_12345.toml");
+        let err = ConfigLoader::parse_file(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::FileNotFound(_)));
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn parse_file_invalid_syntax() {
+        let tf = TempConfig::new("nope = \n");
+        let err = ConfigLoader::parse_file(tf.path()).unwrap_err();
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_file_wrong_type() {
+        let tf = TempConfig::new(
+            r#"
+            [general]
+            max_connections = "not-a-number"
+            "#,
+        );
+        let err = ConfigLoader::parse_file(tf.path()).unwrap_err();
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_file_unknown_key_accepted() {
+        let tf = TempConfig::new(r#"unknown_key = 1"#);
+        let result = ConfigLoader::parse_file(tf.path());
+        assert!(result.is_ok(), "unrecognized top-level keys should be silently ignored with default values");
+    }
+
+    // ---------------------------------------------------------------------------
+    // merge (ConfigLoader::merge)
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn merge_overlay_replaces_base() {
+        let base = Config::default();
+        let mut overlay = Config::default();
+        overlay.general.max_connections = 2048;
+        overlay.storage.page_size = 16384;
+        overlay.memory.max_memory = 2_000_000_000;
+        overlay.networking.listen_port = 9999;
+        overlay.logging.level = "debug".to_string();
+        overlay.subsystems.enable_sql = false;
+        overlay.event.ordering_shards = 128;
+        overlay.execution.worker_threads = 8;
+        overlay.auth.session.ttl_seconds = 3600;
+        overlay.security.encryption_at_rest.enabled = true;
+
+        let merged = ConfigLoader::merge(base, overlay);
+        assert_eq!(merged.general.max_connections, 2048);
+        assert_eq!(merged.storage.page_size, 16384);
+        assert_eq!(merged.memory.max_memory, 2_000_000_000);
+        assert_eq!(merged.networking.listen_port, 9999);
+        assert_eq!(merged.logging.level, "debug");
+        assert!(!merged.subsystems.enable_sql);
+        assert_eq!(merged.event.ordering_shards, 128);
+        assert_eq!(merged.execution.worker_threads, 8);
+        assert_eq!(merged.auth.session.ttl_seconds, 3600);
+        assert!(merged.security.encryption_at_rest.enabled);
+    }
+
+    #[test]
+    fn merge_partial_overlay_leaves_rest_as_base() {
+        let base = Config::default();
+        let mut overlay = Config::default();
+        overlay.general.max_connections = 99;
+
+        let merged = ConfigLoader::merge(base.clone(), overlay);
+        // only the overridden field changes
+        assert_eq!(merged.general.max_connections, 99);
+        assert_eq!(merged.general.data_dir, base.general.data_dir);
+        assert_eq!(merged.storage, base.storage);
+    }
+
+    #[test]
+    fn merge_empty_overlay_identity() {
+        let base = Config::default();
+        let merged = ConfigLoader::merge(base.clone(), Config::default());
+        assert_eq!(merged, base);
+    }
+
+    // ---------------------------------------------------------------------------
+    // apply_env_overrides
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn env_general_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g1 = EnvGuard::set("NOVA_GENERAL__MAX_CONNECTIONS", "2048");
+        let _g2 = EnvGuard::set("NOVA_GENERAL__DATA_DIR", "/custom/data");
+        let _g3 = EnvGuard::set("NOVA_GENERAL__PID_FILE", "/custom/pid");
+        let _g4 = EnvGuard::set("NOVA_GENERAL__SHUTDOWN_TIMEOUT_MS", "9999");
+        let _g5 = EnvGuard::set("NOVA_GENERAL__STARTUP_TIMEOUT_MS", "60000");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.general.max_connections, 2048);
+        assert_eq!(config.general.data_dir, PathBuf::from("/custom/data"));
+        assert_eq!(config.general.pid_file, PathBuf::from("/custom/pid"));
+        assert_eq!(config.general.shutdown_timeout_ms, 9999);
+        assert_eq!(config.general.startup_timeout_ms, 60000);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_storage_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_STORAGE__WAL_DIR", "/wal");
+        let _g = EnvGuard::set("NOVA_STORAGE__WAL_SEGMENT_SIZE", "65536");
+        let _g = EnvGuard::set("NOVA_STORAGE__BLOCK_CACHE_SIZE", "536870912");
+        let _g = EnvGuard::set("NOVA_STORAGE__COMPRESSION", "zstd");
+        let _g = EnvGuard::set("NOVA_STORAGE__BLOOM_FILTER_BITS_PER_KEY", "15");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.storage.wal_dir, PathBuf::from("/wal"));
+        assert_eq!(config.storage.wal_segment_size, 65536);
+        assert_eq!(config.storage.block_cache_size, 536870912);
+        assert_eq!(config.storage.compression, nova_core::Compression::Zstd);
+        assert_eq!(config.storage.bloom_filter_bits_per_key, 15);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_memory_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_MEMORY__MAX_MEMORY", "2147483648");
+        let _g = EnvGuard::set("NOVA_MEMORY__PRESSURE_THRESHOLD_PCT", "70");
+        let _g = EnvGuard::set("NOVA_MEMORY__CRITICAL_THRESHOLD_PCT", "90");
+        let _g = EnvGuard::set("NOVA_MEMORY__EMERGENCY_RESERVE", "16777216");
+        let _g = EnvGuard::set("NOVA_MEMORY__GC_THRESHOLD_PCT", "60");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.memory.max_memory, 2147483648);
+        assert_eq!(config.memory.pressure_threshold_pct, 70);
+        assert_eq!(config.memory.critical_threshold_pct, 90);
+        assert_eq!(config.memory.emergency_reserve, 16777216);
+        assert_eq!(config.memory.gc_threshold_pct, 60);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_networking_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_NETWORKING__LISTEN_ADDRESS", "0.0.0.0");
+        let _g = EnvGuard::set("NOVA_NETWORKING__LISTEN_PORT", "8080");
+        let _g = EnvGuard::set("NOVA_NETWORKING__TLS_ENABLED", "true");
+        let _g = EnvGuard::set("NOVA_NETWORKING__TLS_CERT_PATH", "/cert.pem");
+        let _g = EnvGuard::set("NOVA_NETWORKING__TLS_KEY_PATH", "/key.pem");
+        let _g = EnvGuard::set("NOVA_NETWORKING__TCP_NODELAY", "false");
+        let _g = EnvGuard::set("NOVA_NETWORKING__KEEPALIVE_SECS", "60");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.networking.listen_address, "0.0.0.0");
+        assert_eq!(config.networking.listen_port, 8080);
+        assert!(config.networking.tls_enabled);
+        assert_eq!(config.networking.tls_cert_path, Some(PathBuf::from("/cert.pem")));
+        assert_eq!(config.networking.tls_key_path, Some(PathBuf::from("/key.pem")));
+        assert!(!config.networking.tcp_nodelay);
+        assert_eq!(config.networking.keepalive_secs, 60);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_logging_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_LOGGING__LEVEL", "warn");
+        let _g = EnvGuard::set("NOVA_LOGGING__FORMAT", "json");
+        let _g = EnvGuard::set("NOVA_LOGGING__FILE", "/var/log/nova.log");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.logging.level, "warn");
+        assert_eq!(config.logging.format, "json");
+        assert_eq!(config.logging.file, Some(PathBuf::from("/var/log/nova.log")));
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_subsystems_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_SUBSYSTEMS__ENABLE_SQL", "false");
+        let _g = EnvGuard::set("NOVA_SUBSYSTEMS__ENABLE_CACHE", "false");
+        let _g = EnvGuard::set("NOVA_SUBSYSTEMS__ENABLE_DASHBOARD", "false");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert!(!config.subsystems.enable_sql);
+        assert!(!config.subsystems.enable_cache);
+        assert!(!config.subsystems.enable_dashboard);
+        // other subsystems stay enabled
+        assert!(config.subsystems.enable_queue);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_event_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_EVENT__ORDERING_SHARDS", "128");
+        let _g = EnvGuard::set("NOVA_EVENT__DEFAULT_QUEUE_CAPACITY", "512");
+        let _g = EnvGuard::set("NOVA_EVENT__DEFAULT_MAX_RETRIES", "10");
+        let _g = EnvGuard::set("NOVA_EVENT__DLQ_MAX_ENTRIES", "50000");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.event.ordering_shards, 128);
+        assert_eq!(config.event.default_queue_capacity, 512);
+        assert_eq!(config.event.default_max_retries, 10);
+        assert_eq!(config.event.dlq_max_entries, 50000);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_execution_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_EXECUTION__WORKER_THREADS", "16");
+        let _g = EnvGuard::set("NOVA_EXECUTION__MAX_CONCURRENT", "512");
+        let _g = EnvGuard::set("NOVA_EXECUTION__AUDIT_ENABLED", "false");
+        let _g = EnvGuard::set("NOVA_EXECUTION__AUDIT_MAX_ENTRY_SIZE", "256");
+        let _g = EnvGuard::set("NOVA_EXECUTION__RETRY_BASE_DELAY_MS", "50");
+        let _g = EnvGuard::set("NOVA_EXECUTION__RETRY_MAX_DELAY_MS", "5000");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.execution.worker_threads, 16);
+        assert_eq!(config.execution.max_concurrent, 512);
+        assert!(!config.execution.audit_enabled);
+        assert_eq!(config.execution.audit_max_entry_size, 256);
+        assert_eq!(config.execution.retry_base_delay_ms, 50);
+        assert_eq!(config.execution.retry_max_delay_ms, 5000);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_execution_aliases() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        // "max_retries" is an alias for "pipeline_max_retries"
+        let _g = EnvGuard::set("NOVA_EXECUTION__MAX_RETRIES", "7");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.execution.pipeline_max_retries, 7);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_auth_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_AUTH__SESSION_TTL", "7200");
+        let _g = EnvGuard::set("NOVA_AUTH__PASSWORD_MIN_LENGTH", "12");
+        let _g = EnvGuard::set("NOVA_AUTH__LOCKOUT_MAX_ATTEMPTS", "3");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.auth.session.ttl_seconds, 7200);
+        assert_eq!(config.auth.internal.password_policy.min_length, 12);
+        assert_eq!(config.auth.internal.lockout.max_attempts, 3);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_auth_aliases() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_AUTH__TTL_SECONDS", "1800");
+        let _g = EnvGuard::set("NOVA_AUTH__MIN_LENGTH", "6");
+        let _g = EnvGuard::set("NOVA_AUTH__MAX_LENGTH", "64");
+        let _g = EnvGuard::set("NOVA_AUTH__MAX_ATTEMPTS", "10");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert_eq!(config.auth.session.ttl_seconds, 1800);
+        assert_eq!(config.auth.internal.password_policy.min_length, 6);
+        assert_eq!(config.auth.internal.password_policy.max_length, 64);
+        assert_eq!(config.auth.internal.lockout.max_attempts, 10);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_security_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_SECURITY__ENABLED", "true");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        assert!(config.security.encryption_at_rest.enabled);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_invalid_section_is_ignored() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let _g = EnvGuard::set("NOVA_UNKNOWN__FIELD", "value");
+
+        let mut config = Config::default();
+        // Should not panic
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_bad_format_is_skipped() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        // Missing __ separator
+        let _g = EnvGuard::set("NOVA_GENERAL_MALFORMED", "value");
+
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_no_nova_vars_is_noop() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        let original = Config::default();
+        let mut config = original.clone();
+        ConfigLoader::apply_env_overrides(&mut config);
+        assert_eq!(config, original);
+
+        clear_nova_vars();
+    }
+
+    #[test]
+    fn env_toml_value_parsing() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_nova_vars();
+
+        // Integer value
+        let _g = EnvGuard::set("NOVA_GENERAL__MAX_CONNECTIONS", "2048");
+        let mut config = Config::default();
+        ConfigLoader::apply_env_overrides(&mut config);
+        assert_eq!(config.general.max_connections, 2048);
+
+        clear_nova_vars();
+    }
+
+    // ---------------------------------------------------------------------------
+    // apply_cli_overrides
+    // ---------------------------------------------------------------------------
+    fn make_cli_matches(args: &[&str]) -> clap::ArgMatches {
+        use clap::{Arg, Command, value_parser};
+        Command::new("test")
+            .arg(Arg::new("data-dir").long("data-dir").num_args(1))
+            .arg(Arg::new("listen-address").long("listen-address").num_args(1))
+            .arg(Arg::new("listen-port").long("listen-port").num_args(1).value_parser(value_parser!(u16)))
+            .arg(Arg::new("log-level").long("log-level").num_args(1))
+            .arg(Arg::new("log-format").long("log-format").num_args(1))
+            .arg(Arg::new("max-connections").long("max-connections").num_args(1).value_parser(value_parser!(u64)))
+            .arg(Arg::new("shutdown-timeout").long("shutdown-timeout").num_args(1).value_parser(value_parser!(u64)))
+            .try_get_matches_from(args)
+            .unwrap()
+    }
+
+    #[test]
+    fn cli_data_dir_override() {
+        let matches = make_cli_matches(&["test", "--data-dir", "/mnt/nova"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.general.data_dir, PathBuf::from("/mnt/nova"));
+        assert_eq!(config.storage.wal_dir, PathBuf::from("/mnt/nova/wal"));
+    }
+
+    #[test]
+    fn cli_listen_address_override() {
+        let matches = make_cli_matches(&["test", "--listen-address", "0.0.0.0"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.networking.listen_address, "0.0.0.0");
+    }
+
+    #[test]
+    fn cli_listen_port_override() {
+        let matches = make_cli_matches(&["test", "--listen-port", "9090"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.networking.listen_port, 9090);
+    }
+
+    #[test]
+    fn cli_log_level_override() {
+        let matches = make_cli_matches(&["test", "--log-level", "error"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.logging.level, "error");
+    }
+
+    #[test]
+    fn cli_log_format_override() {
+        let matches = make_cli_matches(&["test", "--log-format", "json"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.logging.format, "json");
+    }
+
+    #[test]
+    fn cli_max_connections_override() {
+        let matches = make_cli_matches(&["test", "--max-connections", "512"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.general.max_connections, 512);
+    }
+
+    #[test]
+    fn cli_shutdown_timeout_override() {
+        let matches = make_cli_matches(&["test", "--shutdown-timeout", "15000"]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.general.shutdown_timeout_ms, 15000);
+    }
+
+    #[test]
+    fn cli_multiple_overrides_at_once() {
+        let matches = make_cli_matches(&[
+            "test",
+            "--data-dir", "/data",
+            "--listen-address", "0.0.0.0",
+            "--listen-port", "7000",
+            "--log-level", "warn",
+            "--log-format", "json",
+            "--max-connections", "256",
+            "--shutdown-timeout", "3000",
+        ]);
+        let mut config = Config::default();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+
+        assert_eq!(config.general.data_dir, PathBuf::from("/data"));
+        assert_eq!(config.storage.wal_dir, PathBuf::from("/data/wal"));
+        assert_eq!(config.networking.listen_address, "0.0.0.0");
+        assert_eq!(config.networking.listen_port, 7000);
+        assert_eq!(config.logging.level, "warn");
+        assert_eq!(config.logging.format, "json");
+        assert_eq!(config.general.max_connections, 256);
+        assert_eq!(config.general.shutdown_timeout_ms, 3000);
+    }
+
+    #[test]
+    fn cli_no_matches_is_noop() {
+        let matches = make_cli_matches(&["test"]);
+        let original = Config::default();
+        let mut config = original.clone();
+        ConfigLoader::apply_cli_overrides(&mut config, &matches);
+        assert_eq!(config, original);
+    }
+
+    // ---------------------------------------------------------------------------
+    // ConfigError Display
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn config_error_file_not_found_display() {
+        let err = ConfigError::FileNotFound(PathBuf::from("/missing.toml"));
+        assert_eq!(err.to_string(), "Config file not found: /missing.toml");
+    }
+
+    #[test]
+    fn config_error_io_display() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let err = ConfigError::Io {
+            path: PathBuf::from("/etc/novad.toml"),
+            source: io_err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to read config file"));
+        assert!(msg.contains("/etc/novad.toml"));
+        assert!(msg.contains("access denied"));
+    }
+
+    #[test]
+    fn config_error_parse_display() {
+        let err = ConfigError::Parse {
+            path: PathBuf::from("/cfg.toml"),
+            source: toml::de::Error::custom("expected a table key"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to parse config file"));
+        assert!(msg.contains("/cfg.toml"));
+    }
+
+    #[test]
+    fn config_error_validation_display() {
+        let err = ConfigError::Validation(vec!["err1".to_string(), "err2".to_string()]);
+        let msg = err.to_string();
+        assert!(msg.contains("Validation failed"));
+        assert!(msg.contains("err1"));
+        assert!(msg.contains("err2"));
+    }
+
+    #[test]
+    fn config_error_env_var_display() {
+        let err = ConfigError::EnvVar {
+            var: "NOVA_TEST".to_string(),
+            value: "bad".to_string(),
+            message: "invalid value".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("NOVA_TEST"));
+        assert!(msg.contains("bad"));
+        assert!(msg.contains("invalid value"));
+    }
+
+    #[test]
+    fn config_error_no_path_display() {
+        let err = ConfigError::NoPath;
+        assert_eq!(err.to_string(), "No config path set for reload");
+    }
+
+    // ---------------------------------------------------------------------------
+    // watch / reload (basic smoke tests)
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn watch_returns_locked_config_and_receiver() {
+        let tf = TempConfig::new(
+            r#"
+            [general]
+            max_connections = 100
+            "#,
+        );
+        let mut loader = ConfigLoader::new();
+        let (config, rx) = loader.watch(tf.path()).unwrap();
+        assert_eq!(config.read().general.max_connections, 100);
+        // receiver should be alive
+        assert!(rx.len() == 0);
+    }
+
+    #[test]
+    fn reload_updates_config() {
+        let tf = TempConfig::new(
+            r#"
+            [general]
+            max_connections = 100
+            "#,
+        );
+        let mut loader = ConfigLoader::new();
+        let (config, _rx) = loader.watch(tf.path()).unwrap();
+        assert_eq!(config.read().general.max_connections, 100);
+
+        // Rewrite the file with different values
+        std::fs::write(
+            tf.path(),
+            r#"
+            [general]
+            max_connections = 200
+            "#,
+        )
+        .unwrap();
+
+        loader.reload(&config).unwrap();
+        assert_eq!(config.read().general.max_connections, 200);
+    }
+
+    #[test]
+    fn reload_without_path_returns_no_path_error() {
+        let loader = ConfigLoader::new();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let err = loader.reload(&config).unwrap_err();
+        assert!(matches!(err, ConfigError::NoPath));
+    }
+
+    // ---------------------------------------------------------------------------
+    // validate wrapper
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn validate_wrapper_returns_validation_error() {
+        let mut cfg = Config::default();
+        cfg.storage.page_size = 100;
+        let err = ConfigLoader::validate(&cfg).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_wrapper_ok() {
+        let cfg = Config::default();
+        assert!(ConfigLoader::validate(&cfg).is_ok());
+    }
+
+    // ---------------------------------------------------------------------------
+    // test Result type alias
+    // ---------------------------------------------------------------------------
+    #[test]
+    fn result_type_is_crate_result() {
+        // Simple compile check
+        let r: Result<()> = Ok(());
+        assert!(r.is_ok());
+    }
 }

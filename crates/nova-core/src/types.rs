@@ -120,7 +120,7 @@ impl Key {
         self.0.is_empty()
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_str_key(s: &str) -> Self {
         Key(s.as_bytes().to_vec())
     }
 }
@@ -349,13 +349,498 @@ impl Default for TraceContext {
 }
 
 /// Compression codec
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompressionCodec {
     None,
+    #[default]
     Snappy,
     Zstd { level: i32 },
 }
 
-impl Default for CompressionCodec {
-    fn default() -> Self { CompressionCodec::Snappy }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- PageId ---
+
+    #[test]
+    fn test_pageid_new() {
+        let p = PageId::new(42);
+        assert_eq!(p.value(), 42);
+    }
+
+    #[test]
+    fn test_pageid_invalid() {
+        assert!(!PageId::INVALID.is_valid());
+        assert_eq!(PageId::INVALID.value(), u64::MAX);
+    }
+
+    #[test]
+    fn test_pageid_valid() {
+        let p = PageId::new(0);
+        assert!(p.is_valid());
+        let p = PageId::new(1);
+        assert!(p.is_valid());
+    }
+
+    #[test]
+    fn test_pageid_from_u64() {
+        let p: PageId = 99u64.into();
+        assert_eq!(p, PageId::new(99));
+    }
+
+    #[test]
+    fn test_pageid_equality() {
+        assert_eq!(PageId::new(1), PageId::new(1));
+        assert_ne!(PageId::new(1), PageId::new(2));
+    }
+
+    #[test]
+    fn test_pageid_ordering() {
+        assert!(PageId::new(1) < PageId::new(2));
+        assert!(PageId::new(5) > PageId::new(3));
+        assert!(PageId::new(7) >= PageId::new(7));
+    }
+
+    #[test]
+    fn test_pageid_clone() {
+        let p = PageId::new(10);
+        let c = p.clone();
+        assert_eq!(p, c);
+    }
+
+    #[test]
+    fn test_pageid_display() {
+        assert_eq!(format!("{}", PageId::new(123)), "123");
+    }
+
+    #[test]
+    fn test_pageid_debug() {
+        assert_eq!(format!("{:?}", PageId::new(7)), "PageId(7)");
+    }
+
+    // --- Lsn ---
+
+    #[test]
+    fn test_lsn_new() {
+        let l = Lsn::new(100);
+        assert_eq!(l.value(), 100);
+    }
+
+    #[test]
+    fn test_lsn_zero() {
+        assert_eq!(Lsn::ZERO.value(), 0);
+    }
+
+    #[test]
+    fn test_lsn_max() {
+        assert_eq!(Lsn::MAX.value(), u64::MAX);
+    }
+
+    #[test]
+    fn test_lsn_next() {
+        assert_eq!(Lsn::new(0).next(), Lsn::new(1));
+        assert_eq!(Lsn::new(5).next(), Lsn::new(6));
+    }
+
+    #[test]
+    fn test_lsn_default() {
+        assert_eq!(Lsn::default(), Lsn::ZERO);
+    }
+
+    #[test]
+    fn test_lsn_ordering() {
+        assert!(Lsn::new(1) < Lsn::new(2));
+        assert!(Lsn::new(10) > Lsn::new(5));
+        assert!(Lsn::new(3) >= Lsn::new(3));
+    }
+
+    #[test]
+    fn test_lsn_equality() {
+        assert_eq!(Lsn::new(42), Lsn::new(42));
+        assert_ne!(Lsn::new(1), Lsn::new(2));
+    }
+
+    #[test]
+    fn test_lsn_display() {
+        assert_eq!(format!("{}", Lsn::new(999)), "999");
+    }
+
+    #[test]
+    fn test_lsn_debug() {
+        assert_eq!(format!("{:?}", Lsn::new(7)), "Lsn(7)");
+    }
+
+    // --- TransactionId ---
+
+    #[test]
+    fn test_transactionid_new() {
+        let t = TransactionId::new(10);
+        assert_eq!(t.value(), 10);
+    }
+
+    #[test]
+    fn test_transactionid_zero() {
+        assert_eq!(TransactionId::ZERO.value(), 0);
+    }
+
+    #[test]
+    fn test_transactionid_equality() {
+        assert_eq!(TransactionId::new(5), TransactionId::new(5));
+        assert_ne!(TransactionId::new(5), TransactionId::new(6));
+    }
+
+    #[test]
+    fn test_transactionid_display() {
+        assert_eq!(format!("{}", TransactionId::new(7)), "7");
+    }
+
+    #[test]
+    fn test_allocate_transaction_id() {
+        let id1 = allocate_transaction_id();
+        let id2 = allocate_transaction_id();
+        assert_ne!(id1, id2);
+        assert!(id1.value() >= 1);
+        assert!(id2.value() > id1.value());
+    }
+
+    // --- Key ---
+
+    #[test]
+    fn test_key_new() {
+        let k = Key::new(vec![1, 2, 3]);
+        assert_eq!(k.as_bytes(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_key_from_str_key() {
+        let k = Key::from_str_key("hello");
+        assert_eq!(k.as_bytes(), b"hello");
+    }
+
+    #[test]
+    fn test_key_len() {
+        assert_eq!(Key::new(vec![1, 2, 3]).len(), 3);
+        assert_eq!(Key::new(vec![]).len(), 0);
+    }
+
+    #[test]
+    fn test_key_is_empty() {
+        assert!(Key::new(vec![]).is_empty());
+        assert!(!Key::new(vec![1]).is_empty());
+    }
+
+    #[test]
+    fn test_key_from_vec() {
+        let k: Key = vec![10u8, 20].into();
+        assert_eq!(k.as_bytes(), &[10, 20]);
+    }
+
+    #[test]
+    fn test_key_from_str() {
+        let k: Key = "world".into();
+        assert_eq!(k.as_bytes(), b"world");
+    }
+
+    #[test]
+    fn test_key_as_ref() {
+        let k = Key::new(vec![255]);
+        assert_eq!(k.as_ref(), &[255u8]);
+    }
+
+    #[test]
+    fn test_key_display_utf8() {
+        let k = Key::from("hello");
+        assert_eq!(format!("{}", k), "hello");
+    }
+
+    #[test]
+    fn test_key_display_non_utf8() {
+        let k = Key::new(vec![0, 159, 146, 150]);
+        let s = format!("{}", k);
+        assert!(s.contains("["));
+        assert!(s.contains("]"));
+    }
+
+    #[test]
+    fn test_key_clone() {
+        let k = Key::new(vec![1, 2, 3]);
+        let c = k.clone();
+        assert_eq!(k, c);
+    }
+
+    #[test]
+    fn test_key_equality() {
+        assert_eq!(Key::new(vec![1]), Key::new(vec![1]));
+        assert_ne!(Key::new(vec![1]), Key::new(vec![2]));
+    }
+
+    // --- Value ---
+
+    #[test]
+    fn test_value_new() {
+        let v = Value::new(vec![4, 5, 6]);
+        assert_eq!(v.as_bytes(), &[4, 5, 6]);
+    }
+
+    #[test]
+    fn test_value_len() {
+        assert_eq!(Value::new(vec![1, 2]).len(), 2);
+        assert_eq!(Value::new(vec![]).len(), 0);
+    }
+
+    #[test]
+    fn test_value_is_empty() {
+        assert!(Value::new(vec![]).is_empty());
+        assert!(!Value::new(vec![0]).is_empty());
+    }
+
+    #[test]
+    fn test_value_from_vec() {
+        let v: Value = vec![7u8, 8, 9].into();
+        assert_eq!(v.as_bytes(), &[7, 8, 9]);
+    }
+
+    #[test]
+    fn test_value_as_ref() {
+        let v = Value::new(vec![128]);
+        assert_eq!(v.as_ref(), &[128u8]);
+    }
+
+    #[test]
+    fn test_value_clone() {
+        let v = Value::new(vec![1, 2, 3]);
+        let c = v.clone();
+        assert_eq!(v, c);
+    }
+
+    #[test]
+    fn test_value_equality() {
+        assert_eq!(Value::new(vec![1, 2]), Value::new(vec![1, 2]));
+        assert_ne!(Value::new(vec![1]), Value::new(vec![2]));
+    }
+
+    // --- Compression ---
+
+    #[test]
+    fn test_compression_to_byte() {
+        assert_eq!(Compression::None.to_byte(), 0);
+        assert_eq!(Compression::Snappy.to_byte(), 1);
+        assert_eq!(Compression::Zstd.to_byte(), 2);
+    }
+
+    #[test]
+    fn test_compression_from_byte() {
+        assert_eq!(Compression::from_byte(0), Some(Compression::None));
+        assert_eq!(Compression::from_byte(1), Some(Compression::Snappy));
+        assert_eq!(Compression::from_byte(2), Some(Compression::Zstd));
+        assert_eq!(Compression::from_byte(3), None);
+        assert_eq!(Compression::from_byte(255), None);
+    }
+
+    #[test]
+    fn test_compression_roundtrip() {
+        for b in 0..=2u8 {
+            let c = Compression::from_byte(b).unwrap();
+            assert_eq!(c.to_byte(), b);
+        }
+    }
+
+    #[test]
+    fn test_compression_equality() {
+        assert_eq!(Compression::None, Compression::None);
+        assert_ne!(Compression::None, Compression::Snappy);
+    }
+
+    // --- AccessMode ---
+
+    #[test]
+    fn test_access_mode_variants() {
+        assert_eq!(format!("{:?}", AccessMode::Read), "Read");
+        assert_eq!(format!("{:?}", AccessMode::Write), "Write");
+        assert_eq!(format!("{:?}", AccessMode::ReadWrite), "ReadWrite");
+    }
+
+    // --- FsyncPolicy ---
+
+    #[test]
+    fn test_fsync_policy_variants() {
+        match FsyncPolicy::EveryWrite {
+            FsyncPolicy::EveryWrite => {}
+            _ => panic!("expected EveryWrite"),
+        }
+        match FsyncPolicy::EveryNMs(100) {
+            FsyncPolicy::EveryNMs(n) => assert_eq!(n, 100),
+            _ => panic!("expected EveryNMs"),
+        }
+        match FsyncPolicy::Async {
+            FsyncPolicy::Async => {}
+            _ => panic!("expected Async"),
+        }
+    }
+
+    // --- Checksum ---
+
+    #[test]
+    fn test_checksum_new() {
+        let c = Checksum::new(0xDEADBEEF);
+        assert_eq!(c.value(), 0xDEADBEEF);
+    }
+
+    #[test]
+    fn test_checksum_equality() {
+        assert_eq!(Checksum::new(1), Checksum::new(1));
+        assert_ne!(Checksum::new(1), Checksum::new(2));
+    }
+
+    // --- Page ---
+
+    #[test]
+    fn test_page_new() {
+        let id = PageId::new(42);
+        let page = Page::new(id);
+        assert_eq!(page.id, id);
+        assert_eq!(page.lsn, Lsn::ZERO);
+        assert_eq!(page.checksum, Checksum::new(0));
+        assert_eq!(page.flags, 0);
+        assert!(!page.is_dirty());
+    }
+
+    #[test]
+    fn test_page_zeroed() {
+        let page = Page::zeroed();
+        assert_eq!(page.id, PageId::INVALID);
+        assert_eq!(page.lsn, Lsn::ZERO);
+        assert_eq!(page.checksum, Checksum::new(0));
+        assert!(!page.is_dirty());
+    }
+
+    #[test]
+    fn test_page_dirty_tracking() {
+        let mut page = Page::new(PageId::new(1));
+        assert!(!page.is_dirty());
+        page.mark_dirty();
+        assert!(page.is_dirty());
+        page.clear_dirty();
+        assert!(!page.is_dirty());
+    }
+
+    #[test]
+    fn test_page_write_read_u16() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u16(0, 0xABCD);
+        assert_eq!(page.read_u16(0), 0xABCD);
+    }
+
+    #[test]
+    fn test_page_write_read_u16_non_zero_offset() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u16(100, 42);
+        assert_eq!(page.read_u16(100), 42);
+    }
+
+    #[test]
+    fn test_page_write_read_u32() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u32(0, 0xDEADBEEF);
+        assert_eq!(page.read_u32(0), 0xDEADBEEF);
+    }
+
+    #[test]
+    fn test_page_write_read_u32_offset() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u32(256, 12345);
+        assert_eq!(page.read_u32(256), 12345);
+    }
+
+    #[test]
+    fn test_page_write_read_u64() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u64(0, u64::MAX);
+        assert_eq!(page.read_u64(0), u64::MAX);
+    }
+
+    #[test]
+    fn test_page_write_read_u64_offset() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u64(512, 0xAABBCCDDEE112233);
+        assert_eq!(page.read_u64(512), 0xAABBCCDDEE112233);
+    }
+
+    #[test]
+    fn test_page_does_not_overlap_writes() {
+        let mut page = Page::new(PageId::new(1));
+        page.write_u16(0, 0xAAAA);
+        page.write_u16(2, 0xBBBB);
+        assert_eq!(page.read_u16(0), 0xAAAA);
+        assert_eq!(page.read_u16(2), 0xBBBB);
+    }
+
+    #[test]
+    fn test_page_clone() {
+        let mut page = Page::new(PageId::new(5));
+        page.mark_dirty();
+        let cloned = page.clone();
+        assert_eq!(page.id, cloned.id);
+        assert_eq!(page.is_dirty(), cloned.is_dirty());
+    }
+
+    // --- IsolationLevel ---
+
+    #[test]
+    fn test_isolation_level_variants() {
+        assert_eq!(format!("{:?}", IsolationLevel::ReadCommitted), "ReadCommitted");
+        assert_eq!(format!("{:?}", IsolationLevel::RepeatableRead), "RepeatableRead");
+        assert_eq!(format!("{:?}", IsolationLevel::Snapshot), "Snapshot");
+        assert_eq!(format!("{:?}", IsolationLevel::Serializable), "Serializable");
+    }
+
+    #[test]
+    fn test_isolation_level_equality() {
+        assert_eq!(IsolationLevel::Snapshot, IsolationLevel::Snapshot);
+        assert_ne!(IsolationLevel::ReadCommitted, IsolationLevel::Serializable);
+    }
+
+    // --- EngineType ---
+
+    #[test]
+    fn test_engine_type_variants() {
+        assert_eq!(format!("{:?}", EngineType::BTree), "BTree");
+        assert_eq!(format!("{:?}", EngineType::LSM), "LSM");
+    }
+
+    // --- TraceContext ---
+
+    #[test]
+    fn test_trace_context_new() {
+        let ctx = TraceContext::new();
+        assert_eq!(ctx.trace_id, [0u8; 16]);
+        assert_eq!(ctx.span_id, [0u8; 8]);
+        assert_eq!(ctx.parent_span_id, None);
+        assert!(!ctx.sampled);
+    }
+
+    #[test]
+    fn test_trace_context_default() {
+        let ctx = TraceContext::default();
+        assert_eq!(ctx.trace_id, [0u8; 16]);
+        assert_eq!(ctx.span_id, [0u8; 8]);
+        assert_eq!(ctx.parent_span_id, None);
+        assert!(!ctx.sampled);
+    }
+
+    // --- CompressionCodec ---
+
+    #[test]
+    fn test_compression_codec_default() {
+        assert_eq!(CompressionCodec::default(), CompressionCodec::Snappy);
+    }
+
+    #[test]
+    fn test_compression_codec_variants() {
+        assert_eq!(format!("{:?}", CompressionCodec::None), "None");
+        assert_eq!(format!("{:?}", CompressionCodec::Snappy), "Snappy");
+        let zstd = CompressionCodec::Zstd { level: 3 };
+        assert_eq!(format!("{:?}", zstd), "Zstd { level: 3 }");
+    }
 }

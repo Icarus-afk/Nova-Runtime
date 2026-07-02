@@ -1,268 +1,43 @@
 use clap::Parser;
-use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
 
 #[derive(Parser)]
 #[command(name = "novad", version, about = "Nova Runtime Daemon")]
 struct DaemonArgs {
-    /// Path to config file
     #[arg(short, long)]
     config: Option<String>,
-
-    /// Data directory (overrides config)
     #[arg(short, long)]
     data_dir: Option<String>,
-
-    /// Listen address (overrides config)
     #[arg(short = 'l', long)]
     listen: Option<String>,
-
-    /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
 }
 
-pub struct TlsConfig {
-    pub cert_path: String,
-    pub key_path: String,
-    pub enabled: bool,
-}
-
-fn load_tls_config(config: &nova_config::Config) -> TlsConfig {
-    TlsConfig {
-        enabled: config.networking.tls_enabled,
-        cert_path: config
-            .networking
-            .tls_cert_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        key_path: config
-            .networking
-            .tls_key_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-    }
-}
-
-fn setup_tls(config: &nova_config::Config) -> anyhow::Result<Option<TlsConfig>> {
-    let tls = load_tls_config(config);
-    if !tls.enabled {
-        tracing::info!("TLS is disabled");
-        return Ok(None);
-    }
-    let cert_path = Path::new(&tls.cert_path);
-    let key_path = Path::new(&tls.key_path);
-    if !cert_path.exists() {
-        anyhow::bail!("TLS certificate not found: {}", tls.cert_path);
-    }
-    if !key_path.exists() {
-        anyhow::bail!("TLS key not found: {}", tls.key_path);
-    }
-    let cert_pem = fs::read_to_string(cert_path)?;
-    let key_pem = fs::read_to_string(key_path)?;
-    tracing::info!(
-        "TLS configured: cert={}, key={}",
-        tls.cert_path,
-        tls.key_path
-    );
-    tracing::info!("  Certificate loaded ({} bytes)", cert_pem.len());
-    tracing::info!("  Private key loaded ({} bytes)", key_pem.len());
-    Ok(Some(tls))
-}
-
-pub struct HealthEndpoint {
-    pub started_at: std::time::Instant,
-    pub checks_passed: std::sync::atomic::AtomicU64,
-    pub checks_failed: std::sync::atomic::AtomicU64,
-}
-
-impl HealthEndpoint {
-    pub fn new() -> Self {
-        HealthEndpoint {
-            started_at: std::time::Instant::now(),
-            checks_passed: std::sync::atomic::AtomicU64::new(0),
-            checks_failed: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
-    pub fn check(&self) -> HealthStatus {
-        let uptime = self.started_at.elapsed().as_secs();
-        let storage_ok = true;
-        let memory_ok = true;
-        let status = if storage_ok && memory_ok {
-            "healthy".to_string()
-        } else {
-            "degraded".to_string()
-        };
-        if status == "healthy" {
-            self.checks_passed
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        } else {
-            self.checks_failed
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        HealthStatus {
-            status,
-            uptime_secs: uptime,
-            storage_ok,
-            memory_ok,
-        }
-    }
-
-    pub fn register_routes(&self) {
-        tracing::info!("Health check routes registered");
-    }
-}
-
-pub struct HealthStatus {
-    pub status: String,
-    pub uptime_secs: u64,
-    pub storage_ok: bool,
-    pub memory_ok: bool,
-}
-
-fn start_http_server(
-    config: &nova_config::Config,
-    health: Arc<HealthEndpoint>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr = format!("{}:{}", config.networking.listen_address, config.networking.listen_port);
-    let listener = std::net::TcpListener::bind(&addr)?;
-    listener.set_nonblocking(true)?;
-    tracing::info!("HTTP server listening on {}", addr);
-
-    let mut buf = vec![0u8; 8192];
-    loop {
-        let (mut stream, _) = match listener.accept() {
-            Ok(conn) => conn,
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                continue;
-            }
-            Err(e) => {
-                tracing::error!("HTTP accept error: {}", e);
-                break;
-            }
-        };
-
-        let n = match stream.read(&mut buf) {
-            Ok(0) => continue,
-            Ok(n) => n,
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Err(e) => {
-                tracing::error!("HTTP read error: {}", e);
-                continue;
-            }
-        };
-
-        let request = String::from_utf8_lossy(&buf[..n]);
-        let path = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .unwrap_or("/");
-
-        let (body, status) = match path {
-            "/health" => {
-                let s = health.check();
-                (
-                    format!(
-                        "{{\"status\": \"{}\", \"uptime_secs\": {}}}",
-                        s.status, s.uptime_secs
-                    ),
-                    200,
-                )
-            }
-            "/ready" => ("{\"status\": \"ready\"}".to_string(), 200),
-            "/live" => ("{\"status\": \"alive\"}".to_string(), 200),
-            "/metrics" => (
-                format!(
-                    "# HELP nova_uptime_secs Uptime\n\
-                     # TYPE nova_uptime_secs gauge\n\
-                     nova_uptime_secs {}\n\
-                     # HELP nova_health_checks_passed Checks passed\n\
-                     # TYPE nova_health_checks_passed counter\n\
-                     nova_health_checks_passed {}\n\
-                     # HELP nova_health_checks_failed Checks failed\n\
-                     # TYPE nova_health_checks_failed counter\n\
-                     nova_health_checks_failed {}",
-                    health.started_at.elapsed().as_secs(),
-                    health.checks_passed.load(std::sync::atomic::Ordering::Relaxed),
-                    health.checks_failed.load(std::sync::atomic::Ordering::Relaxed),
-                ),
-                200,
-            ),
-            "/admin/config" => ("{\"config_version\": 1}".to_string(), 200),
-            _ => ("{\"error\": \"not found\"}".to_string(), 404),
-        };
-
-        let content_len = body.len();
-        let reason = if status == 200 { "OK" } else { "Not Found" };
-        let response = format!(
-            "HTTP/1.1 {status} {reason}\r\n\
-             Content-Type: application/json\r\n\
-             Content-Length: {content_len}\r\n\
-             Connection: close\r\n\r\n{body}",
-        );
-
-        let _ = stream.write_all(response.as_bytes());
-    }
-
-    Ok(())
-}
-
-fn wait_for_signals(
-    _store: &nova_storage::Store,
-    _config: &Arc<parking_lot::RwLock<nova_config::Config>>,
-    _loader: &nova_config::ConfigLoader,
-) -> anyhow::Result<()> {
-    use std::sync::mpsc;
-
-    let (tx_shutdown, rx_shutdown) = mpsc::channel::<()>();
-
-    ctrlc::set_handler(move || {
-        let _ = tx_shutdown.send(());
-    })?;
-
-    loop {
-        if let Ok(()) = rx_shutdown.try_recv() {
-            tracing::info!("Shutdown signal received");
-            return Ok(());
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
-
-fn reload_config(
-    loader: &nova_config::ConfigLoader,
-    locked: &Arc<parking_lot::RwLock<nova_config::Config>>,
-) {
-    if let Err(e) = loader.reload(locked) {
-        tracing::error!("Config reload failed: {}", e);
-    } else {
-        tracing::info!("Configuration reloaded successfully");
-    }
-}
-
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args = DaemonArgs::parse();
 
     let _subscriber = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder().parse_lossy(&args.log_level),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::builder().parse_lossy(&args.log_level))
         .init();
 
     tracing::info!("Nova Runtime v{} starting...", env!("CARGO_PKG_VERSION"));
 
-    let loader = nova_config::ConfigLoader::new();
+    // Resolve config file path for hot-reload
+    let config_path = resolve_config_path(&args.config);
+    if let Some(ref path) = config_path {
+        tracing::info!("Config file: {}", path.display());
+    }
+
+    // Create loader with the resolved path so reload() knows which file to re-read
+    let loader = config_path.as_ref()
+        .map(|p| nova_config::ConfigLoader::with_path(p.clone()))
+        .unwrap_or_else(nova_config::ConfigLoader::new);
+
     let mut config = match &args.config {
-        Some(path) => nova_config::ConfigLoader::parse_file(std::path::Path::new(path))?,
+        Some(path) => nova_config::ConfigLoader::parse_file(Path::new(path))?,
         None => loader.load(None)?,
     };
 
@@ -279,30 +54,22 @@ fn main() -> anyhow::Result<()> {
     }
 
     tracing::info!("Configuration loaded");
-    tracing::info!(
-        "Data directory: {}",
-        config.general.data_dir.display()
-    );
-    tracing::info!(
-        "Listen: {}:{}",
-        config.networking.listen_address,
-        config.networking.listen_port
-    );
+    tracing::info!("Data directory: {}", config.general.data_dir.display());
+    tracing::info!("Listen: {}:{}", config.networking.listen_address, config.networking.listen_port);
 
     let config = Arc::new(parking_lot::RwLock::new(config));
 
+    // Initialize memory manager
     let mem_config = nova_memory::MemoryConfig {
         max_memory: config.read().memory.max_memory,
         pressure_threshold_pct: config.read().memory.pressure_threshold_pct,
         critical_threshold_pct: config.read().memory.critical_threshold_pct,
         emergency_reserve: config.read().memory.emergency_reserve,
     };
-    let mut _mem_mgr = nova_memory::MemoryManager::new(&mem_config);
-    tracing::info!(
-        "Memory manager initialized (max: {} MB)",
-        config.read().memory.max_memory / 1024 / 1024
-    );
+    let memory_mgr = Arc::new(nova_memory::MemoryManager::new(&mem_config));
+    tracing::info!("Memory manager initialized (max: {} MB)", config.read().memory.max_memory / 1024 / 1024);
 
+    // Initialize storage engine
     let storage_config = nova_storage::StorageConfig {
         data_dir: config.read().general.data_dir.clone(),
         wal_dir: config.read().storage.wal_dir.clone(),
@@ -315,66 +82,165 @@ fn main() -> anyhow::Result<()> {
         },
         btree_order: 128,
     };
-    let store = nova_storage::Store::open(&storage_config)?;
-    let store = Arc::new(store);
+    let store = Arc::new(nova_storage::Store::open(&storage_config)?);
     let stats = store.stats();
     tracing::info!("Storage engine opened");
-    tracing::info!(
-        "  Page cache: {} / {} pages",
-        stats.cache_size,
-        storage_config.page_cache_size
-    );
+    tracing::info!("  Page cache: {} / {} pages", stats.cache_size, storage_config.page_cache_size);
     tracing::info!("  WAL segments: {}", stats.wal_segments);
     tracing::info!("  Current LSN: {}", stats.current_lsn);
 
-    let _tls_config = {
+    // Setup TLS
+    if config.read().networking.tls_enabled {
         let cfg = config.read();
-        setup_tls(&cfg)?
-    };
+        let cert_path = Path::new(cfg.networking.tls_cert_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("TLS cert path required"))?);
+        let key_path = Path::new(cfg.networking.tls_key_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("TLS key path required"))?);
+        if !cert_path.exists() {
+            anyhow::bail!("TLS certificate not found: {}", cert_path.display());
+        }
+        if !key_path.exists() {
+            anyhow::bail!("TLS key not found: {}", key_path.display());
+        }
+        tracing::info!("TLS configured: cert={}, key={}", cert_path.display(), key_path.display());
+    } else {
+        tracing::info!("TLS is disabled");
+    }
 
-    let health = Arc::new(HealthEndpoint::new());
-    health.register_routes();
-    tracing::info!("Health endpoint initialized");
-
-    let listen_addr = {
-        let cfg = config.read();
-        format!("{}:{}", cfg.networking.listen_address, cfg.networking.listen_port)
+    // Initialize pipeline executor
+    let exec_config = nova_executor::PipelineConfig {
+        max_concurrent_ops: config.read().execution.max_concurrent_ops,
+        pipeline_queue_depth: config.read().execution.pipeline_queue_depth,
+        worker_threads: config.read().execution.worker_threads as u32,
+        default_operation_timeout_ms: config.read().execution.default_operation_timeout_ms,
+        max_operation_timeout_ms: config.read().execution.max_operation_timeout_ms,
+        rate_limit_global_per_sec: config.read().execution.rate_limit_global_per_sec as f64,
+        rate_limit_global_burst: config.read().execution.rate_limit_global_burst as f64,
+        rate_limit_user_per_sec: config.read().execution.rate_limit_user_per_sec as f64,
+        rate_limit_user_burst: config.read().execution.rate_limit_user_burst as f64,
+        rate_limit_ip_per_sec: config.read().execution.rate_limit_ip_per_sec as f64,
+        rate_limit_ip_burst: config.read().execution.rate_limit_ip_burst as f64,
+        circuit_breaker_threshold: config.read().execution.circuit_breaker_threshold,
+        circuit_breaker_window_ms: config.read().execution.circuit_breaker_window_ms,
+        circuit_breaker_half_open_timeout_ms: config.read().execution.circuit_breaker_half_open_timeout_ms,
+        circuit_breaker_success_threshold: config.read().execution.circuit_breaker_success_threshold,
+        audit_enabled: config.read().execution.audit_enabled,
+        audit_include_payloads: config.read().execution.audit_include_payloads,
+        audit_max_entry_size: config.read().execution.audit_max_entry_size,
+        idempotency_key_ttl_secs: config.read().execution.idempotency_key_ttl_secs,
+        max_idempotency_keys: config.read().execution.max_idempotency_keys,
+        max_retries: config.read().execution.pipeline_max_retries,
+        retry_base_delay_ms: config.read().execution.retry_base_delay_ms,
+        retry_max_delay_ms: config.read().execution.retry_max_delay_ms,
     };
+    let pipeline = Arc::new(nova_executor::PipelineExecutor::new(exec_config));
+    tracing::info!("Execution engine initialized");
+
+    // Build admin state
+    let listen_addr = format!("{}:{}", config.read().networking.listen_address, config.read().networking.listen_port);
+    let admin_state = Arc::new(nova_api::admin::AdminState {
+        started_at: std::time::Instant::now(),
+        pipeline: pipeline.clone(),
+        config: config.clone(),
+        memory_mgr: Some(memory_mgr),
+        storage_ok: true,
+    });
+
+    // Shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Handle SIGINT / SIGTERM
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Shutdown signal received");
+        let _ = shutdown_tx_clone.send(true);
+    });
+
+    // Handle SIGHUP for config hot-reload
+    if let Ok(mut sighup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
+        let config_for_reload = config.clone();
+        tokio::spawn(async move {
+            loop {
+                sighup.recv().await;
+                tracing::info!("SIGHUP received, reloading configuration...");
+                match loader.reload(&config_for_reload) {
+                    Ok(()) => tracing::info!("Configuration reloaded successfully"),
+                    Err(e) => tracing::error!("Failed to reload configuration: {}", e),
+                }
+            }
+        });
+    } else {
+        tracing::warn!("SIGHUP handler not available on this platform");
+    }
 
     println!();
     println!("  ╔══════════════════════════════════════╗");
-    println!(
-        "  ║         Nova Runtime v{:<14} ║",
-        env!("CARGO_PKG_VERSION")
-    );
+    println!("  ║         Nova Runtime v{:<14} ║", env!("CARGO_PKG_VERSION"));
     println!("  ║     Status: RUNNING                   ║");
-    println!(
-        "  ║     Listen: {:18} ║",
-        listen_addr
-    );
-    println!(
-        "  ║     PID:    {:<27} ║",
-        std::process::id()
-    );
+    println!("  ║     Listen: {:18} ║", listen_addr);
+    println!("  ║     PID:    {:<27} ║", std::process::id());
     println!("  ╚══════════════════════════════════════╝");
     println!();
 
-    let server_config = config.read().clone();
-    let server_health = health.clone();
-    thread::spawn(move || {
-        if let Err(e) = start_http_server(&server_config, server_health) {
-            tracing::error!("HTTP server error: {}", e);
-        }
-    });
+    // Start HTTP server
+    let server_result = nova_api::server::start_server(
+        &listen_addr,
+        admin_state,
+        shutdown_rx,
+    ).await;
 
-    wait_for_signals(store.as_ref(), &config, &loader)?;
+    match server_result {
+        Ok(()) => tracing::info!("HTTP server shut down gracefully"),
+        Err(e) => tracing::error!("HTTP server error: {}", e),
+    }
 
+    // Graceful shutdown
     tracing::info!("Shutting down...");
-    store.sync()?;
-    tracing::info!("Storage synced (WAL rotated, data flushed)");
-    store.close()?;
-    tracing::info!("Storage engine closed");
-    tracing::info!("Goodbye.");
+    tracing::info!("Draining pipeline...");
+    let drain_result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        pipeline.drain(std::time::Duration::from_secs(30)),
+    ).await;
+    match drain_result {
+        Ok(Ok(())) => tracing::info!("Pipeline drained"),
+        _ => tracing::warn!("Pipeline drain incomplete"),
+    }
 
+    tracing::info!("Closing storage...");
+    if let Err(e) = store.close() {
+        tracing::error!("Storage close error: {}", e);
+    } else {
+        tracing::info!("Storage engine closed");
+    }
+
+    tracing::info!("Goodbye.");
     Ok(())
+}
+
+/// Resolve the config file path to watch for hot-reload.
+/// Priority: CLI `--config` argument > local ./novad.toml > user config > system config.
+fn resolve_config_path(cli_path: &Option<String>) -> Option<PathBuf> {
+    if let Some(path) = cli_path {
+        return Some(PathBuf::from(path));
+    }
+    let local = PathBuf::from("./novad.toml");
+    if local.exists() {
+        return Some(local);
+    }
+    let user_path = if let Some(config_dir) = std::env::var("XDG_CONFIG_HOME").ok() {
+        PathBuf::from(config_dir).join("nova/novad.toml")
+    } else if let Some(home) = std::env::var("HOME").ok() {
+        PathBuf::from(home).join(".config/nova/novad.toml")
+    } else {
+        PathBuf::from("/etc/novad/novad.toml")
+    };
+    if user_path.exists() {
+        return Some(user_path);
+    }
+    let system_path = PathBuf::from("/etc/novad/novad.toml");
+    if system_path.exists() {
+        return Some(system_path);
+    }
+    None
 }

@@ -7,6 +7,12 @@ pub struct PageAllocator {
     total_allocated: usize,
 }
 
+impl Default for PageAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PageAllocator {
     pub fn new() -> Self {
         PageAllocator {
@@ -39,7 +45,7 @@ impl PageAllocator {
     }
 
     #[allow(unused_variables)]
-    pub fn free_pages(&mut self, ptr: *mut u8, count: usize) {
+    pub unsafe fn free_pages(&mut self, ptr: *mut u8, count: usize) {
         if let Some(&size) = self.allocations.get(&ptr) {
             let layout = Layout::from_size_align(size, PAGE_SIZE).expect("valid layout");
             unsafe { dealloc(ptr, layout) }
@@ -50,5 +56,86 @@ impl PageAllocator {
 
     pub fn total_allocated(&self) -> usize {
         self.total_allocated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nova_core::PAGE_SIZE;
+
+    #[test]
+    fn allocate_pages_returns_non_null() {
+        let mut allocator = PageAllocator::new();
+        let ptr = allocator.allocate_pages(1).unwrap();
+        assert!(!ptr.is_null());
+        assert_eq!(allocator.total_allocated(), PAGE_SIZE);
+        unsafe { allocator.free_pages(ptr, 1); }
+    }
+
+    #[test]
+    fn free_pages_reclaims_memory() {
+        let mut allocator = PageAllocator::new();
+        let ptr = allocator.allocate_pages(1).unwrap();
+        unsafe { allocator.free_pages(ptr, 1); }
+        assert_eq!(allocator.total_allocated(), 0);
+    }
+
+    #[test]
+    fn total_allocated_tracking() {
+        let mut allocator = PageAllocator::new();
+        assert_eq!(allocator.total_allocated(), 0);
+        let p1 = allocator.allocate_pages(2).unwrap();
+        assert_eq!(allocator.total_allocated(), 2 * PAGE_SIZE);
+        let p2 = allocator.allocate_pages(3).unwrap();
+        assert_eq!(allocator.total_allocated(), 5 * PAGE_SIZE);
+        unsafe { allocator.free_pages(p1, 2); }
+        assert_eq!(allocator.total_allocated(), 3 * PAGE_SIZE);
+        unsafe { allocator.free_pages(p2, 3); }
+        assert_eq!(allocator.total_allocated(), 0);
+    }
+
+    #[test]
+    fn allocate_zero_pages_returns_error() {
+        let mut allocator = PageAllocator::new();
+        let result = allocator.allocate_pages(0);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(RuntimeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn write_to_allocated_pages() {
+        let mut allocator = PageAllocator::new();
+        let ptr = allocator.allocate_pages(1).unwrap();
+        unsafe {
+            std::ptr::write_bytes(ptr, 0xAA, PAGE_SIZE);
+            for i in 0..PAGE_SIZE {
+                assert_eq!(*ptr.add(i), 0xAA);
+            }
+        }
+        unsafe { allocator.free_pages(ptr, 1); }
+    }
+
+    #[test]
+    fn multiple_allocations() {
+        let mut allocator = PageAllocator::new();
+        let mut ptrs = Vec::new();
+        for _ in 0..5 {
+            ptrs.push(allocator.allocate_pages(1).unwrap());
+        }
+        assert_eq!(allocator.total_allocated(), 5 * PAGE_SIZE);
+        for ptr in ptrs {
+            unsafe { allocator.free_pages(ptr, 1); }
+        }
+        assert_eq!(allocator.total_allocated(), 0);
+    }
+
+    #[test]
+    fn large_page_allocation() {
+        let mut allocator = PageAllocator::new();
+        let ptr = allocator.allocate_pages(100).unwrap();
+        assert!(!ptr.is_null());
+        assert_eq!(allocator.total_allocated(), 100 * PAGE_SIZE);
+        unsafe { allocator.free_pages(ptr, 100); }
     }
 }

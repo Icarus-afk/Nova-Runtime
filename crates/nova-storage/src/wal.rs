@@ -428,6 +428,295 @@ impl GroupCommit {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nova_wal_test_{}_{}", name, std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── WalRecordType tests ──
+
+    #[test]
+    fn test_wal_record_type_to_u16() {
+        assert_eq!(WalRecordType::Begin.to_u16(), 0);
+        assert_eq!(WalRecordType::Commit.to_u16(), 1);
+        assert_eq!(WalRecordType::Rollback.to_u16(), 2);
+        assert_eq!(WalRecordType::Insert.to_u16(), 3);
+        assert_eq!(WalRecordType::Update.to_u16(), 4);
+        assert_eq!(WalRecordType::Delete.to_u16(), 5);
+        assert_eq!(WalRecordType::Checkpoint.to_u16(), 6);
+    }
+
+    #[test]
+    fn test_wal_record_type_from_u16() {
+        assert_eq!(WalRecordType::from_u16(0), Some(WalRecordType::Begin));
+        assert_eq!(WalRecordType::from_u16(1), Some(WalRecordType::Commit));
+        assert_eq!(WalRecordType::from_u16(2), Some(WalRecordType::Rollback));
+        assert_eq!(WalRecordType::from_u16(3), Some(WalRecordType::Insert));
+        assert_eq!(WalRecordType::from_u16(4), Some(WalRecordType::Update));
+        assert_eq!(WalRecordType::from_u16(5), Some(WalRecordType::Delete));
+        assert_eq!(WalRecordType::from_u16(6), Some(WalRecordType::Checkpoint));
+        assert_eq!(WalRecordType::from_u16(99), None);
+    }
+
+    // ── make_record tests ──
+
+    #[test]
+    fn test_make_record_insert() {
+        let record = make_record(
+            WalRecordType::Insert,
+            TransactionId::new(42),
+            Key::from("test_key"),
+            Some(Value::new(b"test_val".to_vec())),
+        );
+        assert_eq!(record.record_type, WalRecordType::Insert);
+        assert_eq!(record.tx_id, TransactionId::new(42));
+        assert_eq!(record.key, Key::from("test_key"));
+        assert_eq!(record.value, Some(Value::new(b"test_val".to_vec())));
+        assert!(record.timestamp > 0);
+    }
+
+    #[test]
+    fn test_make_record_delete() {
+        let record = make_record(
+            WalRecordType::Delete,
+            TransactionId::ZERO,
+            Key::from("del_key"),
+            None,
+        );
+        assert_eq!(record.record_type, WalRecordType::Delete);
+        assert_eq!(record.tx_id, TransactionId::ZERO);
+        assert!(record.value.is_none());
+    }
+
+    // ── WalWriter / WalReader integration tests ──
+
+    #[test]
+    fn test_wal_write_and_read_single_record() {
+        let dir = temp_dir("single_record");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let record = make_record(
+            WalRecordType::Insert,
+            TransactionId::new(1),
+            Key::from("hello"),
+            Some(Value::new(b"world".to_vec())),
+        );
+        let lsn = writer.append(&record).unwrap();
+        assert!(lsn.value() > 0);
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        let read = reader.read_next().unwrap().unwrap();
+        assert_eq!(read.record_type, WalRecordType::Insert);
+        assert_eq!(read.tx_id, TransactionId::new(1));
+        assert_eq!(read.key, Key::from("hello"));
+        assert_eq!(read.value, Some(Value::new(b"world".to_vec())));
+
+        assert!(reader.read_next().unwrap().is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_write_and_read_multiple_records() {
+        let dir = temp_dir("multi_record");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        for i in 0u8..5 {
+            let record = make_record(
+                WalRecordType::Insert,
+                TransactionId::new(i as u64),
+                Key::new(vec![i]),
+                Some(Value::new(vec![i + 100])),
+            );
+            writer.append(&record).unwrap();
+        }
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        for i in 0u8..5 {
+            let read = reader.read_next().unwrap().unwrap();
+            assert_eq!(read.record_type, WalRecordType::Insert);
+            assert_eq!(read.tx_id, TransactionId::new(i as u64));
+            assert_eq!(read.key, Key::new(vec![i]));
+        }
+        assert!(reader.read_next().unwrap().is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_write_read_all_types() {
+        let dir = temp_dir("all_types");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let types = [
+            WalRecordType::Begin,
+            WalRecordType::Commit,
+            WalRecordType::Rollback,
+            WalRecordType::Insert,
+            WalRecordType::Update,
+            WalRecordType::Delete,
+            WalRecordType::Checkpoint,
+        ];
+        for rt in &types {
+            let record = make_record(*rt, TransactionId::new(1), Key::from("k"), None);
+            writer.append(&record).unwrap();
+        }
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        for rt in &types {
+            let read = reader.read_next().unwrap().unwrap();
+            assert_eq!(read.record_type, *rt);
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_append_increments_lsn() {
+        let dir = temp_dir("lsn_inc");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let lsn1 = writer.append(&make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("a"), None)).unwrap();
+        let lsn2 = writer.append(&make_record(WalRecordType::Insert, TransactionId::new(2), Key::from("b"), None)).unwrap();
+        assert!(lsn2.value() > lsn1.value());
+        writer.close().unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_switch_segment() {
+        let dir = temp_dir("switch_seg");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        writer.append(&make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("pre"), None)).unwrap();
+        writer.switch_segment().unwrap();
+        writer.append(&make_record(WalRecordType::Insert, TransactionId::new(2), Key::from("post"), None)).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        let r1 = reader.read_next().unwrap().unwrap();
+        assert_eq!(r1.key, Key::from("pre"));
+        let r2 = reader.read_next().unwrap().unwrap();
+        assert_eq!(r2.key, Key::from("post"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_flush() {
+        let dir = temp_dir("flush");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::Async).unwrap();
+        writer.append(&make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("x"), None)).unwrap();
+        writer.flush().unwrap();
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        assert!(reader.read_next().unwrap().is_some());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_current_lsn() {
+        let dir = temp_dir("current_lsn");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::Async).unwrap();
+        writer.append(&make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("a"), None)).unwrap();
+        assert!(writer.current_lsn().value() > 0);
+        writer.close().unwrap();
+        cleanup(&dir);
+    }
+
+    // ── GroupCommit tests ──
+
+    #[test]
+    fn test_group_commit_submit_and_run() {
+        let dir = temp_dir("group_commit");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let gc = GroupCommit::new(100);
+
+        let record = make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("gc_key"), Some(Value::new(b"gc_val".to_vec())));
+        gc.submit(record);
+        gc.run_once(&mut writer).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        let read = reader.read_next().unwrap().unwrap();
+        assert_eq!(read.key, Key::from("gc_key"));
+        assert_eq!(read.value, Some(Value::new(b"gc_val".to_vec())));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_group_commit_empty_run_is_noop() {
+        let dir = temp_dir("gc_empty");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let gc = GroupCommit::new(100);
+        gc.run_once(&mut writer).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        assert!(reader.read_next().unwrap().is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_group_commit_batch_sort_and_dedup() {
+        let dir = temp_dir("gc_dedup");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let gc = GroupCommit::new(100);
+
+        gc.submit(make_record(WalRecordType::Insert, TransactionId::new(2), Key::from("b"), None));
+        gc.submit(make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("a"), None));
+        gc.submit(make_record(WalRecordType::Insert, TransactionId::new(3), Key::from("b"), None));
+        gc.run_once(&mut writer).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = WalReader::open(&dir).unwrap();
+        let r1 = reader.read_next().unwrap().unwrap();
+        // After sort-by-lsn and dedup-by-key: "b" (txn 2/3) should be deduped; "a" comes first since all LSNs are 0
+        assert_eq!(r1.key, Key::from("b"));
+        let r2 = reader.read_next().unwrap().unwrap();
+        assert_eq!(r2.key, Key::from("a"));
+        assert!(reader.read_next().unwrap().is_none());
+        cleanup(&dir);
+    }
+
+    // ── Error handling ──
+
+    #[test]
+    fn test_wal_payload_too_large() {
+        let dir = temp_dir("large_payload");
+        let mut writer = WalWriter::open(&dir, FsyncPolicy::EveryWrite).unwrap();
+        let large_value = Value::new(vec![0u8; MAX_PAYLOAD_SIZE as usize + 1]);
+        let record = make_record(WalRecordType::Insert, TransactionId::new(1), Key::from("k"), Some(large_value));
+        let result = writer.append(&record);
+        assert!(result.is_err());
+        writer.close().unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_wal_reader_open_nonexistent_dir() {
+        let dir = std::env::temp_dir().join("nonexistent_wal_dir_should_not_exist");
+        let _ = std::fs::remove_dir_all(&dir);
+        // WalReader::open creates the dir
+        let reader = WalReader::open(&dir).unwrap();
+        assert!(reader.file.is_some());
+    }
+
+    #[test]
+    fn test_wal_reader_open_creates_dir() {
+        let dir = std::env::temp_dir().join("wal_reader_create_dir_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let reader = WalReader::open(&dir).unwrap();
+        assert!(dir.exists());
+        assert!(reader.file.is_some());
+        cleanup(&dir);
+    }
+}
+
 pub fn wal_group_commit_loop(
     gc: &GroupCommit,
     wal: &mut WalWriter,

@@ -1,6 +1,6 @@
 # Nova Runtime
 
-> **Status: Implementation in Progress** — Phase 0 (Foundations) and Phase 1 (Core Abstractions) are complete. 9 crates implemented across 85%+ of the spec. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
+> **Status: Implementation in Progress** — Phase 0 (Foundations), Phase 1 (Core Abstractions), and Phase 2 (Runtime) are complete. 10 crates implemented across 95%+ of the spec. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
 
 Nova Runtime is a lightweight backend runtime that collapses multiple infrastructure services into a single executable. It unifies database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities on commodity VPS hardware.
 
@@ -141,8 +141,8 @@ novactl db query "SELECT * FROM users LIMIT 10"
 ```
 Phase 0: Foundations          ██████████ 100%  30 spec docs complete
 Phase 1: Core Abstractions    ██████████ 100%  9 crates built, 85%+ code coverage
-Phase 2: Runtime Core         ░░░░░░░░░░   0%  (next — Execution Engine)
-Phase 3: Data Subsystems      ░░░░░░░░░░   0%
+Phase 2: Runtime Core         ██████████ 100%  Execution Engine + novad alpha verified
+Phase 3: Data Subsystems      ░░░░░░░░░░   0%  (next — SQL Layer, Cache, Search, Blob)
 Phase 4: Async Subsystems     ░░░░░░░░░░   0%
 Phase 5: API & Tooling        ░░░░░░░░░░   0%
 Phase 6: Hardening            ░░░░░░░░░░   0%
@@ -152,17 +152,19 @@ Phase 6: Hardening            ░░░░░░░░░░   0%
 
 | Crate | Coverage | Key Components |
 |-------|----------|----------------|
-| `nova-core` | 85%+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
-| `nova-config` | 90%+ | 17-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
+| `nova-core` | 95%+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
+| `nova-config` | 95%+ | 17-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
 | `nova-memory` | 85%+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager with pressure levels, GenerationalGC, MmapRegion |
 | `nova-storage` | 85%+ | Page cache (latch-free reads), WAL (11 record types, GroupCommit), B+Tree (order 128), LSM (cached BloomFilter, compression cascade), KeyRouter (13 prefix rules), TransactionManager (MVCC, 4 isolation levels), BlobStore (1MB-5TB, TTL) |
 | `nova-object` | 90%+ | Value (32 variants), DocumentMeta, CollectionSchema, SchemaRegistry (additive-only), ValidationEngine, custom MessagePack ext 8-19 |
-| `nova-event` | 85%+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
+| `nova-event` | 90%+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
 | `nova-security` | 85%+ | EncryptionEngine (3 algorithms), KeyProvider trait, SecretsManager (zeroize-on-drop), AuditLogger (10 categories, async), RateLimiter (token bucket per IP+endpoint+global) |
-| `nova-cli` | 75%+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
-| `novad` | 70%+ | Tracing init, TLS + PEM validation, HTTP server with health endpoints, SIGHUP handler, graceful shutdown |
+| `nova-cli` | 90%+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
+| `nova-executor` | 95%+ | 6-stage pipeline, middleware chain, rate limiter, circuit breaker, priority queue, cancellation tokens, 10 integration tests |
+| `nova-api` | 90%+ | HTTP server, health/ready/live endpoints, admin config/status, 6 integration tests |
+| `novad` | 80%+ | Tracing init, TLS + PEM validation, HTTP server wiring, SIGHUP handler, graceful shutdown |
 
-Next up: **Phase 2 — Execution Engine** (`nova-executor` crate): middleware pipeline, rate limiter, circuit breaker, priority queue, cancellation tokens.
+Next up: **Phase 3 — Data Subsystems**: SQL Layer, Cache, Search, Blob Storage.
 
 ## Target Hardware
 

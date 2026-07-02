@@ -96,3 +96,45 @@ impl ConfigCommands {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: ConfigCommands,
+    }
+
+    fn parse(args: &[&str]) -> ConfigCommands {
+        Cli::try_parse_from(args).unwrap().cmd
+    }
+
+    #[test]
+    fn test_show() {
+        assert!(matches!(parse(&["test", "show"]), ConfigCommands::Show { section: None }));
+        assert!(matches!(parse(&["test", "show", "storage"]), ConfigCommands::Show { section: Some(_) }));
+    }
+
+    #[test]
+    fn test_get() {
+        assert!(matches!(parse(&["test", "get", "storage.page_size"]), ConfigCommands::Get { .. }));
+    }
+
+    #[test]
+    fn test_set() {
+        assert!(matches!(parse(&["test", "set", "key", "value"]), ConfigCommands::Set { .. }));
+    }
+
+    #[test]
+    fn test_validate() {
+        assert!(matches!(parse(&["test", "validate", "/tmp/cfg.toml"]), ConfigCommands::Validate { .. }));
+    }
+
+    #[test]
+    fn test_default() {
+        assert!(matches!(parse(&["test", "default"]), ConfigCommands::Default));
+    }
+}

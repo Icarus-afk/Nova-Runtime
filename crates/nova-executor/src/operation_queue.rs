@@ -249,3 +249,236 @@ impl fmt::Debug for OperationQueue {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::OperationContextBuilder;
+    use crate::OperationRequest;
+    use crate::OperationType;
+    use crate::OperationTarget;
+    use crate::Priority;
+    use std::net::SocketAddr;
+    use std::time::{Duration, Instant};
+    use std::sync::mpsc;
+
+    fn test_addr() -> SocketAddr { "127.0.0.1:8080".parse().unwrap() }
+
+    fn make_pending_op(priority: Priority) -> (PendingOperation, mpsc::Receiver<OperationResponse>) {
+        let (tx, rx) = mpsc::channel();
+        let ctx = OperationContextBuilder::new(test_addr())
+            .priority(priority)
+            .deadline(Instant::now() + Duration::from_secs(60))
+            .build();
+        let op = PendingOperation {
+            request: OperationRequest::new(OperationType::Get, OperationTarget::System),
+            context: ctx,
+            completion: tx,
+            submitted_at: Instant::now(),
+            deadline: Instant::now() + Duration::from_secs(60),
+            retry_count: 0,
+            priority_age: 0,
+        };
+        (op, rx)
+    }
+
+    #[test]
+    fn test_new_queue_is_empty() {
+        let queue = OperationQueue::new(100);
+        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn test_push_adds_operation() {
+        let queue = OperationQueue::new(100);
+        let (op, _rx) = make_pending_op(Priority::Normal);
+        assert!(queue.push(op).is_ok());
+        assert!(!queue.is_empty());
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn test_pop_priority_removes_operation() {
+        let queue = OperationQueue::new(100);
+        let (op, _rx) = make_pending_op(Priority::Normal);
+        queue.push(op).unwrap();
+        let popped = queue.pop_priority();
+        assert!(popped.is_some());
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_pop_priority_returns_none_when_empty() {
+        let queue = OperationQueue::new(100);
+        let popped = queue.pop_priority();
+        assert!(popped.is_none());
+    }
+
+    #[test]
+    fn test_capacity_returns_configured() {
+        let queue = OperationQueue::new(500);
+        assert_eq!(queue.capacity(), 500);
+    }
+
+    #[test]
+    fn test_stats_returns_correct_values() {
+        let queue = OperationQueue::new(200);
+        let (op1, _rx) = make_pending_op(Priority::Normal);
+        let (op2, _rx) = make_pending_op(Priority::High);
+        queue.push(op1).unwrap();
+        queue.push(op2).unwrap();
+
+        let stats = queue.stats();
+        assert_eq!(stats.depth, 2);
+        assert_eq!(stats.capacity, 200);
+        assert_eq!(stats.rejected, 0);
+    }
+
+    #[test]
+    fn test_queue_rejects_when_full() {
+        let queue = OperationQueue::new(2);
+        let (op1, _rx) = make_pending_op(Priority::Normal);
+        let (op2, _rx) = make_pending_op(Priority::Normal);
+        let (op3, _rx) = make_pending_op(Priority::Normal);
+
+        assert!(queue.push(op1).is_ok());
+        assert!(queue.push(op2).is_ok());
+        assert!(queue.push(op3).is_err());
+        assert_eq!(queue.rejected(), 1);
+    }
+
+    #[test]
+    fn test_priority_ordering_higher_priority_first() {
+        let queue = OperationQueue::new(100);
+
+        // Push in reverse priority order
+        let (op_bg, _rx) = make_pending_op(Priority::Background);
+        let (op_normal, _rx) = make_pending_op(Priority::Normal);
+        let (op_high, _rx) = make_pending_op(Priority::High);
+        let (op_critical, _rx) = make_pending_op(Priority::Critical);
+
+        queue.push(op_bg).unwrap();
+        queue.push(op_normal).unwrap();
+        queue.push(op_high).unwrap();
+        queue.push(op_critical).unwrap();
+
+        // Should pop in priority order
+        let p1 = queue.pop_priority().unwrap();
+        assert_eq!(p1.context.operation_priority, Priority::Critical);
+
+        let p2 = queue.pop_priority().unwrap();
+        assert_eq!(p2.context.operation_priority, Priority::High);
+
+        let p3 = queue.pop_priority().unwrap();
+        assert_eq!(p3.context.operation_priority, Priority::Normal);
+
+        let p4 = queue.pop_priority().unwrap();
+        assert_eq!(p4.context.operation_priority, Priority::Background);
+    }
+
+    #[test]
+    fn test_cancel_all_empties_queue_and_sends_responses() {
+        let queue = OperationQueue::new(100);
+        let (op1, rx1) = make_pending_op(Priority::Normal);
+        let (op2, rx2) = make_pending_op(Priority::High);
+        queue.push(op1).unwrap();
+        queue.push(op2).unwrap();
+
+        let count = queue.cancel_all("test shutdown");
+        assert_eq!(count, 2);
+        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 0);
+
+        // Both receivers should get cancellation responses
+        let resp1 = rx1.recv().unwrap();
+        assert!(!resp1.success);
+        assert_eq!(resp1.error.as_ref().unwrap().code, ErrorCode::Cancelled);
+
+        let resp2 = rx2.recv().unwrap();
+        assert!(!resp2.success);
+    }
+
+    #[test]
+    fn test_drain_removes_expired_operations() {
+        let queue = OperationQueue::new(100);
+        let (op_future, _rx) = make_pending_op(Priority::Normal);
+        let (op_past, _rx) = {
+            let (tx, rx) = mpsc::channel();
+            let ctx = OperationContextBuilder::new(test_addr())
+                .priority(Priority::Normal)
+                .deadline(Instant::now() + Duration::from_secs(60))
+                .build();
+            let op = PendingOperation {
+                request: OperationRequest::new(OperationType::Get, OperationTarget::System),
+                context: ctx,
+                completion: tx,
+                submitted_at: Instant::now(),
+                deadline: Instant::now() - Duration::from_secs(1), // expired
+                retry_count: 0,
+                priority_age: 0,
+            };
+            (op, rx)
+        };
+
+        queue.push(op_future).unwrap();
+        queue.push(op_past).unwrap();
+        assert_eq!(queue.len(), 2);
+
+        let expired = queue.drain(Instant::now());
+        assert_eq!(expired.len(), 1);
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn test_try_dequeue_returns_none_when_empty() {
+        let queue = OperationQueue::new(100);
+        assert!(queue.pop_priority().is_none());
+    }
+
+    #[test]
+    fn test_clear_removes_all_operations() {
+        let queue = OperationQueue::new(100);
+        let (op1, _rx) = make_pending_op(Priority::Normal);
+        let (op2, _rx) = make_pending_op(Priority::High);
+        queue.push(op1).unwrap();
+        queue.push(op2).unwrap();
+        assert_eq!(queue.len(), 2);
+
+        // cancel_all is the only "clear" method
+        queue.cancel_all("clearing");
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn test_queue_rejects_when_priority_capacity_exceeded() {
+        let queue = OperationQueue::new(1000);
+        // Each priority queue has capacity: Critical=64, High=128, Normal=512, Background=320
+        // Let's fill the Critical queue
+        for _ in 0..64 {
+            let (op, _rx) = make_pending_op(Priority::Critical);
+            assert!(queue.push(op).is_ok());
+        }
+        // One more Critical should fail
+        let (op, _rx) = make_pending_op(Priority::Critical);
+        assert!(queue.push(op).is_err());
+    }
+
+    #[test]
+    fn test_stats_by_priority() {
+        let queue = OperationQueue::new(100);
+        let (op1, _rx) = make_pending_op(Priority::Critical);
+        let (op2, _rx) = make_pending_op(Priority::High);
+        let (op3, _rx) = make_pending_op(Priority::Normal);
+        queue.push(op1).unwrap();
+        queue.push(op2).unwrap();
+        queue.push(op3).unwrap();
+
+        let stats = queue.stats();
+        assert_eq!(stats.by_priority[0], 1); // Critical
+        assert_eq!(stats.by_priority[1], 1); // High
+        assert_eq!(stats.by_priority[2], 1); // Normal
+        assert_eq!(stats.by_priority[3], 0); // Background
+    }
+}

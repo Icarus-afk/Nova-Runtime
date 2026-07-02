@@ -11,7 +11,7 @@ struct SlabPage {
 impl SlabPage {
     fn new(object_size: usize) -> Self {
         let raw = std::cmp::max(SLAB_PAGE_SIZE, object_size);
-        let page_size = (raw + object_size - 1) / object_size * object_size;
+        let page_size = raw.div_ceil(object_size) * object_size;
         let num_slots = page_size / object_size;
         let data = vec![0u8; page_size];
         SlabPage { data, num_slots }
@@ -55,7 +55,7 @@ impl Slab {
         let pages_needed = if initial_capacity == 0 || slots_per_page == 0 {
             0
         } else {
-            (initial_capacity + slots_per_page - 1) / slots_per_page
+            initial_capacity.div_ceil(slots_per_page)
         };
 
         let mut slab = Slab {
@@ -115,5 +115,132 @@ impl Slab {
 
     pub fn capacity(&self) -> usize {
         self.total_capacity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_object_size() {
+        let result = Slab::new(0, 10);
+        assert!(result.is_err());
+        let result = Slab::new(100, 10);
+        assert!(result.is_err());
+        let result = Slab::new(16, 10);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_returns_valid_ptr() {
+        let mut slab = Slab::new(32, 1).unwrap();
+        let ptr = slab.allocate().unwrap();
+        assert!(!ptr.is_null());
+        unsafe {
+            std::ptr::write(ptr, 0xAB);
+            assert_eq!(*ptr, 0xAB);
+        }
+    }
+
+    #[test]
+    fn allocate_deallocate_cycle() {
+        let mut slab = Slab::new(64, 1).unwrap();
+        let ptr = slab.allocate().unwrap();
+        assert_eq!(slab.allocated_count(), 1);
+        slab.deallocate(ptr);
+        assert_eq!(slab.allocated_count(), 0);
+    }
+
+    #[test]
+    fn slot_reuse_after_deallocate() {
+        let mut slab = Slab::new(32, 1).unwrap();
+        let ptr1 = slab.allocate().unwrap();
+        slab.deallocate(ptr1);
+        let ptr2 = slab.allocate().unwrap();
+        assert_eq!(ptr1, ptr2);
+    }
+
+    #[test]
+    fn capacity_grows_with_allocations() {
+        let mut slab = Slab::new(32, 1).unwrap();
+        let initial_cap = slab.capacity();
+        let slots_per_page = SLAB_PAGE_SIZE / 32;
+        let mut ptrs = Vec::new();
+        for _ in 0..(slots_per_page + 1) {
+            ptrs.push(slab.allocate().unwrap());
+        }
+        assert!(slab.capacity() > initial_cap);
+        for ptr in ptrs {
+            slab.deallocate(ptr);
+        }
+    }
+
+    #[test]
+    fn allocate_one_page_without_growth() {
+        let mut slab = Slab::new(32, 1).unwrap();
+        let slots_per_page = SLAB_PAGE_SIZE / 32;
+        let mut ptrs = Vec::new();
+        for _ in 0..slots_per_page {
+            ptrs.push(slab.allocate().unwrap());
+        }
+        assert_eq!(slab.allocated_count(), slots_per_page);
+        assert_eq!(slab.capacity(), slots_per_page);
+        for ptr in ptrs {
+            slab.deallocate(ptr);
+        }
+    }
+
+    #[test]
+    fn allocated_count_tracking() {
+        let mut slab = Slab::new(64, 1).unwrap();
+        assert_eq!(slab.allocated_count(), 0);
+        let p1 = slab.allocate().unwrap();
+        assert_eq!(slab.allocated_count(), 1);
+        let p2 = slab.allocate().unwrap();
+        assert_eq!(slab.allocated_count(), 2);
+        slab.deallocate(p1);
+        assert_eq!(slab.allocated_count(), 1);
+        slab.deallocate(p2);
+        assert_eq!(slab.allocated_count(), 0);
+    }
+
+    #[test]
+    fn object_size_accessor() {
+        let slab = Slab::new(128, 1).unwrap();
+        assert_eq!(slab.object_size(), 128);
+    }
+
+    #[test]
+    fn deallocate_unknown_ptr_does_nothing() {
+        let mut slab = Slab::new(32, 1).unwrap();
+        let dummy = Box::into_raw(Box::new(0u8));
+        slab.deallocate(dummy);
+        assert_eq!(slab.allocated_count(), 0);
+        unsafe {
+            drop(Box::from_raw(dummy));
+        }
+    }
+
+    #[test]
+    fn write_to_slot_and_read_back() {
+        let mut slab = Slab::new(256, 1).unwrap();
+        let ptr = slab.allocate().unwrap();
+        unsafe {
+            let val_ptr = ptr as *mut u64;
+            std::ptr::write(val_ptr, 0x1234567890ABCDEF);
+            assert_eq!(std::ptr::read(val_ptr), 0x1234567890ABCDEF);
+        }
+        slab.deallocate(ptr);
+    }
+
+    #[test]
+    fn multiple_pages_allocated() {
+        let mut slab = Slab::new(4096, 1).unwrap();
+        let p1 = slab.allocate().unwrap();
+        let p2 = slab.allocate().unwrap();
+        assert_ne!(p1, p2);
+        slab.deallocate(p1);
+        slab.deallocate(p2);
     }
 }

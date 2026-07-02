@@ -87,3 +87,103 @@ impl GenerationalGC {
         self.stats.read().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_stats_zero() {
+        let gc = GenerationalGC::new(1024 * 1024, 10 * 1024 * 1024);
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 0);
+        assert_eq!(stats.old_collections, 0);
+        assert_eq!(stats.promoted_objects, 0);
+        assert_eq!(stats.collected_objects, 0);
+        assert_eq!(stats.total_bytes_collected, 0);
+        assert_eq!(stats.last_duration_ms, 0);
+    }
+
+    #[test]
+    fn allocate_nursery() {
+        let gc = GenerationalGC::new(100, 1000);
+        let generation = gc.allocate(50);
+        assert_eq!(generation, Generation::Nursery);
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 0);
+    }
+
+    #[test]
+    fn allocate_triggers_nursery_collection() {
+        let gc = GenerationalGC::new(100, 1000);
+        gc.allocate(60);
+        let generation = gc.allocate(60);
+        assert_eq!(generation, Generation::Old);
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 1);
+        assert_eq!(stats.collected_objects, 1);
+    }
+
+    #[test]
+    fn collect_nursery_updates_stats() {
+        let gc = GenerationalGC::new(100, 1000);
+        gc.allocate(50);
+        gc.allocate(30);
+        let generation = gc.allocate(30);
+        assert_eq!(generation, Generation::Old);
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 1);
+        assert!(stats.total_bytes_collected > 0);
+    }
+
+    #[test]
+    fn collect_old() {
+        let gc = GenerationalGC::new(100, 200);
+        gc.allocate(80);
+        gc.allocate(80);
+        gc.allocate(80);
+        gc.allocate(80);
+        gc.allocate(80);
+        gc.allocate(80);
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 3);
+        assert!(stats.old_collections >= 1);
+        assert!(stats.total_bytes_collected > 0);
+    }
+
+    #[test]
+    fn register_root_no_crash() {
+        struct TestRoot(usize);
+        impl GcRoot for TestRoot {
+            fn root_size(&self) -> usize { self.0 }
+            fn is_root_alive(&self) -> bool { true }
+        }
+
+        let gc = GenerationalGC::new(100, 1000);
+        gc.register_root(Box::new(TestRoot(42)));
+        let stats = gc.stats();
+        assert_eq!(stats.nursery_collections, 0);
+    }
+
+    #[test]
+    fn multiple_nursery_collections() {
+        let gc = GenerationalGC::new(50, 1000);
+        gc.allocate(60);
+        gc.allocate(60);
+        gc.allocate(60);
+        let stats = gc.stats();
+        assert!(stats.nursery_collections >= 3);
+    }
+
+    #[test]
+    fn stats_accumulate() {
+        let gc = GenerationalGC::new(50, 1000);
+        gc.allocate(100);
+        let stats = gc.stats();
+        let collected_before = stats.total_bytes_collected;
+        assert!(collected_before > 0);
+        gc.allocate(100);
+        let stats2 = gc.stats();
+        assert!(stats2.total_bytes_collected > collected_before);
+    }
+}

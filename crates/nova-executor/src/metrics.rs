@@ -235,3 +235,174 @@ impl Default for PipelineMetrics {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metrics_record_operation_increments_total() {
+        let m = PipelineMetrics::new();
+        m.record_operation(OperationType::Get, StatusCode::Ok);
+        assert_eq!(m.operations_total.load(Ordering::Relaxed), 1);
+        m.record_operation(OperationType::Create, StatusCode::Created);
+        assert_eq!(m.operations_total.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_metrics_record_operation_tracks_by_type() {
+        let m = PipelineMetrics::new();
+        m.record_operation(OperationType::Get, StatusCode::Ok);
+        m.record_operation(OperationType::Get, StatusCode::Ok);
+        m.record_operation(OperationType::Create, StatusCode::Created);
+
+        let by_type = m.operations_by_type.lock().unwrap();
+        assert_eq!(*by_type.get(&OperationType::Get).unwrap(), 2);
+        assert_eq!(*by_type.get(&OperationType::Create).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_metrics_record_operation_tracks_by_status() {
+        let m = PipelineMetrics::new();
+        m.record_operation(OperationType::Get, StatusCode::Ok);
+        m.record_operation(OperationType::Get, StatusCode::NotFound);
+
+        let by_status = m.operations_by_status.lock().unwrap();
+        assert_eq!(*by_status.get(&StatusCode::Ok).unwrap(), 1);
+        assert_eq!(*by_status.get(&StatusCode::NotFound).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_metrics_record_stage_tracks_latency() {
+        let m = PipelineMetrics::new();
+        m.record_stage(PipelineStage::Parse, 1000);
+        m.record_stage(PipelineStage::Parse, 2000);
+        m.record_stage(PipelineStage::Validate, 500);
+
+        let sl = m.stage_latency.lock().unwrap();
+        let (parse_total, parse_count) = sl.get(&PipelineStage::Parse).unwrap();
+        assert_eq!(*parse_total, 3000);
+        assert_eq!(*parse_count, 2);
+        let (validate_total, validate_count) = sl.get(&PipelineStage::Validate).unwrap();
+        assert_eq!(*validate_total, 500);
+        assert_eq!(*validate_count, 1);
+    }
+
+    #[test]
+    fn test_metrics_record_queue_wait_records_histogram() {
+        let m = PipelineMetrics::new();
+        m.record_queue_wait(1000);
+        m.record_queue_wait(2000);
+        m.record_queue_wait(3000);
+
+        let hist = m.queue_wait_time_ns.lock().unwrap();
+        assert_eq!(hist.count(), 3);
+        assert_eq!(hist.avg(), 2000);
+    }
+
+    #[test]
+    fn test_metrics_snapshot_returns_values() {
+        let m = PipelineMetrics::new();
+        m.record_operation(OperationType::Get, StatusCode::Ok);
+        m.record_queue_wait(5000);
+        m.rate_limit_hits.fetch_add(3, Ordering::Relaxed);
+        m.parse_errors.fetch_add(1, Ordering::Relaxed);
+        m.circuit_opens.fetch_add(2, Ordering::Relaxed);
+
+        let snap = m.snapshot();
+        assert_eq!(snap.operations_total, 1);
+        assert_eq!(snap.rate_limit_hits, 3);
+        assert_eq!(snap.parse_errors, 1);
+        assert_eq!(snap.circuit_opens, 2);
+        assert_eq!(snap.active_operations, 0);
+        assert_eq!(snap.queue_depth, 0);
+    }
+
+    #[test]
+    fn test_histogram_new_has_zero_count() {
+        let h = Histogram::new();
+        assert_eq!(h.count(), 0);
+        assert_eq!(h.avg(), 0);
+        assert_eq!(h.p50(), 0);
+        assert_eq!(h.p99(), 0);
+    }
+
+    #[test]
+    fn test_histogram_records_values() {
+        let mut h = Histogram::new();
+        h.record(500);
+        h.record(1500);
+        h.record(7500);
+
+        assert_eq!(h.count(), 3);
+        assert_eq!(h.avg(), (500 + 1500 + 7500) / 3);
+    }
+
+    #[test]
+    fn test_histogram_percentiles() {
+        let mut h = Histogram::new();
+        // Record enough values for percentile calculation
+        for _ in 0..100 {
+            h.record(5000); // falls in 5000 bucket
+        }
+        // p50 should be 5000 (the upper bound of the bucket containing the 50th value)
+        assert!(h.p50() >= 5000);
+        assert!(h.p99() >= 5000);
+    }
+
+    #[test]
+    fn test_histogram_wide_range() {
+        let mut h = Histogram::new();
+        h.record(100_000_000);
+        assert_eq!(h.count(), 1);
+        assert_eq!(h.avg(), 100_000_000);
+    }
+
+    #[test]
+    fn test_metrics_snapshot_latency_values() {
+        let m = PipelineMetrics::new();
+        m.record_queue_wait(1000);
+        m.record_queue_wait(5000);
+
+        let snap = m.snapshot();
+        assert_eq!(snap.avg_latency_ns, 3000);
+        assert!(snap.p50_latency_ns >= 1000);
+        assert!(snap.p99_latency_ns >= 5000);
+    }
+
+    #[test]
+    fn test_metrics_retry_counters() {
+        let m = PipelineMetrics::new();
+        m.retry_attempts.fetch_add(5, Ordering::Relaxed);
+        m.retry_successes.fetch_add(3, Ordering::Relaxed);
+        m.retry_exhaustions.fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(m.retry_attempts.load(Ordering::Relaxed), 5);
+        assert_eq!(m.retry_successes.load(Ordering::Relaxed), 3);
+        assert_eq!(m.retry_exhaustions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_metrics_error_counters() {
+        let m = PipelineMetrics::new();
+        m.parse_errors.fetch_add(2, Ordering::Relaxed);
+        m.validation_errors.fetch_add(1, Ordering::Relaxed);
+        m.authorization_errors.fetch_add(3, Ordering::Relaxed);
+        m.execution_errors.fetch_add(4, Ordering::Relaxed);
+
+        assert_eq!(m.parse_errors.load(Ordering::Relaxed), 2);
+        assert_eq!(m.validation_errors.load(Ordering::Relaxed), 1);
+        assert_eq!(m.authorization_errors.load(Ordering::Relaxed), 3);
+        assert_eq!(m.execution_errors.load(Ordering::Relaxed), 4);
+    }
+
+    #[test]
+    fn test_metrics_cancellation_counters() {
+        let m = PipelineMetrics::new();
+        m.cancelled_operations.fetch_add(2, Ordering::Relaxed);
+        m.deadline_exceeded.fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(m.cancelled_operations.load(Ordering::Relaxed), 2);
+        assert_eq!(m.deadline_exceeded.load(Ordering::Relaxed), 1);
+    }
+}

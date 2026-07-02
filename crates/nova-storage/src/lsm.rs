@@ -644,3 +644,317 @@ pub fn decompress_data(data: &[u8], codec: CompressionCodec) -> Result<Vec<u8>> 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── MemTable tests ──
+
+    #[test]
+    fn test_memtable_new_is_empty() {
+        let mt = MemTable::new();
+        assert!(mt.is_empty());
+        assert_eq!(mt.size(), 0);
+    }
+
+    #[test]
+    fn test_memtable_insert_and_get() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("hello"), Value::new(b"world".to_vec()));
+        let result = mt.get(&Key::from("hello"));
+        assert_eq!(result, Some(Value::new(b"world".to_vec())));
+    }
+
+    #[test]
+    fn test_memtable_get_missing() {
+        let mt = MemTable::new();
+        assert_eq!(mt.get(&Key::from("missing")), None);
+    }
+
+    #[test]
+    fn test_memtable_delete() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("hello"), Value::new(b"world".to_vec()));
+        mt.delete(&Key::from("hello"));
+        assert_eq!(mt.get(&Key::from("hello")), None);
+    }
+
+    #[test]
+    fn test_memtable_delete_nonexistent() {
+        let mut mt = MemTable::new();
+        mt.delete(&Key::from("never_inserted"));
+        assert_eq!(mt.get(&Key::from("never_inserted")), None);
+    }
+
+    #[test]
+    fn test_memtable_insert_overwrites() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("key"), Value::new(b"v1".to_vec()));
+        mt.insert(Key::from("key"), Value::new(b"v2".to_vec()));
+        assert_eq!(mt.get(&Key::from("key")), Some(Value::new(b"v2".to_vec())));
+    }
+
+    #[test]
+    fn test_memtable_iter_returns_active_entries() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("a"), Value::new(b"1".to_vec()));
+        mt.insert(Key::from("b"), Value::new(b"2".to_vec()));
+        mt.insert(Key::from("c"), Value::new(b"3".to_vec()));
+        let items: Vec<_> = mt.iter().collect();
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_memtable_iter_skips_deleted_entries() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("a"), Value::new(b"1".to_vec()));
+        mt.insert(Key::from("b"), Value::new(b"2".to_vec()));
+        mt.delete(&Key::from("a"));
+        let items: Vec<_> = mt.iter().collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, Key::from("b"));
+    }
+
+    #[test]
+    fn test_memtable_size_tracks_usage() {
+        let mut mt = MemTable::new();
+        let initial = mt.size();
+        mt.insert(Key::from("hello"), Value::new(b"world".to_vec()));
+        assert!(mt.size() > initial);
+    }
+
+    #[test]
+    fn test_memtable_immutable_flag() {
+        let mut mt = MemTable::new();
+        assert!(!mt.is_immutable());
+        mt.set_immutable();
+        assert!(mt.is_immutable());
+    }
+
+    #[test]
+    fn test_memtable_empty_after_insert_delete() {
+        let mut mt = MemTable::new();
+        mt.insert(Key::from("x"), Value::new(b"y".to_vec()));
+        mt.delete(&Key::from("x"));
+        assert!(mt.is_empty() || mt.get(&Key::from("x")).is_none());
+    }
+
+    // ── BloomFilter tests ──
+
+    #[test]
+    fn test_bloom_filter_new() {
+        let bf = BloomFilter::new(100, 10);
+        assert!(bf.num_hashes > 0);
+        assert!(!bf.bits.is_empty());
+    }
+
+    #[test]
+    fn test_bloom_filter_insert_and_check() {
+        let mut bf = BloomFilter::new(100, 10);
+        bf.insert(b"hello");
+        bf.insert(b"world");
+        assert!(bf.may_contain(b"hello"));
+        assert!(bf.may_contain(b"world"));
+    }
+
+    #[test]
+    fn test_bloom_filter_encode_decode_roundtrip() {
+        let mut bf = BloomFilter::new(100, 10);
+        bf.insert(b"key1");
+        bf.insert(b"key2");
+        bf.insert(b"key3");
+        let encoded = bf.encode();
+        let decoded = BloomFilter::decode(&encoded).unwrap();
+        assert!(decoded.may_contain(b"key1"));
+        assert!(decoded.may_contain(b"key2"));
+        assert!(decoded.may_contain(b"key3"));
+        assert_eq!(decoded.num_hashes, bf.num_hashes);
+        assert_eq!(decoded.num_bits, bf.num_bits);
+        assert_eq!(decoded.bits, bf.bits);
+    }
+
+    #[test]
+    fn test_bloom_filter_decode_too_short() {
+        let result = BloomFilter::decode(&[0u8; 10]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bloom_filter_decode_corrupt() {
+        let result = BloomFilter::decode(&[0u8; 24]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bloom_filter_empty_bits_returns_true() {
+        let bf = BloomFilter {
+            bits: vec![],
+            num_hashes: 1,
+            num_bits: 0,
+            num_keys: 0,
+        };
+        assert!(bf.may_contain(b"anything"));
+    }
+
+    #[test]
+    fn test_bloom_filter_zero_bits_per_key_defaults() {
+        let bf = BloomFilter::new(100, 0);
+        assert_eq!(bf.num_hashes, ((bf.num_bits as f64 / 100.0) * 0.69) as u32);
+    }
+
+    // ── Compression tests ──
+
+    #[test]
+    fn test_compress_decompress_none() {
+        let data = b"hello world";
+        let compressed = compress_data(data, CompressionCodec::None).unwrap();
+        assert_eq!(compressed, data);
+        let decompressed = decompress_data(&compressed, CompressionCodec::None).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_compress_decompress_snappy() {
+        let data = b"The quick brown fox jumps over the lazy dog";
+        let compressed = compress_data(data, CompressionCodec::Snappy).unwrap();
+        assert_ne!(compressed, data);
+        let decompressed = decompress_data(&compressed, CompressionCodec::Snappy).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_compress_decompress_zstd() {
+        let data = b"zstd compression test data for nova storage";
+        let compressed = compress_data(data, CompressionCodec::Zstd { level: 3 }).unwrap();
+        assert_ne!(compressed, data);
+        let decompressed = decompress_data(&compressed, CompressionCodec::Zstd { level: 3 }).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_compress_empty() {
+        let data = b"";
+        let compressed = compress_data(data, CompressionCodec::Snappy).unwrap();
+        let decompressed = decompress_data(&compressed, CompressionCodec::Snappy).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_compression_for_level() {
+        assert_eq!(compression_for_level(0), CompressionCodec::Snappy);
+        assert_eq!(compression_for_level(1), CompressionCodec::Snappy);
+        assert_eq!(compression_for_level(2), CompressionCodec::Snappy);
+        assert_eq!(compression_for_level(3), CompressionCodec::Zstd { level: 3 });
+        assert_eq!(compression_for_level(4), CompressionCodec::Zstd { level: 5 });
+        assert_eq!(compression_for_level(5), CompressionCodec::Zstd { level: 10 });
+        assert_eq!(compression_for_level(10), CompressionCodec::Zstd { level: 16 });
+    }
+
+    #[test]
+    fn test_compression_for_type() {
+        assert_eq!(compression_for_type(0), CompressionCodec::None);
+        assert_eq!(compression_for_type(1), CompressionCodec::None);
+        assert_eq!(compression_for_type(2), CompressionCodec::Snappy);
+        assert_eq!(compression_for_type(99), CompressionCodec::Snappy);
+    }
+
+    // ── SSTable tests (with temp dirs) ──
+
+    fn temp_sst_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nova_lsm_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_sstable_create_and_open() {
+        let dir = temp_sst_dir();
+        let entries = vec![
+            (Key::from("key1"), Value::new(b"val1".to_vec())),
+            (Key::from("key2"), Value::new(b"val2".to_vec())),
+        ];
+        let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
+        assert_eq!(sst.id, 1);
+        assert_eq!(sst.level, 0);
+        assert_eq!(sst.key_min, Key::from("key1"));
+        assert_eq!(sst.key_max, Key::from("key2"));
+        assert!(sst.size > 0);
+
+        let opened = SSTable::open(&sst.path).unwrap();
+        assert_eq!(opened.id, 1);
+        assert_eq!(opened.level, 0);
+        assert_eq!(opened.key_min, Key::from("key1"));
+        assert_eq!(opened.key_max, Key::from("key2"));
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_sstable_get_existing_key() {
+        let dir = temp_sst_dir();
+        let entries = vec![
+            (Key::from("alpha"), Value::new(b"a_value".to_vec())),
+            (Key::from("beta"), Value::new(b"b_value".to_vec())),
+            (Key::from("gamma"), Value::new(b"g_value".to_vec())),
+        ];
+        let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
+        assert_eq!(sst.get(&Key::from("alpha")).unwrap(), Some(Value::new(b"a_value".to_vec())));
+        assert_eq!(sst.get(&Key::from("beta")).unwrap(), Some(Value::new(b"b_value".to_vec())));
+        assert_eq!(sst.get(&Key::from("gamma")).unwrap(), Some(Value::new(b"g_value".to_vec())));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_sstable_get_missing_key() {
+        let dir = temp_sst_dir();
+        let entries = vec![
+            (Key::from("key1"), Value::new(b"val1".to_vec())),
+        ];
+        let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
+        assert_eq!(sst.get(&Key::from("nonexistent")).unwrap(), None);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_sstable_scan_range() {
+        let dir = temp_sst_dir();
+        let entries = vec![
+            (Key::from("a"), Value::new(b"1".to_vec())),
+            (Key::from("b"), Value::new(b"2".to_vec())),
+            (Key::from("c"), Value::new(b"3".to_vec())),
+            (Key::from("d"), Value::new(b"4".to_vec())),
+            (Key::from("e"), Value::new(b"5".to_vec())),
+        ];
+        let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
+        let results = sst.scan(&(Key::from("b")..Key::from("d"))).unwrap();
+        assert_eq!(results.len(), 2);
+        for (k, _) in &results {
+            assert!(k.as_bytes() >= b"b" && k.as_bytes() < b"d");
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_sstable_scan_empty_range() {
+        let dir = temp_sst_dir();
+        let entries = vec![
+            (Key::from("a"), Value::new(b"1".to_vec())),
+            (Key::from("b"), Value::new(b"2".to_vec())),
+        ];
+        let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
+        let results = sst.scan(&(Key::from("z")..Key::from("zz"))).unwrap();
+        assert!(results.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_sstable_open_invalid_path() {
+        let result = SSTable::open(std::path::Path::new("/tmp/nonexistent_file.sst"));
+        assert!(result.is_err());
+    }
+}

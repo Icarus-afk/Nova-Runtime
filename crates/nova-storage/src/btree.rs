@@ -480,8 +480,16 @@ fn insert_leaf_entry(data: &mut [u8], idx: usize, key: &Key, value: &Value) -> R
     let key_bytes = key.as_bytes();
     let val_bytes = value.as_bytes();
     let entry_off = LEAF_ENTRIES_OFF + idx * LEAF_ENTRY_SIZE;
-    let data_end = PAGE_DATA_SIZE - 1;
-    let val_off = data_end - val_bytes.len();
+    let entry_size = key_bytes.len() + val_bytes.len();
+    let count = read_u16(data, COUNT_OFF) as usize;
+    let mut cumulative: usize = entry_size;
+    for i in 0..count {
+        let e = read_leaf_entry(data, i);
+        cumulative += e.key_len as usize + e.val_len as usize;
+    }
+    cumulative -= entry_size;
+    let data_end = PAGE_DATA_SIZE;
+    let val_off = data_end - cumulative - val_bytes.len();
     let key_off = val_off - key_bytes.len();
     data[key_off..key_off + key_bytes.len()].copy_from_slice(key_bytes);
     data[val_off..val_off + val_bytes.len()].copy_from_slice(val_bytes);
@@ -510,4 +518,189 @@ static NEXT_ALLOC_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 fn allocate_page_id() -> u64 {
     NEXT_ALLOC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::page_cache::PageCache;
+
+    fn setup() -> (BTree, PageCache) {
+        let btree = BTree::new(4);
+        let cache = PageCache::new(1024);
+        (btree, cache)
+    }
+
+    #[test]
+    fn test_btree_new_empty() {
+        let btree = BTree::new(4);
+        assert!(btree.get_root().is_none());
+    }
+
+    #[test]
+    fn test_btree_insert_and_get() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("hello"), Value::new(b"world".to_vec())).unwrap();
+        let result = btree.get(&cache, &Key::from("hello")).unwrap();
+        assert_eq!(result, Some(Value::new(b"world".to_vec())));
+    }
+
+    #[test]
+    fn test_btree_get_nonexistent() {
+        let (btree, cache) = setup();
+        let result = btree.get(&cache, &Key::from("missing")).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_btree_get_empty_tree() {
+        let btree = BTree::new(4);
+        let cache = PageCache::new(1024);
+        let result = btree.get(&cache, &Key::from("anything")).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_btree_delete_marks_tombstone() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("hello"), Value::new(b"world".to_vec())).unwrap();
+        let deleted = btree.delete(&cache, &Key::from("hello")).unwrap();
+        assert!(deleted);
+        let result = btree.get(&cache, &Key::from("hello")).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_btree_delete_nonexistent() {
+        let (btree, cache) = setup();
+        let deleted = btree.delete(&cache, &Key::from("missing")).unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_btree_delete_empty_tree() {
+        let btree = BTree::new(4);
+        let cache = PageCache::new(1024);
+        let deleted = btree.delete(&cache, &Key::from("anything")).unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_btree_update_overwrites() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("key"), Value::new(b"val1".to_vec())).unwrap();
+        btree.insert(&cache, Key::from("key"), Value::new(b"val2".to_vec())).unwrap();
+        let result = btree.get(&cache, &Key::from("key")).unwrap();
+        assert_eq!(result, Some(Value::new(b"val2".to_vec())));
+    }
+
+    #[test]
+    fn test_btree_scan_range() {
+        let (btree, cache) = setup();
+        for (k, v) in [
+            (Key::from("a"), Value::new(b"1".to_vec())),
+            (Key::from("b"), Value::new(b"2".to_vec())),
+            (Key::from("c"), Value::new(b"3".to_vec())),
+            (Key::from("d"), Value::new(b"4".to_vec())),
+            (Key::from("e"), Value::new(b"5".to_vec())),
+        ] {
+            btree.insert(&cache, k, v).unwrap();
+        }
+        let results = btree.scan(&cache, Key::from("b")..Key::from("d")).unwrap();
+        assert_eq!(results.len(), 2);
+        for (k, _) in &results {
+            assert!(k.as_bytes() >= b"b" && k.as_bytes() < b"d");
+        }
+    }
+
+    #[test]
+    fn test_btree_scan_empty_tree() {
+        let (btree, cache) = setup();
+        let results = btree.scan(&cache, Key::from("a")..Key::from("z")).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_btree_scan_excludes_tombstones() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("a"), Value::new(b"1".to_vec())).unwrap();
+        btree.insert(&cache, Key::from("b"), Value::new(b"2".to_vec())).unwrap();
+        btree.insert(&cache, Key::from("c"), Value::new(b"3".to_vec())).unwrap();
+        btree.delete(&cache, &Key::from("b")).unwrap();
+        let results = btree.scan(&cache, Key::from("a")..Key::from("d")).unwrap();
+        assert_eq!(results.len(), 2);
+        for (k, _) in &results {
+            assert_ne!(k.as_bytes(), b"b");
+        }
+    }
+
+    #[test]
+    fn test_btree_multiple_keys_no_split() {
+        let (btree, cache) = setup();
+        for i in 0..7 {
+            let key = Key::new(vec![i]);
+            let value = Value::new(vec![i + 100]);
+            btree.insert(&cache, key.clone(), value.clone()).unwrap();
+            let result = btree.get(&cache, &key).unwrap();
+            assert_eq!(result, Some(value));
+        }
+    }
+
+    #[test]
+    fn test_btree_insert_get_large_value() {
+        let (btree, cache) = setup();
+        let large_val = Value::new(vec![0xAB; 2000]);
+        btree.insert(&cache, Key::from("large"), large_val.clone()).unwrap();
+        let result = btree.get(&cache, &Key::from("large")).unwrap();
+        assert_eq!(result, Some(large_val));
+    }
+
+    #[test]
+    fn test_btree_get_after_delete_then_reinsert() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("x"), Value::new(b"first".to_vec())).unwrap();
+        btree.delete(&cache, &Key::from("x")).unwrap();
+        assert!(btree.get(&cache, &Key::from("x")).unwrap().is_none());
+        btree.insert(&cache, Key::from("x"), Value::new(b"second".to_vec())).unwrap();
+        let result = btree.get(&cache, &Key::from("x")).unwrap();
+        assert_eq!(result, Some(Value::new(b"second".to_vec())));
+    }
+
+    #[test]
+    fn test_btree_binary_key_roundtrip() {
+        let (btree, cache) = setup();
+        let key = Key::new(vec![0x00, 0xFF, 0xAB, 0xCD]);
+        let value = Value::new(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        btree.insert(&cache, key.clone(), value.clone()).unwrap();
+        let result = btree.get(&cache, &key).unwrap();
+        assert_eq!(result, Some(value));
+    }
+
+    #[test]
+    fn test_btree_single_key_then_delete_then_get() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("only"), Value::new(b"one".to_vec())).unwrap();
+        assert!(btree.get(&cache, &Key::from("only")).unwrap().is_some());
+        btree.delete(&cache, &Key::from("only")).unwrap();
+        assert!(btree.get(&cache, &Key::from("only")).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_btree_scan_exact_boundary() {
+        let (btree, cache) = setup();
+        btree.insert(&cache, Key::from("a"), Value::new(b"1".to_vec())).unwrap();
+        btree.insert(&cache, Key::from("b"), Value::new(b"2".to_vec())).unwrap();
+        btree.insert(&cache, Key::from("c"), Value::new(b"3".to_vec())).unwrap();
+        let results = btree.scan(&cache, Key::from("a")..Key::from("b")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, Key::from("a"));
+    }
+
+    #[test]
+    fn test_btree_set_root() {
+        let btree = BTree::new(4);
+        assert!(btree.get_root().is_none());
+        btree.set_root(PageId::new(42));
+        assert_eq!(btree.get_root(), Some(PageId::new(42)));
+    }
 }

@@ -8,11 +8,13 @@ nova-config = { path = "../nova-config" }
 nova-core = { path = "../nova-core" }
 nova-memory = { path = "../nova-memory" }
 nova-storage = { path = "../nova-storage" }
+nova-executor = { path = "../nova-executor" }
+nova-api = { path = "../nova-api" }
 nova-cli = { path = "../nova-cli" }
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-ctrlc.workspace = true
 parking_lot = { workspace = true }
+tokio.workspace = true

@@ -135,3 +135,119 @@ impl RateLimiter {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(secs: f64) -> u64 {
+        (secs * 1000.0) as u64
+    }
+
+    #[test]
+    fn test_token_bucket_consume_within_limit() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        assert!(bucket.try_consume(5.0, ms(0.0)).is_ok());
+    }
+
+    #[test]
+    fn test_token_bucket_consume_exact_limit() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        assert!(bucket.try_consume(10.0, ms(0.0)).is_ok());
+    }
+
+    #[test]
+    fn test_token_bucket_consume_exceeds_burst() {
+        let mut bucket = TokenBucket::new(10.0, 5.0);
+        let err = bucket.try_consume(10.0, ms(0.0)).unwrap_err();
+        assert!(err > 0);
+    }
+
+    #[test]
+    fn test_token_bucket_refill() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        bucket.try_consume(10.0, ms(0.0)).unwrap();
+        assert!(bucket.try_consume(5.0, ms(500.0)).is_ok());
+    }
+
+    #[test]
+    fn test_token_bucket_refill_not_enough() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        bucket.try_consume(10.0, ms(0.0)).unwrap();
+        let err = bucket.try_consume(5.0, ms(100.0)).unwrap_err();
+        assert!(err > 0);
+    }
+
+    #[test]
+    fn test_token_bucket_reset() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        bucket.try_consume(10.0, ms(0.0)).unwrap();
+        bucket.reset();
+        assert!(bucket.try_consume(10.0, ms(100.0)).is_ok());
+    }
+
+    #[test]
+    fn test_token_bucket_burst_capacity() {
+        let mut bucket = TokenBucket::new(1.0, 5.0);
+        assert!(bucket.try_consume(5.0, ms(0.0)).is_ok());
+        assert!(bucket.try_consume(1.0, ms(0.0)).is_err());
+    }
+
+    #[test]
+    fn test_token_bucket_does_not_exceed_burst() {
+        let mut bucket = TokenBucket::new(10.0, 10.0);
+        bucket.try_consume(10.0, ms(0.0)).unwrap();
+        assert!(bucket.try_consume(10.0, ms(10_000.0)).is_ok());
+        assert!(bucket.try_consume(1.0, ms(10_000.0)).is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_per_key() {
+        let limiter = RateLimiter::new(None, vec![]);
+        assert!(limiter.check("127.0.0.1", "/api/test", 1.0, ms(0.0)).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limiter_global() {
+        let limiter = RateLimiter::new(Some((10.0, 10.0)), vec![]);
+        for _ in 0..10 {
+            assert!(limiter.check("1.2.3.4", "/api/test", 1.0, ms(0.0)).is_ok());
+        }
+        let err = limiter.check("5.6.7.8", "/api/other", 1.0, ms(0.0)).unwrap_err();
+        assert!(err > 0);
+    }
+
+    #[test]
+    fn test_rate_limiter_endpoint_limit() {
+        let endpoint = EndpointRateLimit {
+            path_pattern: "/api".to_string(),
+            tokens_per_second: 5.0,
+            burst_size: 5.0,
+            cost_per_request: 1.0,
+        };
+        let limiter = RateLimiter::new(None, vec![endpoint]);
+        for _ in 0..5 {
+            assert!(limiter.check("1.2.3.4", "/api/data", 1.0, ms(0.0)).is_ok());
+        }
+        let err = limiter.check("1.2.3.4", "/api/data", 1.0, ms(0.0)).unwrap_err();
+        assert!(err > 0);
+    }
+
+    #[test]
+    fn test_rate_limiter_different_keys_independent() {
+        let limiter = RateLimiter::new(None, vec![]);
+        for _ in 0..200 {
+            assert!(limiter.check("host_a", "/api", 1.0, ms(0.0)).is_ok());
+        }
+        assert!(limiter.check("host_b", "/api", 1.0, ms(0.0)).is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_stale() {
+        let limiter = RateLimiter::new(None, vec![]);
+        assert!(limiter.check("old_host", "/api", 1.0, ms(0.0)).is_ok());
+        assert_eq!(limiter.buckets.len(), 1);
+        limiter.cleanup_stale(ms(300_001.0));
+        assert_eq!(limiter.buckets.len(), 0);
+    }
+}

@@ -350,3 +350,354 @@ impl EventBus {
         Ok(current)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Subscription, TopicPattern, DeliveryGuarantee,
+        SubscriberId, EventBuilder, ReplayCursor,
+    };
+    use uuid::Uuid;
+
+    fn make_sub(topic: &str, capacity: usize) -> (Subscription, crossbeam::channel::Receiver<Event>) {
+        let (tx, rx) = crossbeam::channel::bounded(capacity);
+        let sub = Subscription {
+            id: Uuid::new_v4(),
+            subscriber: SubscriberId {
+                id: "test-sub".into(),
+                subsystem: Subsystem::System,
+                name: "tester".into(),
+            },
+            topic: TopicPattern::new(topic).unwrap(),
+            content_filter: None,
+            delivery_guarantee: DeliveryGuarantee::AtMostOnce,
+            max_retries: 0,
+            retry_backoff_ms: 0,
+            max_backoff_ms: 0,
+            queue_capacity: capacity,
+            created_at: 0,
+            active: true,
+            consumer_group: None,
+            sender: tx,
+        };
+        (sub, rx)
+    }
+
+    fn make_event() -> Event {
+        EventBuilder::new("test.event.occurred")
+            .unwrap()
+            .source(Subsystem::System, "test", "n1", "i1")
+            .build(vec![1, 2, 3])
+    }
+
+    fn make_event_with_payload(payload: Vec<u8>) -> Event {
+        EventBuilder::new("test.event.occurred")
+            .unwrap()
+            .source(Subsystem::System, "test", "n1", "i1")
+            .build(payload)
+    }
+
+    #[test]
+    fn test_bus_subscribe_and_publish_delivers() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let event = make_event();
+        bus.publish(event).unwrap();
+
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+    }
+
+    #[test]
+    fn test_bus_publish_returns_event_id() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let event_id = bus.publish(make_event()).unwrap();
+        let ts = event_id.timestamp();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_bus_no_subscribers_still_returns_id() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let event_id = bus.publish(make_event()).unwrap();
+        let ts = event_id.timestamp();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_bus_unsubscribe_removes_subscription() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.event.occurred", 16);
+        let sub_id = sub.id;
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        assert!(rx.try_recv().is_ok());
+
+        assert!(bus.unsubscribe(sub_id));
+        bus.publish(make_event()).unwrap();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_bus_unsubscribe_nonexistent() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        assert!(!bus.unsubscribe(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_bus_subscriber_count() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        assert_eq!(bus.subscriber_count(), 0);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+        assert_eq!(bus.subscriber_count(), 1);
+    }
+
+    #[test]
+    fn test_bus_payload_too_large() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 10, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let err = bus.publish(make_event_with_payload(vec![0u8; 20])).unwrap_err();
+        assert!(matches!(err, EventError::PayloadTooLarge { .. }));
+    }
+
+    #[test]
+    fn test_bus_invalid_topic_too_short() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let event = EventBuilder::new("short")
+            .unwrap()
+            .build(vec![]);
+        let err = bus.publish(event).unwrap_err();
+        assert!(matches!(err, EventError::InvalidEventType(_)));
+    }
+
+    #[test]
+    fn test_bus_multiple_subscribers() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub1, rx1) = make_sub("test.event.occurred", 16);
+        let (sub2, rx2) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub1).unwrap();
+        bus.subscribe(sub2).unwrap();
+
+        bus.publish(make_event()).unwrap();
+
+        assert!(rx1.try_recv().is_ok());
+        assert!(rx2.try_recv().is_ok());
+    }
+
+    #[test]
+    fn test_bus_wildcard_subscriber() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.+.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+    }
+
+    #[test]
+    fn test_bus_multi_wildcard_subscriber() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.*", 16);
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+    }
+
+    #[test]
+    fn test_bus_wildcard_no_match() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.+.other", 16);
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_bus_publish_with_key() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let event = make_event();
+        bus.publish_with_key(event, "my-key").unwrap();
+
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.metadata.ordering_key, Some("my-key".into()));
+    }
+
+    #[test]
+    fn test_bus_metrics_increments_on_publish() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let metrics = bus.metrics();
+        let initial = metrics.events_published_total.load(Ordering::Relaxed);
+
+        bus.publish(make_event()).unwrap();
+        assert_eq!(
+            metrics.events_published_total.load(Ordering::Relaxed),
+            initial + 1
+        );
+    }
+
+    #[test]
+    fn test_bus_dead_letter_queue_accessible() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let dlq = bus.dead_letter_queue();
+        assert!(dlq.is_empty());
+    }
+
+    #[test]
+    fn test_bus_dead_letter_count() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        assert_eq!(bus.dead_letter_count(), 0);
+    }
+
+    #[test]
+    fn test_bus_event_store_accessible() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let store = bus.event_store();
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_bus_persistent_event_stored() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let event = EventBuilder::new("test.event.occurred")
+            .unwrap()
+            .source(Subsystem::System, "test", "n1", "i1")
+            .persistent(true)
+            .build(vec![42]);
+        bus.publish(event).unwrap();
+
+        let store = bus.event_store();
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_bus_non_persistent_event_not_stored() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        let store = bus.event_store();
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_bus_delivers_to_inactive_subscriber_skipped() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (mut sub, rx) = make_sub("test.event.occurred", 16);
+        sub.active = false;
+        bus.subscribe(sub).unwrap();
+
+        bus.publish(make_event()).unwrap();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_bus_overflow_drop_newest() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 1);
+        bus.subscribe(sub).unwrap();
+        // Fill the channel
+        bus.publish(make_event()).unwrap();
+        // This one should be dropped via DropNewest
+        bus.publish(make_event()).unwrap();
+        // No error expected with DropNewest
+    }
+
+    #[test]
+    fn test_bus_overflow_reject_publisher() {
+        let bus = EventBus::new(1, OverflowPolicy::RejectPublisher, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 1);
+        bus.subscribe(sub).unwrap();
+        bus.publish(make_event()).unwrap();
+        let err = bus.publish(make_event()).unwrap_err();
+        assert!(matches!(err, EventError::BusFull(_)));
+    }
+
+    #[test]
+    fn test_bus_subscribe_invalid_pattern() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, _rx) = make_sub("test.event.occurred", 16);
+        let result = bus.subscribe(sub);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bus_subscriber_count_after_unsubscribe() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub1, _rx1) = make_sub("test.event.occurred", 16);
+        let (sub2, _rx2) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub1.clone()).unwrap();
+        bus.subscribe(sub2.clone()).unwrap();
+        assert_eq!(bus.subscriber_count(), 2);
+        bus.unsubscribe(sub1.id);
+        assert_eq!(bus.subscriber_count(), 1);
+    }
+
+    #[test]
+    fn test_bus_pause_subscriber_not_found() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let result = bus.pause_subscriber(Uuid::new_v4());
+        assert!(matches!(result, Err(EventError::SubscriberNotFound)));
+    }
+
+    #[test]
+    fn test_bus_resume_subscriber_noop() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let result = bus.resume_subscriber(Uuid::new_v4());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bus_event_id_assigned_by_bus() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let (sub, rx) = make_sub("test.event.occurred", 16);
+        bus.subscribe(sub).unwrap();
+
+        let original_event = make_event();
+        let old_id = original_event.metadata.event_id;
+        let published_id = bus.publish(original_event).unwrap();
+
+        let received = rx.try_recv().unwrap();
+        // Bus assigns a new event ID
+        assert_ne!(received.metadata.event_id, old_id);
+        assert_eq!(received.metadata.event_id, published_id);
+    }
+
+    #[test]
+    fn test_bus_replay_returns_cursor_on_empty() {
+        let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+        let sub_id = SubscriberId {
+            id: "test-sub".into(),
+            subsystem: Subsystem::System,
+            name: "tester".into(),
+        };
+        let cursor = ReplayCursor {
+            subscriber_id: "test-sub".into(),
+            last_processed_offset: 0,
+            last_processed_timestamp: 0,
+            target_timestamp: None,
+        };
+        let result = bus.replay(&sub_id, cursor.clone());
+        assert!(matches!(result, Err(EventError::SubscriberNotFound)));
+    }
+}

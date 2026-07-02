@@ -245,7 +245,7 @@ impl OperationRequest {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ErrorInfo {
     pub code: ErrorCode,
     pub message: String,
@@ -274,14 +274,14 @@ pub enum ErrorCode {
     InsufficientStorage,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageTiming {
     pub stage: PipelineStage,
     pub duration_ns: u64,
     pub status: StageStatus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OperationResponse {
     pub status: StatusCode,
     pub success: bool,
@@ -396,14 +396,14 @@ pub struct UserSession {
     pub metadata: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PipelineResult {
     Continue,
     ShortCircuit(OperationResponse),
     Error(PipelineError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PipelineError {
     pub code: ErrorCode,
     pub message: String,

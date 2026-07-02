@@ -72,3 +72,94 @@ impl Default for NonceGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fill_bytes() {
+        let mut buf = [0u8; 32];
+        SecureRng::fill_bytes(&mut buf);
+        assert!(!buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_next_u64_non_zero() {
+        let val = SecureRng::next_u64();
+        assert!(val != 0 || SecureRng::next_u64() != 0 || SecureRng::next_u64() != 0);
+    }
+
+    #[test]
+    fn test_next_u32_non_zero() {
+        let val = SecureRng::next_u32();
+        assert!(val != 0 || SecureRng::next_u32() != 0 || SecureRng::next_u32() != 0);
+    }
+
+    #[test]
+    fn test_uuid_v4_format() {
+        let uuid = SecureRng::uuid_v4();
+        assert_eq!(uuid.len(), 16);
+        assert_eq!(uuid[6] & 0xf0, 0x40);
+        assert_eq!(uuid[8] & 0xc0, 0x80);
+    }
+
+    #[test]
+    fn test_alphanumeric_string_length() {
+        let s = SecureRng::alphanumeric_string(32);
+        assert_eq!(s.len(), 32);
+    }
+
+    #[test]
+    fn test_alphanumeric_string_charset() {
+        let s = SecureRng::alphanumeric_string(256);
+        assert!(s.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_session_id_length() {
+        let id = SecureRng::session_id();
+        assert_eq!(id.len(), 64);
+    }
+
+    #[test]
+    fn test_session_id_hex() {
+        let id = SecureRng::session_id();
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_nonce_generator_unique() {
+        let generator = NonceGenerator::new();
+        let mut set = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let nonce = generator.next_nonce();
+            assert!(set.insert(nonce), "nonce repeated");
+        }
+    }
+
+    #[test]
+    fn test_nonce_generator_counter_increments() {
+        let generator = NonceGenerator::new();
+        let n1 = generator.next_nonce();
+        let n2 = generator.next_nonce();
+        let c1 = u64::from_be_bytes(n1[..8].try_into().unwrap());
+        let c2 = u64::from_be_bytes(n2[..8].try_into().unwrap());
+        assert_eq!(c2, c1 + 1);
+    }
+
+    #[test]
+    fn test_nonce_generator_suffix_constant() {
+        let generator = NonceGenerator::new();
+        let n1 = generator.next_nonce();
+        let n2 = generator.next_nonce();
+        assert_eq!(n1[8..], n2[8..]);
+    }
+
+    #[test]
+    fn test_nonce_generator_default() {
+        let generator = NonceGenerator::default();
+        let nonce = generator.next_nonce();
+        assert_eq!(nonce.len(), 12);
+    }
+}
