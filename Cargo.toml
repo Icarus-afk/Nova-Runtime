@@ -8,6 +8,7 @@ members = [
     "crates/nova-object",
     "crates/nova-event",
     "crates/nova-security",
+    "crates/nova-executor",
     "crates/nova-cli",
     "crates/novad",
 ]

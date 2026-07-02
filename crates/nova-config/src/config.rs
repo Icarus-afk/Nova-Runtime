@@ -417,17 +417,82 @@ impl Default for EventConfig {
 // ---- Execution ----
 
 fn default_max_concurrent() -> u32 { 1024 }
-fn default_worker_threads() -> u16 { 0 }
+fn default_worker_threads() -> u32 { 4 }
 fn default_execution_timeout_ms() -> u64 { 30_000 }
+fn default_max_concurrent_ops() -> u32 { 256 }
+fn default_pipeline_queue_depth() -> u32 { 1024 }
+fn default_default_operation_timeout_ms() -> u64 { 5000 }
+fn default_max_operation_timeout_ms() -> u64 { 60_000 }
+fn default_rate_limit_default_per_sec() -> u64 { 1000 }
+fn default_rate_limit_global_per_sec() -> u64 { 10_000 }
+fn default_rate_limit_global_burst() -> u64 { 20_000 }
+fn default_rate_limit_user_per_sec() -> u64 { 100 }
+fn default_rate_limit_ip_per_sec() -> u64 { 1000 }
+fn default_circuit_breaker_threshold() -> u64 { 50 }
+fn default_circuit_breaker_window_ms() -> u64 { 10_000 }
+fn default_circuit_breaker_half_open_timeout_ms() -> u64 { 10_000 }
+fn default_circuit_breaker_success_threshold() -> u64 { 10 }
+fn default_audit_enabled() -> bool { true }
+fn default_audit_include_payloads() -> bool { false }
+fn default_audit_max_entry_size() -> u32 { 4096 }
+fn default_idempotency_key_ttl_secs() -> u64 { 86_400 }
+fn default_max_idempotency_keys() -> u32 { 100_000 }
+fn default_pipeline_max_retries() -> u8 { 3 }
+fn default_retry_base_delay_ms() -> u64 { 10 }
+fn default_retry_max_delay_ms() -> u64 { 1000 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionConfig {
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
     #[serde(default = "default_worker_threads")]
-    pub worker_threads: u16,
+    pub worker_threads: u32,
     #[serde(default = "default_execution_timeout_ms")]
     pub execution_timeout_ms: u64,
+
+    // PipelineConfig fields
+    #[serde(default = "default_max_concurrent_ops")]
+    pub max_concurrent_ops: u32,
+    #[serde(default = "default_pipeline_queue_depth")]
+    pub pipeline_queue_depth: u32,
+    #[serde(default = "default_default_operation_timeout_ms")]
+    pub default_operation_timeout_ms: u64,
+    #[serde(default = "default_max_operation_timeout_ms")]
+    pub max_operation_timeout_ms: u64,
+    #[serde(default = "default_rate_limit_default_per_sec")]
+    pub rate_limit_default_per_sec: u64,
+    #[serde(default = "default_rate_limit_global_per_sec")]
+    pub rate_limit_global_per_sec: u64,
+    #[serde(default = "default_rate_limit_global_burst")]
+    pub rate_limit_global_burst: u64,
+    #[serde(default = "default_rate_limit_user_per_sec")]
+    pub rate_limit_user_per_sec: u64,
+    #[serde(default = "default_rate_limit_ip_per_sec")]
+    pub rate_limit_ip_per_sec: u64,
+    #[serde(default = "default_circuit_breaker_threshold")]
+    pub circuit_breaker_threshold: u64,
+    #[serde(default = "default_circuit_breaker_window_ms")]
+    pub circuit_breaker_window_ms: u64,
+    #[serde(default = "default_circuit_breaker_half_open_timeout_ms")]
+    pub circuit_breaker_half_open_timeout_ms: u64,
+    #[serde(default = "default_circuit_breaker_success_threshold")]
+    pub circuit_breaker_success_threshold: u64,
+    #[serde(default = "default_audit_enabled")]
+    pub audit_enabled: bool,
+    #[serde(default = "default_audit_include_payloads")]
+    pub audit_include_payloads: bool,
+    #[serde(default = "default_audit_max_entry_size")]
+    pub audit_max_entry_size: u32,
+    #[serde(default = "default_idempotency_key_ttl_secs")]
+    pub idempotency_key_ttl_secs: u64,
+    #[serde(default = "default_max_idempotency_keys")]
+    pub max_idempotency_keys: u32,
+    #[serde(default = "default_pipeline_max_retries")]
+    pub pipeline_max_retries: u8,
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u64,
 }
 
 impl Default for ExecutionConfig {
@@ -436,6 +501,27 @@ impl Default for ExecutionConfig {
             max_concurrent: default_max_concurrent(),
             worker_threads: default_worker_threads(),
             execution_timeout_ms: default_execution_timeout_ms(),
+            max_concurrent_ops: default_max_concurrent_ops(),
+            pipeline_queue_depth: default_pipeline_queue_depth(),
+            default_operation_timeout_ms: default_default_operation_timeout_ms(),
+            max_operation_timeout_ms: default_max_operation_timeout_ms(),
+            rate_limit_default_per_sec: default_rate_limit_default_per_sec(),
+            rate_limit_global_per_sec: default_rate_limit_global_per_sec(),
+            rate_limit_global_burst: default_rate_limit_global_burst(),
+            rate_limit_user_per_sec: default_rate_limit_user_per_sec(),
+            rate_limit_ip_per_sec: default_rate_limit_ip_per_sec(),
+            circuit_breaker_threshold: default_circuit_breaker_threshold(),
+            circuit_breaker_window_ms: default_circuit_breaker_window_ms(),
+            circuit_breaker_half_open_timeout_ms: default_circuit_breaker_half_open_timeout_ms(),
+            circuit_breaker_success_threshold: default_circuit_breaker_success_threshold(),
+            audit_enabled: default_audit_enabled(),
+            audit_include_payloads: default_audit_include_payloads(),
+            audit_max_entry_size: default_audit_max_entry_size(),
+            idempotency_key_ttl_secs: default_idempotency_key_ttl_secs(),
+            max_idempotency_keys: default_max_idempotency_keys(),
+            pipeline_max_retries: default_pipeline_max_retries(),
+            retry_base_delay_ms: default_retry_base_delay_ms(),
+            retry_max_delay_ms: default_retry_max_delay_ms(),
         }
     }
 }
@@ -675,6 +761,74 @@ impl Config {
         // 5c: execution_timeout_ms between 100 and 3,600,000
         if self.execution.execution_timeout_ms < 100 || self.execution.execution_timeout_ms > 3_600_000 {
             errors.push("execution.execution_timeout_ms must be between 100 and 3,600,000".into());
+        }
+
+        // 5d: max_concurrent_ops >= 1
+        if self.execution.max_concurrent_ops < 1 {
+            errors.push("execution.max_concurrent_ops must be >= 1".into());
+        }
+
+        // 5e: pipeline_queue_depth >= 16
+        if self.execution.pipeline_queue_depth < 16 {
+            errors.push("execution.pipeline_queue_depth must be >= 16".into());
+        }
+
+        // 5f: default_operation_timeout_ms between 100 and max_operation_timeout_ms
+        if self.execution.default_operation_timeout_ms < 100 {
+            errors.push("execution.default_operation_timeout_ms must be >= 100".into());
+        }
+        if self.execution.default_operation_timeout_ms > self.execution.max_operation_timeout_ms {
+            errors.push("execution.default_operation_timeout_ms must be <= max_operation_timeout_ms".into());
+        }
+
+        // 5g: max_operation_timeout_ms <= 3,600,000
+        if self.execution.max_operation_timeout_ms > 3_600_000 {
+            errors.push("execution.max_operation_timeout_ms must be <= 3,600,000".into());
+        }
+
+        // 5h: rate_limit_global_burst >= rate_limit_global_per_sec
+        if self.execution.rate_limit_global_burst < self.execution.rate_limit_global_per_sec {
+            errors.push("execution.rate_limit_global_burst must be >= rate_limit_global_per_sec".into());
+        }
+
+        // 5i: circuit_breaker_threshold >= 1
+        if self.execution.circuit_breaker_threshold < 1 {
+            errors.push("execution.circuit_breaker_threshold must be >= 1".into());
+        }
+
+        // 5j: circuit_breaker_window_ms >= 1000
+        if self.execution.circuit_breaker_window_ms < 1000 {
+            errors.push("execution.circuit_breaker_window_ms must be >= 1000".into());
+        }
+
+        // 5k: circuit_breaker_success_threshold >= 1
+        if self.execution.circuit_breaker_success_threshold < 1 {
+            errors.push("execution.circuit_breaker_success_threshold must be >= 1".into());
+        }
+
+        // 5l: max_idempotency_keys <= 1_000_000
+        if self.execution.max_idempotency_keys > 1_000_000 {
+            errors.push("execution.max_idempotency_keys must be <= 1,000,000".into());
+        }
+
+        // 5m: pipeline_max_retries <= 10
+        if self.execution.pipeline_max_retries > 10 {
+            errors.push("execution.pipeline_max_retries must be <= 10".into());
+        }
+
+        // 5n: retry_base_delay_ms >= 1
+        if self.execution.retry_base_delay_ms < 1 {
+            errors.push("execution.retry_base_delay_ms must be >= 1".into());
+        }
+
+        // 5o: retry_max_delay_ms >= retry_base_delay_ms
+        if self.execution.retry_max_delay_ms < self.execution.retry_base_delay_ms {
+            errors.push("execution.retry_max_delay_ms must be >= retry_base_delay_ms".into());
+        }
+
+        // 5p: audit_max_entry_size >= 64
+        if self.execution.audit_max_entry_size < 64 {
+            errors.push("execution.audit_max_entry_size must be >= 64".into());
         }
 
         // 6b: password_policy.min_length <= password_policy.max_length
