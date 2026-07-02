@@ -1,0 +1,15 @@
+[package]
+name = "nova-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nova-config = { path = "../nova-config" }
+nova-core = { path = "../nova-core" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

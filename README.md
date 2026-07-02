@@ -1,6 +1,6 @@
 # Nova Runtime
 
-> **Status: Under Development** — This project is in the architecture and documentation phase. No implementation has begun.
+> **Status: Implementation in Progress** — Phase 0 (Foundations) and Phase 1 (Core Abstractions) are complete. 9 crates implemented across 85%+ of the spec. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
 
 Nova Runtime is a lightweight backend runtime that collapses multiple infrastructure services into a single executable. It unifies database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities on commodity VPS hardware.
 
@@ -139,16 +139,30 @@ novactl db query "SELECT * FROM users LIMIT 10"
 ## Development Status
 
 ```
-Phase 0: Foundations          ░░░░░░░░░░  0%  (planned)
-Phase 1: Core Abstractions    ░░░░░░░░░░  0%
-Phase 2: Runtime Core         ░░░░░░░░░░  0%
-Phase 3: Data Subsystems      ░░░░░░░░░░  0%
-Phase 4: Async Subsystems     ░░░░░░░░░░  0%
-Phase 5: API & Tooling        ░░░░░░░░░░  0%
-Phase 6: Hardening            ░░░░░░░░░░  0%
+Phase 0: Foundations          ██████████ 100%  30 spec docs complete
+Phase 1: Core Abstractions    ██████████ 100%  9 crates built, 85%+ code coverage
+Phase 2: Runtime Core         ░░░░░░░░░░   0%  (next — Execution Engine)
+Phase 3: Data Subsystems      ░░░░░░░░░░   0%
+Phase 4: Async Subsystems     ░░░░░░░░░░   0%
+Phase 5: API & Tooling        ░░░░░░░░░░   0%
+Phase 6: Hardening            ░░░░░░░░░░   0%
 ```
 
-The project is currently in the **architecture and documentation phase**. All 30 specification documents are complete. Implementation will begin after the architecture review.
+**Completed crates** (all compile with 0 errors, 0 warnings):
+
+| Crate | Coverage | Key Components |
+|-------|----------|----------------|
+| `nova-core` | 85%+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
+| `nova-config` | 90%+ | 17-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
+| `nova-memory` | 85%+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager with pressure levels, GenerationalGC, MmapRegion |
+| `nova-storage` | 85%+ | Page cache (latch-free reads), WAL (11 record types, GroupCommit), B+Tree (order 128), LSM (cached BloomFilter, compression cascade), KeyRouter (13 prefix rules), TransactionManager (MVCC, 4 isolation levels), BlobStore (1MB-5TB, TTL) |
+| `nova-object` | 90%+ | Value (32 variants), DocumentMeta, CollectionSchema, SchemaRegistry (additive-only), ValidationEngine, custom MessagePack ext 8-19 |
+| `nova-event` | 85%+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
+| `nova-security` | 85%+ | EncryptionEngine (3 algorithms), KeyProvider trait, SecretsManager (zeroize-on-drop), AuditLogger (10 categories, async), RateLimiter (token bucket per IP+endpoint+global) |
+| `nova-cli` | 75%+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
+| `novad` | 70%+ | Tracing init, TLS + PEM validation, HTTP server with health endpoints, SIGHUP handler, graceful shutdown |
+
+Next up: **Phase 2 — Execution Engine** (`nova-executor` crate): middleware pipeline, rate limiter, circuit breaker, priority queue, cancellation tokens.
 
 ## Target Hardware
 

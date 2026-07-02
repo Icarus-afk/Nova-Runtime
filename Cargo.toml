@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nova-core",
+    "crates/nova-config",
+    "crates/nova-memory",
+    "crates/nova-storage",
+    "crates/nova-object",
+    "crates/nova-event",
+    "crates/nova-security",
+    "crates/nova-cli",
+    "crates/novad",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+bytes = "1"
+crc32c = "0.6"
+snap = "1"
+zstd = { version = "0.13", features = ["experimental"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+crossbeam = "0.8"
+lru = "0.12"
+ctrlc = "3"
+rmp = "0.8"
+rmp-serde = "1"
+regex = "1"
+hex = "0.4"
+base64 = "0.22"
+arc-swap = "1"
+dashmap = "6"
+aes-gcm = "0.10"
+aes-gcm-siv = "0.10"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+chrono = "0.4"
+

@@ -1,0 +1,11 @@
+[package]
+name = "nova-memory"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nova-core = { path = "../nova-core" }
+nova-config = { path = "../nova-config" }
+tracing.workspace = true
+parking_lot.workspace = true
+libc = "0.2"

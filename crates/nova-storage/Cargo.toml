@@ -1,0 +1,22 @@
+[package]
+name = "nova-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nova-core = { path = "../nova-core" }
+nova-memory = { path = "../nova-memory" }
+nova-config = { path = "../nova-config" }
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+crc32c.workspace = true
+snap.workspace = true
+zstd.workspace = true
+xxhash-rust.workspace = true
+crossbeam.workspace = true
+lru.workspace = true
+uuid.workspace = true

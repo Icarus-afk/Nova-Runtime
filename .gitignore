@@ -1,4 +1,8 @@
-/.cartographer
-/.vscode
-
+/target
+**/*.rs.bk
+*.swp
+*.swo
+*.swn
+.DS_Store
 start.md
+/.vscode
