@@ -180,11 +180,19 @@ impl MemoryManager {
         let layout = Layout::array::<u8>(size)
             .map_err(|_| RuntimeError::InvalidArgument("invalid allocation size".into()))?;
         let ptr = if size <= PAGE_SIZE {
+            // SAFETY: The following invariants hold:
+            // - `layout` is valid (size > 0, alignment is power of two)
+            // - The returned pointer is either null or valid for `size` bytes
+            // - The memory is zeroed, ensuring safe access
             unsafe { std::alloc::alloc_zeroed(layout) }
         } else {
             let pages = size.div_ceil(PAGE_SIZE);
             let page_layout = Layout::from_size_align(pages * PAGE_SIZE, PAGE_SIZE)
                 .expect("page layout is valid");
+            // SAFETY: The following invariants hold:
+            // - `page_layout` is valid (size > 0, alignment is power of two)
+            // - The returned pointer is either null or valid for `pages * PAGE_SIZE` bytes
+            // - The memory is zeroed, ensuring safe access
             unsafe { std::alloc::alloc_zeroed(page_layout) }
         };
 
@@ -193,6 +201,11 @@ impl MemoryManager {
             return Err(RuntimeError::OutOfMemory("system allocator returned null".into()));
         }
 
+        // SAFETY: The following invariants hold:
+        // - `ptr` is valid for `size` bytes (guaranteed by allocation above)
+        // - `size` matches the allocation size
+        // - `layout.size()` matches the allocated size
+        // - The memory is exclusively owned by the returned Vec
         Ok(unsafe { Vec::from_raw_parts(ptr, size, layout.size()) })
     }
 

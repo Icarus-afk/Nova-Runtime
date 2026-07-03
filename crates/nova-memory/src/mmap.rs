@@ -35,6 +35,13 @@ impl MmapRegion {
     pub unsafe fn map(&self) -> Result<*mut u8> {
         use std::os::unix::io::AsRawFd;
         let fd = self.file.as_ref().unwrap().as_raw_fd();
+        // SAFETY: The following invariants hold:
+        // - `fd` is a valid file descriptor (guaranteed by `self.file`)
+        // - `self.len` is non-zero and properly sized (guaranteed by `set_len` in constructor)
+        // - `PROT_READ | PROT_WRITE` matches the file open mode
+        // - `MAP_SHARED` ensures changes are propagated to the file
+        // - The returned pointer is valid for `self.len` bytes if not `MAP_FAILED`
+        // - Alignment requirements are handled by the OS
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -52,6 +59,11 @@ impl MmapRegion {
     }
 
     pub unsafe fn unmap(&self, ptr: *mut u8) -> Result<()> {
+        // SAFETY: The following invariants hold:
+        // - `ptr` was returned by a previous `mmap` call on this region
+        // - `self.len` matches the original mapping size
+        // - No other threads are accessing the memory during unmap
+        // - The memory is not accessed after unmapping
         let result = unsafe { libc::munmap(ptr as *mut libc::c_void, self.len as usize) };
         if result != 0 {
             return Err(RuntimeError::Io("munmap failed".into()));

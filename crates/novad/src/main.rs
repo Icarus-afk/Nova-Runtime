@@ -136,6 +136,81 @@ async fn main() -> anyhow::Result<()> {
     let pipeline = Arc::new(nova_executor::PipelineExecutor::new(exec_config));
     tracing::info!("Execution engine initialized");
 
+    // Initialize cache manager
+    {
+        let cfg = config.read().cache.clone();
+        let eviction_policy = match cfg.eviction_policy.as_str() {
+            "Lfu" => nova_cache::EvictionPolicy::Lfu,
+            "Ttl" => nova_cache::EvictionPolicy::Ttl,
+            "LruWithTtl" => nova_cache::EvictionPolicy::LruWithTtl,
+            "NoEviction" => nova_cache::EvictionPolicy::NoEviction,
+            _ => nova_cache::EvictionPolicy::Lru,
+        };
+        let backend_type = match cfg.backend_type.as_str() {
+            "Redis" => nova_cache::BackendType::Redis,
+            _ => nova_cache::BackendType::HashMap,
+        };
+        let cache_cfg = nova_cache::CacheConfig {
+            max_size: cfg.max_size,
+            default_ttl_secs: cfg.default_ttl_secs,
+            eviction_policy,
+            backend_type,
+            redis_url: cfg.redis_url.clone(),
+        };
+        let backend = Arc::new(nova_cache::HashMapBackend::new(
+            cache_cfg.max_size,
+            Arc::new(nova_cache::CacheMetrics::default()),
+        ));
+        let _cache_mgr = Arc::new(nova_cache::CacheManager::new(backend, cache_cfg));
+    }
+    tracing::info!("Cache manager initialized");
+
+    // Initialize blob manager
+    let blob_cfg = {
+        let cfg = config.read().blob.clone();
+        nova_blob::BlobConfig {
+            chunk_size: cfg.chunk_size,
+            max_blob_size: cfg.max_blob_size,
+            gc_interval_secs: cfg.gc_interval_secs,
+            gc_grace_period_secs: cfg.gc_grace_period_secs,
+            data_dir: cfg.data_dir,
+        }
+    };
+    let _blob_mgr = Arc::new(nova_blob::BlobManager::new(blob_cfg).await?);
+    tracing::info!("Blob manager initialized");
+
+    // Initialize search manager
+    let search_cfg = {
+        let cfg = config.read().search.clone();
+        nova_search::SearchConfig {
+            default_limit: cfg.default_limit,
+            max_limit: cfg.max_limit,
+            bm25_k1: cfg.bm25_k1,
+            bm25_b: cfg.bm25_b,
+            fuzzy_max_distance: cfg.fuzzy_max_distance,
+            highlight_snippet_len: cfg.highlight_snippet_len,
+            highlight_max_snippets: cfg.highlight_max_snippets,
+            refresh_interval_ms: cfg.refresh_interval_ms,
+            merge_segment_threshold: cfg.merge_segment_threshold,
+        }
+    };
+    let _search_mgr = Arc::new(parking_lot::RwLock::new(
+        nova_search::SearchManager::with_config(search_cfg),
+    ));
+    tracing::info!("Search manager initialized");
+
+    // Initialize SQL engine
+    let sql_cfg = {
+        let cfg = config.read().sql.clone();
+        nova_sql::SQLConfig {
+            max_batch_size: cfg.max_batch_size,
+            max_columns: cfg.max_columns,
+            default_limit: cfg.default_limit,
+        }
+    };
+    let _sql_engine = Arc::new(nova_sql::SQLEngine::new(sql_cfg));
+    tracing::info!("SQL engine initialized");
+
     // Build admin state
     let listen_addr = format!("{}:{}", config.read().networking.listen_address, config.read().networking.listen_port);
     let admin_state = Arc::new(nova_api::admin::AdminState {

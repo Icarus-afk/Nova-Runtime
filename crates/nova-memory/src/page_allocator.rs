@@ -32,6 +32,11 @@ impl PageAllocator {
             .ok_or_else(|| RuntimeError::OutOfMemory("Page allocation overflow".into()))?;
         let layout =
             Layout::from_size_align(size, PAGE_SIZE).expect("PAGE_SIZE alignment is a power of two");
+        // SAFETY: The following invariants hold:
+        // - `layout` is valid (size > 0, alignment is power of two)
+        // - `size` is a multiple of `PAGE_SIZE` (guaranteed by caller)
+        // - The returned pointer is either null or valid for `size` bytes
+        // - The memory is uninitialized but safe to write
         let ptr = unsafe { alloc(layout) };
         if ptr.is_null() {
             return Err(RuntimeError::OutOfMemory(format!(
@@ -44,10 +49,15 @@ impl PageAllocator {
         Ok(ptr)
     }
 
-    #[allow(unused_variables)]
+    #[allow(unused_variables)] // `count` is unused but kept for API symmetry with `allocate_pages(count)`
     pub unsafe fn free_pages(&mut self, ptr: *mut u8, count: usize) {
         if let Some(&size) = self.allocations.get(&ptr) {
             let layout = Layout::from_size_align(size, PAGE_SIZE).expect("valid layout");
+            // SAFETY: The following invariants hold:
+            // - `ptr` was allocated with `layout` (guaranteed by `self.allocations`)
+            // - `layout` is the same as used for allocation
+            // - No other threads are accessing the memory
+            // - The memory is not accessed after deallocation
             unsafe { dealloc(ptr, layout) }
             self.allocations.remove(&ptr);
             self.total_allocated -= size;

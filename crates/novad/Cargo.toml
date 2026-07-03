@@ -4,17 +4,32 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["full"] }
 nova-config = { path = "../nova-config" }
 nova-core = { path = "../nova-core" }
 nova-memory = { path = "../nova-memory" }
 nova-storage = { path = "../nova-storage" }
 nova-executor = { path = "../nova-executor" }
+nova-cache = { path = "../nova-cache" }
+nova-blob = { path = "../nova-blob" }
+nova-search = { path = "../nova-search" }
+nova-sql = { path = "../nova-sql" }
 nova-api = { path = "../nova-api" }
-nova-cli = { path = "../nova-cli" }
+
+[dev-dependencies]
+tempfile = "3.10"
+nix = { version = "0.28", features = ["signal"] }
+reqwest = { version = "0.11", features = ["json", "blocking"] }
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 parking_lot = { workspace = true }
-tokio.workspace = true
+

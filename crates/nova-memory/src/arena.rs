@@ -34,6 +34,12 @@ impl Arena {
         match current.checked_add(aligned) {
             Some(new_cursor) if new_cursor <= self.capacity => {
                 self.cursor.set(new_cursor);
+                // SAFETY: The following invariants hold:
+                // - `current` is within bounds of `self.data` (0 <= current < self.capacity)
+                // - `aligned` is non-zero and properly aligned (aligned_up ensures this)
+                // - `current + aligned` <= `self.capacity` (checked above)
+                // - The returned pointer is valid for reads/writes of `aligned` bytes
+                // - The pointer provenance is from `self.data`, ensuring proper lifetime
                 Ok(unsafe { self.data.as_mut_ptr().add(current) })
             }
             _ => Err(RuntimeError::OutOfMemory(format!(
@@ -46,6 +52,11 @@ impl Arena {
     pub fn allocate_zeroed(&mut self, size: usize) -> Result<*mut u8> {
         let ptr = self.allocate(size)?;
         let aligned = align_up(size, DEFAULT_ALIGNMENT);
+        // SAFETY: The following invariants hold:
+        // - `ptr` is valid for `aligned` bytes (guaranteed by `self.allocate`)
+        // - `ptr` is properly aligned (guaranteed by `align_up` and `DEFAULT_ALIGNMENT`)
+        // - The memory is initialized to zero, ensuring safe access after this operation
+        // - No other references to this memory exist (exclusive access guaranteed by arena)
         unsafe { std::ptr::write_bytes(ptr, 0, aligned); }
         Ok(ptr)
     }
@@ -69,6 +80,10 @@ impl Arena {
 
     pub fn contains(&self, ptr: *const u8) -> bool {
         let start = self.data.as_ptr();
+        // SAFETY: The following invariants hold:
+        // - `self.capacity` is the exact length of `self.data`
+        // - `start` is valid for `self.capacity` bytes (guaranteed by Vec)
+        // - The resulting pointer `end` is one-past-the-end, valid for comparison
         let end = unsafe { start.add(self.capacity) };
         ptr >= start && ptr < end
     }

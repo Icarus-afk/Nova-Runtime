@@ -18,16 +18,29 @@ impl SlabPage {
     }
 
     fn slot_ptr(&self, slot: usize, object_size: usize) -> *mut u8 {
+        // SAFETY: The following invariants hold:
+        // - `slot` is within bounds (0 <= slot < self.num_slots)
+        // - `object_size` is valid for the slab (guaranteed by Slab::new)
+        // - `slot * object_size` does not overflow (guaranteed by page size constraints)
+        // - The returned pointer is valid for `object_size` bytes
         unsafe { self.data.as_ptr().add(slot * object_size) as *mut u8 }
     }
 
     fn contains(&self, ptr: *const u8) -> bool {
         let start = self.data.as_ptr();
+        // SAFETY: The following invariants hold:
+        // - `self.data.len()` is the exact length of the allocation
+        // - `start` is valid for `self.data.len()` bytes
+        // - The resulting pointer `end` is one-past-the-end, valid for comparison
         let end = unsafe { start.add(self.data.len()) };
         ptr >= start && ptr < end
     }
 
     fn slot_index(&self, ptr: *const u8, object_size: usize) -> usize {
+        // SAFETY: The following invariants hold:
+        // - `ptr` is within `self.data` (guaranteed by `contains` check in caller)
+        // - `self.data.as_ptr()` is valid and aligned
+        // - The offset calculation is valid for in-bounds pointers
         let offset = unsafe { ptr.offset_from(self.data.as_ptr()) };
         offset as usize / object_size
     }

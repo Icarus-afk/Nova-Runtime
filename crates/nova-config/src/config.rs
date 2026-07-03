@@ -47,6 +47,35 @@ enable_search = true
 enable_blob = true
 enable_auth = true
 enable_dashboard = true
+
+[cache]
+max_size = 134217728
+default_ttl_secs = 300
+eviction_policy = "Lru"
+backend_type = "HashMap"
+
+[blob]
+chunk_size = 1048576
+max_blob_size = 10737418240
+gc_interval_secs = 3600
+gc_grace_period_secs = 86400
+data_dir = "/var/lib/novad/blobs"
+
+[search]
+default_limit = 10
+max_limit = 1000
+bm25_k1 = 1.2
+bm25_b = 0.75
+fuzzy_max_distance = 2
+highlight_snippet_len = 150
+highlight_max_snippets = 3
+refresh_interval_ms = 1000
+merge_segment_threshold = 5
+
+[sql]
+max_batch_size = 1024
+max_columns = 256
+default_limit = 1000
 "##;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -616,6 +645,149 @@ pub struct SecurityConfig {
     pub encryption_at_rest: EncryptionAtRestConfig,
 }
 
+// ---- Cache ----
+
+fn default_cache_max_size() -> usize { 128 * 1024 * 1024 }
+fn default_cache_ttl_secs() -> u64 { 300 }
+fn default_cache_eviction_policy() -> String { "Lru".to_string() }
+fn default_cache_backend_type() -> String { "HashMap".to_string() }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CacheConfig {
+    #[serde(default = "default_cache_max_size")]
+    pub max_size: usize,
+    #[serde(default = "default_cache_ttl_secs")]
+    pub default_ttl_secs: u64,
+    #[serde(default = "default_cache_eviction_policy")]
+    pub eviction_policy: String,
+    #[serde(default = "default_cache_backend_type")]
+    pub backend_type: String,
+    #[serde(default)]
+    pub redis_url: Option<String>,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            max_size: default_cache_max_size(),
+            default_ttl_secs: default_cache_ttl_secs(),
+            eviction_policy: default_cache_eviction_policy(),
+            backend_type: default_cache_backend_type(),
+            redis_url: None,
+        }
+    }
+}
+
+// ---- Blob ----
+
+fn default_blob_chunk_size() -> usize { 1024 * 1024 }
+fn default_blob_max_size() -> u64 { 10 * 1024 * 1024 * 1024 }
+fn default_blob_gc_interval_secs() -> u64 { 3600 }
+fn default_blob_gc_grace_period_secs() -> u64 { 86400 }
+fn default_blob_data_dir() -> String { "/var/lib/novad/blobs".to_string() }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlobConfig {
+    #[serde(default = "default_blob_chunk_size")]
+    pub chunk_size: usize,
+    #[serde(default = "default_blob_max_size")]
+    pub max_blob_size: u64,
+    #[serde(default = "default_blob_gc_interval_secs")]
+    pub gc_interval_secs: u64,
+    #[serde(default = "default_blob_gc_grace_period_secs")]
+    pub gc_grace_period_secs: u64,
+    #[serde(default = "default_blob_data_dir")]
+    pub data_dir: String,
+}
+
+impl Default for BlobConfig {
+    fn default() -> Self {
+        Self {
+            chunk_size: default_blob_chunk_size(),
+            max_blob_size: default_blob_max_size(),
+            gc_interval_secs: default_blob_gc_interval_secs(),
+            gc_grace_period_secs: default_blob_gc_grace_period_secs(),
+            data_dir: default_blob_data_dir(),
+        }
+    }
+}
+
+// ---- Search ----
+
+fn default_search_default_limit() -> usize { 10 }
+fn default_search_max_limit() -> usize { 1000 }
+fn default_search_bm25_k1() -> f64 { 1.2 }
+fn default_search_bm25_b() -> f64 { 0.75 }
+fn default_search_fuzzy_max_distance() -> u8 { 2 }
+fn default_search_highlight_snippet_len() -> usize { 150 }
+fn default_search_highlight_max_snippets() -> usize { 3 }
+fn default_search_refresh_interval_ms() -> u64 { 1000 }
+fn default_search_merge_segment_threshold() -> usize { 5 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchConfig {
+    #[serde(default = "default_search_default_limit")]
+    pub default_limit: usize,
+    #[serde(default = "default_search_max_limit")]
+    pub max_limit: usize,
+    #[serde(default = "default_search_bm25_k1")]
+    pub bm25_k1: f64,
+    #[serde(default = "default_search_bm25_b")]
+    pub bm25_b: f64,
+    #[serde(default = "default_search_fuzzy_max_distance")]
+    pub fuzzy_max_distance: u8,
+    #[serde(default = "default_search_highlight_snippet_len")]
+    pub highlight_snippet_len: usize,
+    #[serde(default = "default_search_highlight_max_snippets")]
+    pub highlight_max_snippets: usize,
+    #[serde(default = "default_search_refresh_interval_ms")]
+    pub refresh_interval_ms: u64,
+    #[serde(default = "default_search_merge_segment_threshold")]
+    pub merge_segment_threshold: usize,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: default_search_default_limit(),
+            max_limit: default_search_max_limit(),
+            bm25_k1: default_search_bm25_k1(),
+            bm25_b: default_search_bm25_b(),
+            fuzzy_max_distance: default_search_fuzzy_max_distance(),
+            highlight_snippet_len: default_search_highlight_snippet_len(),
+            highlight_max_snippets: default_search_highlight_max_snippets(),
+            refresh_interval_ms: default_search_refresh_interval_ms(),
+            merge_segment_threshold: default_search_merge_segment_threshold(),
+        }
+    }
+}
+
+// ---- SQL ----
+
+fn default_sql_max_batch_size() -> usize { 1024 }
+fn default_sql_max_columns() -> usize { 256 }
+fn default_sql_limit() -> usize { 1000 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SQLConfig {
+    #[serde(default = "default_sql_max_batch_size")]
+    pub max_batch_size: usize,
+    #[serde(default = "default_sql_max_columns")]
+    pub max_columns: usize,
+    #[serde(default = "default_sql_limit")]
+    pub default_limit: usize,
+}
+
+impl Default for SQLConfig {
+    fn default() -> Self {
+        Self {
+            max_batch_size: default_sql_max_batch_size(),
+            max_columns: default_sql_max_columns(),
+            default_limit: default_sql_limit(),
+        }
+    }
+}
+
 // ---- Root Config ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -640,6 +812,14 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
+    #[serde(default)]
+    pub blob: BlobConfig,
+    #[serde(default)]
+    pub search: SearchConfig,
+    #[serde(default)]
+    pub sql: SQLConfig,
 }
 
 impl Config {

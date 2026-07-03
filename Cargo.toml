@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nova-core",
     "crates/nova-config",
+    "crates/nova-cache",
     "crates/nova-memory",
     "crates/nova-storage",
     "crates/nova-object",
@@ -11,6 +12,9 @@ members = [
     "crates/nova-executor",
     "crates/nova-cli",
     "crates/nova-api",
+    "crates/nova-search",
+    "crates/nova-blob",
+    "crates/nova-sql",
     "crates/novad",
 ]
 
@@ -20,6 +24,7 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

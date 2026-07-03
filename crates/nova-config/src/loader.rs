@@ -179,6 +179,10 @@ impl ConfigLoader {
             execution: merge_execution(base.execution, overlay.execution),
             auth: merge_auth(base.auth, overlay.auth),
             security: merge_security(base.security, overlay.security),
+            cache: overlay.cache,
+            blob: overlay.blob,
+            search: overlay.search,
+            sql: overlay.sql,
         }
     }
 
@@ -255,6 +259,10 @@ fn apply_env_to_section(config: &mut Config, section: &str, field_path: &str, va
         "execution" => apply_env_execution(&mut config.execution, field_path, value, &val_str),
         "auth" => apply_env_auth(&mut config.auth, field_path, value, &val_str),
         "security" => apply_env_security(&mut config.security, field_path, value, &val_str),
+        "cache" => apply_env_cache(&mut config.cache, field_path, value, &val_str),
+        "blob" => apply_env_blob(&mut config.blob, field_path, value, &val_str),
+        "search" => apply_env_search(&mut config.search, field_path, value, &val_str),
+        "sql" => apply_env_sql(&mut config.sql, field_path, value, &val_str),
         _ => {
             tracing::warn!("Unknown config section '{}' from env var", section);
         }
@@ -414,6 +422,52 @@ fn apply_env_security(cfg: &mut SecurityConfig, field: &str, _val: &toml::Value,
             if let Ok(b) = val_str.parse::<bool>() { cfg.encryption_at_rest.enabled = b; }
         }
         _ => { tracing::warn!("Unknown security config field '{}'", field); }
+    }
+}
+
+fn apply_env_cache(cfg: &mut CacheConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "max_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_size = n; } }
+        "default_ttl_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.default_ttl_secs = n; } }
+        "eviction_policy" => cfg.eviction_policy = val_str.to_string(),
+        "backend_type" => cfg.backend_type = val_str.to_string(),
+        "redis_url" => { if !val_str.is_empty() { cfg.redis_url = Some(val_str.to_string()); } }
+        _ => { tracing::warn!("Unknown cache config field '{}'", field); }
+    }
+}
+
+fn apply_env_blob(cfg: &mut BlobConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "chunk_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.chunk_size = n; } }
+        "max_blob_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_blob_size = n; } }
+        "gc_interval_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_interval_secs = n; } }
+        "gc_grace_period_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_grace_period_secs = n; } }
+        "data_dir" => cfg.data_dir = val_str.to_string(),
+        _ => { tracing::warn!("Unknown blob config field '{}'", field); }
+    }
+}
+
+fn apply_env_search(cfg: &mut SearchConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "default_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_limit = n; } }
+        "max_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_limit = n; } }
+        "bm25_k1" => { if let Ok(f) = val_str.parse::<f64>() { cfg.bm25_k1 = f; } }
+        "bm25_b" => { if let Ok(f) = val_str.parse::<f64>() { cfg.bm25_b = f; } }
+        "fuzzy_max_distance" => { if let Ok(n) = val_str.parse::<u8>() { cfg.fuzzy_max_distance = n; } }
+        "highlight_snippet_len" => { if let Ok(n) = val_str.parse::<usize>() { cfg.highlight_snippet_len = n; } }
+        "highlight_max_snippets" => { if let Ok(n) = val_str.parse::<usize>() { cfg.highlight_max_snippets = n; } }
+        "refresh_interval_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.refresh_interval_ms = n; } }
+        "merge_segment_threshold" => { if let Ok(n) = val_str.parse::<usize>() { cfg.merge_segment_threshold = n; } }
+        _ => { tracing::warn!("Unknown search config field '{}'", field); }
+    }
+}
+
+fn apply_env_sql(cfg: &mut SQLConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "max_batch_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_batch_size = n; } }
+        "max_columns" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_columns = n; } }
+        "default_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_limit = n; } }
+        _ => { tracing::warn!("Unknown sql config field '{}'", field); }
     }
 }
 

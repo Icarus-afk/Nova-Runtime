@@ -360,6 +360,7 @@ pub enum SubsystemId {
     Scheduler,
     Search,
     Blob,
+    Sql,
     Auth,
     Pipeline,
     Admin,

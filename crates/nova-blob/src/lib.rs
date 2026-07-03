@@ -1,0 +1,28 @@
+pub mod backend;
+pub mod chunk;
+pub mod config;
+pub mod dedup;
+pub mod download;
+pub mod error;
+pub mod gc;
+pub mod manager;
+pub mod merkle;
+pub mod metadata;
+pub mod namespace;
+pub mod stats;
+pub mod upload;
+
+pub use backend::filesystem::FilesystemBackend;
+pub use backend::BlobStore;
+pub use chunk::ChunkManager;
+pub use config::BlobConfig;
+pub use dedup::DeduplicationEngine;
+pub use download::DownloadHandler;
+pub use error::{BlobError, Result};
+pub use gc::GarbageCollector;
+pub use manager::BlobManager;
+pub use merkle::MerkleTree;
+pub use metadata::{BlobMetadata, ChunkRecord, UploadState};
+pub use namespace::NamespaceManager;
+pub use stats::{BlobStats, StatsCollector};
+pub use upload::{UploadManager, UploadSession};
