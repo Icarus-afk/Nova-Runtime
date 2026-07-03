@@ -20,6 +20,9 @@ nova-cache = { path = "../nova-cache" }
 nova-blob = { path = "../nova-blob" }
 nova-search = { path = "../nova-search" }
 nova-sql = { path = "../nova-sql" }
+nova-queue = { path = "../nova-queue" }
+nova-scheduler = { path = "../nova-scheduler" }
+nova-auth = { path = "../nova-auth" }
 nova-api = { path = "../nova-api" }
 
 [dev-dependencies]
