@@ -1,6 +1,6 @@
 # Nova Runtime
 
-> **Status: Implementation in Progress** — Phase 0 (Foundations), Phase 1 (Core Abstractions), and Phase 2 (Runtime) are complete. 10 crates implemented across 95%+ of the spec. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
+> **Status: Implementation in Progress** — Phases 0–4 complete. 14 crates implemented with ~1,359 tests. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
 
 Nova Runtime is a lightweight backend runtime that collapses multiple infrastructure services into a single executable. It unifies database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities on commodity VPS hardware.
 
@@ -92,6 +92,7 @@ The complete architecture is specified across 30 documents in [`docs/`](docs/). 
 | 14 | [Configuration](docs/14-configuration.md) | 5-layer resolution (defaults→file→env→flags), hot-reload, schema |
 | 15 | [Security](docs/15-security.md) | Threat model, AES-256-GCM at rest, TLS 1.3, audit logging, input validation |
 | 16 | [Authentication](docs/16-authentication.md) | Password (argon2id), API keys, JWT, OAuth2/OIDC, RBAC, MFA |
+| 17 | [Cache](docs/17-cache.md) | HashMap + TTL backends, LRU/LFU eviction, batch ops, TTL sweeper, event invalidation |
 | 17 | [Queue](docs/17-queue.md) | FIFO/priority/delayed/DLQ, at-least-once, visibility timeout, consumer groups |
 | 18 | [Scheduler](docs/18-scheduler.md) | Cron/delayed/one-shot jobs, time-wheel, DAG dependencies, retry (exp backoff) |
 | 19 | [Search](docs/19-search.md) | BM25 scoring, inverted index, tokenization, fuzzy/boolean/phrase search |
@@ -142,29 +143,36 @@ novactl db query "SELECT * FROM users LIMIT 10"
 Phase 0: Foundations          ██████████ 100%  30 spec docs complete
 Phase 1: Core Abstractions    ██████████ 100%  9 crates built, 85%+ code coverage
 Phase 2: Runtime Core         ██████████ 100%  Execution Engine + novad alpha verified
-Phase 3: Data Subsystems      ░░░░░░░░░░   0%  (next — SQL Layer, Cache, Search, Blob)
-Phase 4: Async Subsystems     ░░░░░░░░░░   0%
-Phase 5: API & Tooling        ░░░░░░░░░░   0%
+Phase 3: Data Subsystems      ██████████ 100%  SQL, Cache, Search, Blob (172 tests)
+Phase 4: Async Subsystems     ██████████ 100%  Queue, Scheduler, Auth (123 tests)
+Phase 5: API & Tooling        ░░░░░░░░░░   0%  (next — REST API, GraphQL, SDK, Dashboard)
 Phase 6: Hardening            ░░░░░░░░░░   0%
 ```
 
 **Completed crates** (all compile with 0 errors, 0 warnings):
 
-| Crate | Coverage | Key Components |
-|-------|----------|----------------|
-| `nova-core` | 95%+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
-| `nova-config` | 95%+ | 17-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
-| `nova-memory` | 85%+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager with pressure levels, GenerationalGC, MmapRegion |
-| `nova-storage` | 85%+ | Page cache (latch-free reads), WAL (11 record types, GroupCommit), B+Tree (order 128), LSM (cached BloomFilter, compression cascade), KeyRouter (13 prefix rules), TransactionManager (MVCC, 4 isolation levels), BlobStore (1MB-5TB, TTL) |
-| `nova-object` | 90%+ | Value (32 variants), DocumentMeta, CollectionSchema, SchemaRegistry (additive-only), ValidationEngine, custom MessagePack ext 8-19 |
-| `nova-event` | 90%+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
-| `nova-security` | 85%+ | EncryptionEngine (3 algorithms), KeyProvider trait, SecretsManager (zeroize-on-drop), AuditLogger (10 categories, async), RateLimiter (token bucket per IP+endpoint+global) |
-| `nova-cli` | 90%+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
-| `nova-executor` | 95%+ | 6-stage pipeline, middleware chain, rate limiter, circuit breaker, priority queue, cancellation tokens, 10 integration tests |
-| `nova-api` | 90%+ | HTTP server, health/ready/live endpoints, admin config/status, 6 integration tests |
-| `novad` | 80%+ | Tracing init, TLS + PEM validation, HTTP server wiring, SIGHUP handler, graceful shutdown |
+| Crate | Tests | Key Components |
+|-------|-------|----------------|
+| `nova-core` | 137+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
+| `nova-config` | 127+ | 21-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
+| `nova-memory` | 41+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager with pressure levels, GenerationalGC, MmapRegion |
+| `nova-storage` | 86+ | Page cache (latch-free reads), WAL (11 record types, GroupCommit), B+Tree (order 128), LSM (cached BloomFilter, compression cascade), KeyRouter (13 prefix rules), TransactionManager (MVCC, 4 isolation levels) |
+| `nova-object` | 90+ | Value (32 variants), DocumentMeta, CollectionSchema, SchemaRegistry (additive-only), ValidationEngine, custom MessagePack ext 8-19 |
+| `nova-event` | 41+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
+| `nova-security` | 85+ | InputValidator, EncryptionEngine (3 algorithms), KeyProvider trait, SecretsManager (zeroize-on-drop), AuditLogger (10 categories), RateLimiter |
+| `nova-cli` | 86+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
+| `nova-executor` | 10+ | 6-stage pipeline, middleware chain, rate limiter, circuit breaker, priority queue, cancellation tokens |
+| `nova-api` | 6+ | HTTP server, health/ready/live endpoints, admin config/status |
+| `nova-cache` | 43 | HashMapBackend + TtlBackend, LRU/LFU/TTL eviction, batch ops, TTL sweeper, event invalidation |
+| `nova-blob` | 37 | SHA-256 chunking, Merkle tree, multipart upload, dedup persistence, GC, TTL enforcement, pagination |
+| `nova-search` | 55 | BM25 scoring (configurable), Porter stemmer, query DSL, Unicode NFC, pagination, concurrent read/write |
+| `nova-sql` | 37 | Full DML/DQL, DISTINCT/BETWEEN/IN/CASE/CAST/LIKE, constraint enforcement, GROUP BY HAVING, ORDER BY NULLS |
+| `nova-queue` | 23 | Pull-model backend, visibility timeout, DLQ, dedup, priority, delay, consumer groups, auto-scanner |
+| `nova-scheduler` | 29 | Hierarchical TimeWheel + PriorityQueue, CronSchedule parser, startup recovery, dependency validation |
+| `nova-auth` | 77 | Password/API Key/JWT providers, RBAC with wildcards, session mgmt, TOTP MFA, brute-force detection, password policy |
+| `novad` | 5+ | Tracing init, TLS + PEM validation, all subsystem wiring, SIGHUP handler, graceful shutdown |
 
-Next up: **Phase 3 — Data Subsystems**: SQL Layer, Cache, Search, Blob Storage.
+**Total: ~1,359 tests across 17 crates.**
 
 ## Target Hardware
 
