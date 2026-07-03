@@ -76,6 +76,32 @@ merge_segment_threshold = 5
 max_batch_size = 1024
 max_columns = 256
 default_limit = 1000
+
+[queue]
+max_queues = 1000
+max_messages_per_queue = 10000
+max_message_size = 262144
+default_visibility_timeout_secs = 30
+message_ttl_secs = 86400
+max_receive_count = 3
+scanner_interval_ms = 1000
+backpressure_threshold = 0.9
+dlq_max_entries = 100000
+dlq_max_retries = 3
+enable_dlq = true
+enable_scanners = true
+
+[scheduler]
+time_wheel_tick_ms = 100
+time_wheel_slots = 360
+priority_queue_tick_ms = 1000
+max_jobs_per_queue = 10000
+max_concurrent_jobs = 64
+default_job_timeout_secs = 300
+default_max_retries = 3
+default_retry_delay_secs = 10
+enable_startup_recovery = true
+enable_catch_up = true
 "##;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -567,8 +593,20 @@ impl Default for ExecutionConfig {
 
 fn default_password_min_length() -> u8 { 8 }
 fn default_password_max_length() -> u8 { 128 }
+fn default_password_min_lowercase() -> u8 { 1 }
+fn default_password_min_uppercase() -> u8 { 1 }
+fn default_password_min_digits() -> u8 { 1 }
+fn default_password_min_special() -> u8 { 0 }
+fn default_password_bcrypt_cost() -> u32 { 12 }
 fn default_lockout_max_attempts() -> u8 { 5 }
+fn default_lockout_duration_secs() -> u64 { 900 }
 fn default_session_ttl() -> u32 { 86_400 }
+fn default_max_active_sessions() -> u32 { 100 }
+fn default_token_length_bytes() -> usize { 32 }
+fn default_session_cache_size() -> usize { 100_000 }
+fn default_mfa_issuer() -> String { "Nova Runtime".to_string() }
+fn default_mfa_window() -> u8 { 1 }
+fn default_enable_brute_force_detection() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PasswordPolicy {
@@ -576,6 +614,14 @@ pub struct PasswordPolicy {
     pub min_length: u8,
     #[serde(default = "default_password_max_length")]
     pub max_length: u8,
+    #[serde(default = "default_password_min_lowercase")]
+    pub min_lowercase: u8,
+    #[serde(default = "default_password_min_uppercase")]
+    pub min_uppercase: u8,
+    #[serde(default = "default_password_min_digits")]
+    pub min_digits: u8,
+    #[serde(default = "default_password_min_special")]
+    pub min_special: u8,
 }
 
 impl Default for PasswordPolicy {
@@ -583,6 +629,10 @@ impl Default for PasswordPolicy {
         PasswordPolicy {
             min_length: default_password_min_length(),
             max_length: default_password_max_length(),
+            min_lowercase: default_password_min_lowercase(),
+            min_uppercase: default_password_min_uppercase(),
+            min_digits: default_password_min_digits(),
+            min_special: default_password_min_special(),
         }
     }
 }
@@ -591,44 +641,100 @@ impl Default for PasswordPolicy {
 pub struct LockoutConfig {
     #[serde(default = "default_lockout_max_attempts")]
     pub max_attempts: u8,
+    #[serde(default = "default_lockout_duration_secs")]
+    pub duration_secs: u64,
 }
 
 impl Default for LockoutConfig {
     fn default() -> Self {
         LockoutConfig {
             max_attempts: default_lockout_max_attempts(),
+            duration_secs: default_lockout_duration_secs(),
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MfaConfig {
+    #[serde(default = "default_mfa_issuer")]
+    pub issuer: String,
+    #[serde(default = "default_mfa_window")]
+    pub window: u8,
+}
+
+impl Default for MfaConfig {
+    fn default() -> Self {
+        Self {
+            issuer: default_mfa_issuer(),
+            window: default_mfa_window(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InternalAuthConfig {
     #[serde(default)]
     pub password_policy: PasswordPolicy,
     #[serde(default)]
     pub lockout: LockoutConfig,
+    #[serde(default = "default_password_bcrypt_cost")]
+    pub bcrypt_cost: u32,
+    #[serde(default = "default_enable_brute_force_detection")]
+    pub enable_brute_force_detection: bool,
+    #[serde(default)]
+    pub mfa: MfaConfig,
+}
+
+impl Default for InternalAuthConfig {
+    fn default() -> Self {
+        Self {
+            password_policy: PasswordPolicy::default(),
+            lockout: LockoutConfig::default(),
+            bcrypt_cost: default_password_bcrypt_cost(),
+            enable_brute_force_detection: default_enable_brute_force_detection(),
+            mfa: MfaConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionConfig {
     #[serde(default = "default_session_ttl")]
     pub ttl_seconds: u32,
+    #[serde(default = "default_max_active_sessions")]
+    pub max_active_sessions: u32,
+    #[serde(default = "default_token_length_bytes")]
+    pub token_length_bytes: usize,
+    #[serde(default = "default_session_cache_size")]
+    pub cache_size: usize,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
             ttl_seconds: default_session_ttl(),
+            max_active_sessions: default_max_active_sessions(),
+            token_length_bytes: default_token_length_bytes(),
+            cache_size: default_session_cache_size(),
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuthConfig {
     #[serde(default)]
     pub internal: InternalAuthConfig,
     #[serde(default)]
     pub session: SessionConfig,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            internal: InternalAuthConfig::default(),
+            session: SessionConfig::default(),
+        }
+    }
 }
 
 // ---- Security ----
@@ -792,6 +898,122 @@ impl Default for SQLConfig {
     }
 }
 
+// ---- Queue ----
+
+fn default_max_queues() -> usize { 1000 }
+fn default_max_messages_per_queue() -> usize { 10000 }
+fn default_max_message_size() -> usize { 262144 }
+fn default_queue_visibility_timeout_secs() -> u32 { 30 }
+fn default_queue_message_ttl_secs() -> u32 { 86400 }
+fn default_queue_max_receive_count() -> u32 { 3 }
+fn default_queue_scanner_interval_ms() -> u64 { 1000 }
+fn default_queue_backpressure_threshold() -> f64 { 0.9 }
+fn default_queue_dlq_max_entries() -> usize { 100000 }
+fn default_queue_dlq_max_retries() -> u32 { 3 }
+fn default_queue_enable_dlq() -> bool { true }
+fn default_queue_enable_scanners() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueueConfig {
+    #[serde(default = "default_max_queues")]
+    pub max_queues: usize,
+    #[serde(default = "default_max_messages_per_queue")]
+    pub max_messages_per_queue: usize,
+    #[serde(default = "default_max_message_size")]
+    pub max_message_size: usize,
+    #[serde(default = "default_queue_visibility_timeout_secs")]
+    pub default_visibility_timeout_secs: u32,
+    #[serde(default = "default_queue_message_ttl_secs")]
+    pub message_ttl_secs: u32,
+    #[serde(default = "default_queue_max_receive_count")]
+    pub max_receive_count: u32,
+    #[serde(default = "default_queue_scanner_interval_ms")]
+    pub scanner_interval_ms: u64,
+    #[serde(default = "default_queue_backpressure_threshold")]
+    pub backpressure_threshold: f64,
+    #[serde(default = "default_queue_dlq_max_entries")]
+    pub dlq_max_entries: usize,
+    #[serde(default = "default_queue_dlq_max_retries")]
+    pub dlq_max_retries: u32,
+    #[serde(default = "default_queue_enable_dlq")]
+    pub enable_dlq: bool,
+    #[serde(default = "default_queue_enable_scanners")]
+    pub enable_scanners: bool,
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            max_queues: default_max_queues(),
+            max_messages_per_queue: default_max_messages_per_queue(),
+            max_message_size: default_max_message_size(),
+            default_visibility_timeout_secs: default_queue_visibility_timeout_secs(),
+            message_ttl_secs: default_queue_message_ttl_secs(),
+            max_receive_count: default_queue_max_receive_count(),
+            scanner_interval_ms: default_queue_scanner_interval_ms(),
+            backpressure_threshold: default_queue_backpressure_threshold(),
+            dlq_max_entries: default_queue_dlq_max_entries(),
+            dlq_max_retries: default_queue_dlq_max_retries(),
+            enable_dlq: default_queue_enable_dlq(),
+            enable_scanners: default_queue_enable_scanners(),
+        }
+    }
+}
+
+// ---- Scheduler ----
+
+fn default_scheduler_time_wheel_tick_ms() -> u64 { 100 }
+fn default_scheduler_time_wheel_slots() -> usize { 360 }
+fn default_scheduler_priority_queue_tick_ms() -> u64 { 1000 }
+fn default_scheduler_max_jobs_per_queue() -> usize { 10000 }
+fn default_scheduler_max_concurrent_jobs() -> u32 { 64 }
+fn default_scheduler_default_job_timeout_secs() -> u32 { 300 }
+fn default_scheduler_default_max_retries() -> u32 { 3 }
+fn default_scheduler_default_retry_delay_secs() -> u32 { 10 }
+fn default_scheduler_enable_startup_recovery() -> bool { true }
+fn default_scheduler_enable_catch_up() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SchedulerConfig {
+    #[serde(default = "default_scheduler_time_wheel_tick_ms")]
+    pub time_wheel_tick_ms: u64,
+    #[serde(default = "default_scheduler_time_wheel_slots")]
+    pub time_wheel_slots: usize,
+    #[serde(default = "default_scheduler_priority_queue_tick_ms")]
+    pub priority_queue_tick_ms: u64,
+    #[serde(default = "default_scheduler_max_jobs_per_queue")]
+    pub max_jobs_per_queue: usize,
+    #[serde(default = "default_scheduler_max_concurrent_jobs")]
+    pub max_concurrent_jobs: u32,
+    #[serde(default = "default_scheduler_default_job_timeout_secs")]
+    pub default_job_timeout_secs: u32,
+    #[serde(default = "default_scheduler_default_max_retries")]
+    pub default_max_retries: u32,
+    #[serde(default = "default_scheduler_default_retry_delay_secs")]
+    pub default_retry_delay_secs: u32,
+    #[serde(default = "default_scheduler_enable_startup_recovery")]
+    pub enable_startup_recovery: bool,
+    #[serde(default = "default_scheduler_enable_catch_up")]
+    pub enable_catch_up: bool,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            time_wheel_tick_ms: default_scheduler_time_wheel_tick_ms(),
+            time_wheel_slots: default_scheduler_time_wheel_slots(),
+            priority_queue_tick_ms: default_scheduler_priority_queue_tick_ms(),
+            max_jobs_per_queue: default_scheduler_max_jobs_per_queue(),
+            max_concurrent_jobs: default_scheduler_max_concurrent_jobs(),
+            default_job_timeout_secs: default_scheduler_default_job_timeout_secs(),
+            default_max_retries: default_scheduler_default_max_retries(),
+            default_retry_delay_secs: default_scheduler_default_retry_delay_secs(),
+            enable_startup_recovery: default_scheduler_enable_startup_recovery(),
+            enable_catch_up: default_scheduler_enable_catch_up(),
+        }
+    }
+}
+
 // ---- Root Config ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -824,6 +1046,10 @@ pub struct Config {
     pub search: SearchConfig,
     #[serde(default)]
     pub sql: SQLConfig,
+    #[serde(default)]
+    pub queue: QueueConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 impl Config {
@@ -1053,6 +1279,12 @@ impl Config {
             errors.push("storage.bloom_filter_bits_per_key must be > 0".into());
         }
 
+        // Queue validations
+        errors.extend(self.validate_queue());
+
+        // Scheduler validations
+        errors.extend(self.validate_scheduler());
+
         if errors.is_empty() { Ok(()) } else { Err(errors) }
     }
 }
@@ -1060,6 +1292,29 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config::from_default_toml()
+    }
+}
+
+impl Config {
+    /// Check that the queue section is consistent.
+    pub fn validate_queue(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.queue.backpressure_threshold <= 0.0 || self.queue.backpressure_threshold > 1.0 {
+            errors.push("queue.backpressure_threshold must be between 0.0 and 1.0".into());
+        }
+        errors
+    }
+
+    /// Check that the scheduler section is consistent.
+    pub fn validate_scheduler(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.scheduler.time_wheel_slots == 0 {
+            errors.push("scheduler.time_wheel_slots must be > 0".into());
+        }
+        if self.scheduler.max_concurrent_jobs == 0 {
+            errors.push("scheduler.max_concurrent_jobs must be > 0".into());
+        }
+        errors
     }
 }
 
@@ -1245,18 +1500,26 @@ mod tests {
         let c = PasswordPolicy::default();
         assert_eq!(c.min_length, 8);
         assert_eq!(c.max_length, 128);
+        assert_eq!(c.min_lowercase, 1);
+        assert_eq!(c.min_uppercase, 1);
+        assert_eq!(c.min_digits, 1);
+        assert_eq!(c.min_special, 0);
     }
 
     #[test]
     fn lockout_config_defaults() {
         let c = LockoutConfig::default();
         assert_eq!(c.max_attempts, 5);
+        assert_eq!(c.duration_secs, 900);
     }
 
     #[test]
     fn session_config_defaults() {
         let c = SessionConfig::default();
         assert_eq!(c.ttl_seconds, 86_400);
+        assert_eq!(c.max_active_sessions, 100);
+        assert_eq!(c.token_length_bytes, 32);
+        assert_eq!(c.cache_size, 100_000);
     }
 
     #[test]
@@ -1264,6 +1527,10 @@ mod tests {
         let c = AuthConfig::default();
         assert_eq!(c.internal.password_policy, PasswordPolicy::default());
         assert_eq!(c.internal.lockout, LockoutConfig::default());
+        assert_eq!(c.internal.bcrypt_cost, 12);
+        assert!(c.internal.enable_brute_force_detection);
+        assert_eq!(c.internal.mfa.issuer, "Nova Runtime");
+        assert_eq!(c.internal.mfa.window, 1);
         assert_eq!(c.session, SessionConfig::default());
     }
 

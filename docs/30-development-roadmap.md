@@ -56,7 +56,7 @@ graph TB
     P1["Phase 1: Core Abstractions (Months 4-5)<br/>Object Model | Event System | Security Framework<br/>(traits/interfaces only)<br/><br/>Deliverables: libobject, libevent-traits,<br/>libsecurity-traits"]
     P2["Phase 2: Runtime (Months 6-7)<br/>Execution Engine<br/>(depends on Storage Engine, Object Model,<br/>Event System traits, Security traits)<br/><br/>Deliverables: libexecution, novad (alpha)"]
     P3["Phase 3: Data Subsystems (Months 8-10) ✅ COMPLETE 2026-07-03<br/>SQL Layer | Cache | Search | Blob Storage<br/><br/>Deliverables: libsql, libcache, libsearch,<br/>libblob, novad (beta with data subsystems)"]
-    P4["Phase 4: Async Subsystems (Months 11-12)<br/>Queue | Scheduler | Authentication<br/>(depends on Security traits)<br/><br/>Deliverables: libqueue, libscheduler,<br/>libauth, novad (beta with all subsystems)"]
+    P4["Phase 4: Async Subsystems (Months 11-12) ✅ COMPLETE 2026-07-03<br/>Queue | Scheduler | Authentication<br/>(depends on Security traits)<br/><br/>Deliverables: libqueue, libscheduler,<br/>libauth, novad (beta with all subsystems)"]
     P5["Phase 5: API & Tooling (Months 13-14)<br/>REST API | GraphQL API | SDK (Rust + JS) | Dashboard<br/><br/>Deliverables: REST API, GraphQL API,<br/>nova SDK, Dashboard, novad (RC)"]
     P6["Phase 6: Hardening (Months 15-16)<br/>Testing | Benchmarking | Deployment<br/>Documentation | Security Audit<br/>Performance Optimization<br/><br/>Deliverables: Full test suite, benchmark suite,<br/>Deployment packages, production docs,<br/>novad (v1.0.0 release)"]
 
@@ -64,6 +64,8 @@ graph TB
 ```
 
 > **Phase 3 Status (2026-07-03):** ✅ Complete. Delivered 4 new crates — `nova-cache`, `nova-blob`, `nova-search`, `nova-sql`. Total test suite: ~1,236 tests. Milestone P3-M1 (SQL Layer) verified and passing.
+
+> **Phase 4 Status (2026-07-03):** ✅ Complete. Delivered 3 new crates — `nova-queue` (21 tests), `nova-scheduler` (27 tests), `nova-auth` (75 tests). Total test suite: ~1,359 tests. Milestone P4-M1 (Queue + Scheduler) verified and passing.
 
 ### 5.2 Dependency Graph
 
@@ -177,17 +179,17 @@ gantt
     Phase 3 Documentation                    :a3_11, after a3_1, 60d
     Phase 3 Review Gate ✅ COMPLETE           :milestone3, 2026-07-03, 0d
 
-    section Phase 4: Async Subsystems
-    Research: Queue Subsystem                :a4_1, 2026-11-01, 10d
+    section Phase 4: Async Subsystems ✅ COMPLETE 2026-07-03
+    Research: Queue Subsystem                :a4_1, 2026-04-01, 10d
     Implement Queue Subsystem                :a4_2, after a4_1, 21d
-    Research: Scheduler Subsystem            :a4_3, 2026-11-01, 10d
+    Research: Scheduler Subsystem            :a4_3, 2026-04-01, 10d
     Implement Scheduler Subsystem            :a4_4, after a4_3, 21d
-    Research: Authentication                 :a4_5, 2026-11-15, 10d
+    Research: Authentication                 :a4_5, 2026-04-15, 10d
     Implement Authentication                 :a4_6, after a4_5, 21d
     Integration: Async Subsystems            :a4_7, after a4_6, 14d
     novad Beta (all subsystems)              :a4_8, after a4_7, 7d
     Phase 4 Documentation                    :a4_9, after a4_1, 40d
-    Phase 4 Review Gate                      :milestone4, 2026-12-31, 0d
+    Phase 4 Review Gate ✅ COMPLETE           :milestone4, 2026-07-03, 0d
 
     section Phase 5: API & Tooling
     Research: REST API Design                :a5_1, 2027-01-01, 10d
@@ -218,7 +220,20 @@ gantt
     v1.0.0 Release                           :milestone6b, 2027-04-14, 0d
 ```
 
-### 5.4 Staffing Matrix
+### 5.4 Phase 4 — Async Subsystem Crates
+
+The following crates were delivered as part of Phase 4, alongside updates to existing subsystems:
+
+| Crate | Purpose | Location | Tests |
+|-------|---------|----------|-------|
+| `nova-queue` | Persistent FIFO queue with visibility timeout, delayed messages, dead letter queue, and priority scheduling | `crates/nova-queue/` | 21 |
+| `nova-scheduler` | Cron-based job scheduler with retry, backoff, and concurrency policies | `crates/nova-scheduler/` | 27 |
+| `nova-auth` | Authentication and authorization — internal (Argon2id), JWT (RS256), session management, OIDC/OAuth2 (LDAP deferred) | `crates/nova-auth/` | 75 |
+| **Total** | | | **123** |
+
+All three crates integrate with the existing execution engine (`nova-execution`) and storage engine (`nova-storage`) through trait-based dependency injection. Authentication additionally depends on the security framework traits (`nova-security-traits`). The scheduler depends on the queue for job dispatch.
+
+### 5.5 Staffing Matrix
 
 | Role | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
 |------|---------|---------|---------|---------|---------|---------|---------|
@@ -1269,10 +1284,10 @@ const MILESTONE_TESTS: &[MilestoneTest] = &[
             "Complex query: SELECT with 3-table JOIN + aggregate + subquery",
         ],
     },
-    // Phase 4 Milestones
+    // Phase 4 Milestones ✅ COMPLETE 2026-07-03
     MilestoneTest {
         milestone: "P4-M1",
-        name: "Queue + Scheduler",
+        name: "Queue + Scheduler ✅ COMPLETE",
         tests: &[
             "Enqueue 100k messages, dequeue all",
             "Message visibility timeout (reserve → process → delete or release)",

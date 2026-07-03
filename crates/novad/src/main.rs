@@ -214,6 +214,69 @@ async fn main() -> anyhow::Result<()> {
     let _sql_engine = Arc::new(nova_sql::SQLEngine::new(sql_cfg));
     tracing::info!("SQL engine initialized");
 
+    // Initialize queue manager
+    {
+        let cfg = config.read().queue.clone();
+        let queue_cfg = nova_queue::QueueConfig {
+            max_queues: cfg.max_queues,
+            max_messages_per_queue: cfg.max_messages_per_queue,
+            max_message_size: cfg.max_message_size,
+            default_visibility_timeout_secs: cfg.default_visibility_timeout_secs,
+            message_ttl_secs: cfg.message_ttl_secs,
+            max_receive_count: cfg.max_receive_count,
+            scanner_interval_ms: cfg.scanner_interval_ms,
+            backpressure_threshold: cfg.backpressure_threshold,
+            dlq_max_entries: cfg.dlq_max_entries,
+            dlq_max_retries: cfg.dlq_max_retries,
+            enable_dlq: cfg.enable_dlq,
+            enable_scanners: cfg.enable_scanners,
+        };
+        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
+            nova_storage::StorageEngineStore::new(store.clone()),
+        );
+        let backend: Arc<dyn nova_queue::QueueBackend> = Arc::new(
+            nova_queue::StorageQueueBackend::new(engine),
+        );
+        let _queue_mgr = Arc::new(nova_queue::QueueManager::new(backend, queue_cfg));
+    }
+    tracing::info!("Queue manager initialized");
+
+
+
+    // Initialize auth manager
+    {
+        let cfg = config.read().auth.clone();
+        let auth_cfg = nova_auth::AuthConfig {
+            session_ttl_secs: cfg.session.ttl_seconds,
+            max_active_sessions: cfg.session.max_active_sessions,
+            token_length_bytes: cfg.session.token_length_bytes,
+            mfa_issuer: cfg.internal.mfa.issuer,
+            mfa_window: cfg.internal.mfa.window,
+            bcrypt_cost: cfg.internal.bcrypt_cost,
+            max_failed_attempts: cfg.internal.lockout.max_attempts as u32,
+            lockout_duration_secs: cfg.internal.lockout.duration_secs,
+            enable_brute_force_detection: cfg.internal.enable_brute_force_detection,
+            session_cache_size: cfg.session.cache_size,
+            password_min_length: cfg.internal.password_policy.min_length,
+            password_max_length: cfg.internal.password_policy.max_length,
+            password_min_lowercase: cfg.internal.password_policy.min_lowercase,
+            password_min_uppercase: cfg.internal.password_policy.min_uppercase,
+            password_min_digits: cfg.internal.password_policy.min_digits,
+            password_min_special: cfg.internal.password_policy.min_special,
+        };
+        let auth_mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg));
+
+        // Register auth middleware with pipeline
+        let middleware_reg = auth_mgr.create_middleware_registration(0);
+        if let Err(e) = pipeline.register_middleware(middleware_reg) {
+            tracing::warn!("Failed to register auth middleware: {}", e);
+        }
+
+        // Store reference
+        let _auth_mgr = auth_mgr;
+    }
+    tracing::info!("Auth manager initialized");
+
     // Build admin state
     let listen_addr = format!("{}:{}", config.read().networking.listen_address, config.read().networking.listen_port);
     let admin_state = Arc::new(nova_api::admin::AdminState {
@@ -251,6 +314,34 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::warn!("SIGHUP handler not available on this platform");
     }
+
+    // Initialize scheduler manager
+    {
+        let cfg = config.read().scheduler.clone();
+        let scheduler_cfg = nova_scheduler::SchedulerConfig {
+            time_wheel_tick_ms: cfg.time_wheel_tick_ms,
+            time_wheel_slots: cfg.time_wheel_slots,
+            priority_queue_tick_ms: cfg.priority_queue_tick_ms,
+            max_jobs_per_queue: cfg.max_jobs_per_queue,
+            max_concurrent_jobs: cfg.max_concurrent_jobs,
+            default_job_timeout_secs: cfg.default_job_timeout_secs,
+            default_max_retries: cfg.default_max_retries,
+            default_retry_delay_secs: cfg.default_retry_delay_secs,
+            enable_startup_recovery: cfg.enable_startup_recovery,
+            enable_catch_up: cfg.enable_catch_up,
+        };
+        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
+            nova_storage::StorageEngineStore::new(store.clone()),
+        );
+        let backend: Arc<dyn nova_scheduler::SchedulerBackend> = Arc::new(
+            nova_scheduler::StorageSchedulerBackend::new(engine),
+        );
+        let scheduler_shutdown_rx = shutdown_rx.clone();
+        let _scheduler_mgr = Arc::new(parking_lot::RwLock::new(
+            nova_scheduler::SchedulerManager::new(backend, scheduler_cfg, scheduler_shutdown_rx),
+        ));
+    }
+    tracing::info!("Scheduler manager initialized");
 
     println!();
     println!("  ╔══════════════════════════════════════╗");

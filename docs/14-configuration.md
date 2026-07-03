@@ -663,6 +663,20 @@ struct DlqConfig {
     retention_seconds: u64,                     // Default: 2592000 (30 days)
     max_retry_per_entry: u32,                   // Default: 3
 }
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_QUEUE_DEFAULT_MESSAGE_TIMEOUT_SECONDS` | `60` | `queue.default.message_timeout_seconds` |
+| `NOVA_QUEUE_DEFAULT_MAX_MESSAGE_SIZE` | `131072` | `queue.default.max_message_size` |
+| `NOVA_QUEUE_DEFAULT_MAX_DELIVERY_ATTEMPTS` | `5` | `queue.default.max_delivery_attempts` |
+| `NOVA_QUEUE_DEFAULT_LONG_POLL_WAIT_SECONDS` | `30` | `queue.default.long_poll_wait_seconds` |
+| `NOVA_QUEUE_DEFAULT_BATCH_SIZE` | `20` | `queue.default.batch_size` |
+| `NOVA_QUEUE_DEFAULT_RETENTION_SECONDS` | `1209600` | `queue.default.retention_seconds` |
+| `NOVA_QUEUE_DEFAULT_DELIVERY_SEMANTICS` | `at_most_once` | `queue.default.delivery_semantics` |
+| `NOVA_QUEUE_DEAD_LETTER_MAX_ENTRIES` | `50000` | `queue.dead_letter.max_entries` |
+| `NOVA_QUEUE_DEAD_LETTER_RETENTION_SECONDS` | `5184000` | `queue.dead_letter.retention_seconds` |
 ```
 
 ### 6.10 Scheduler Configuration
@@ -687,6 +701,17 @@ struct SchedulerConfig {
     /// Enable/disable scheduler
     enabled: bool,                              // Default: true
 }
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_SCHEDULER_TICK_MS` | `500` | `scheduler.tick_ms` |
+| `NOVA_SCHEDULER_MAX_JOBS` | `50000` | `scheduler.max_jobs` |
+| `NOVA_SCHEDULER_DEFAULT_JOB_TIMEOUT_SECONDS` | `7200` | `scheduler.default_job_timeout_seconds` |
+| `NOVA_SCHEDULER_HISTORY_RETENTION_SECONDS` | `2592000` | `scheduler.history_retention_seconds` |
+| `NOVA_SCHEDULER_TIMEZONE` | `America/New_York` | `scheduler.timezone` |
+| `NOVA_SCHEDULER_ENABLED` | `false` | `scheduler.enabled` |
 ```
 
 ### 6.11 Search Configuration
@@ -971,6 +996,28 @@ struct CookieConfig {
     same_site: String,                          // Default: "lax" (Strict, Lax, None)
     max_age_seconds: Option<u32>,               // Default: None (session cookie)
 }
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_AUTH_BACKEND` | `oidc` | `auth.backend` |
+| `NOVA_AUTH_ENABLED` | `false` | `auth.enabled` |
+| `NOVA_AUTH_INTERNAL_PASSWORD_HASHING` | `bcrypt` | `auth.internal.password_hashing` |
+| `NOVA_AUTH_INTERNAL_ARGON2_MEMORY_COST_KB` | `4096` | `auth.internal.argon2.memory_cost_kb` |
+| `NOVA_AUTH_INTERNAL_ARGON2_TIME_COST` | `3` | `auth.internal.argon2.time_cost` |
+| `NOVA_AUTH_INTERNAL_PASSWORD_POLICY_MIN_LENGTH` | `12` | `auth.internal.password_policy.min_length` |
+| `NOVA_AUTH_INTERNAL_LOCKOUT_MAX_ATTEMPTS` | `10` | `auth.internal.lockout.max_attempts` |
+| `NOVA_AUTH_INTERNAL_LOCKOUT_DURATION_SECONDS` | `1800` | `auth.internal.lockout.lockout_duration_seconds` |
+| `NOVA_AUTH_JWT_ALGORITHM` | `ES256` | `auth.jwt.algorithm` |
+| `NOVA_AUTH_JWT_ACCESS_TOKEN_TTL_SECONDS` | `7200` | `auth.jwt.access_token_ttl_seconds` |
+| `NOVA_AUTH_JWT_REFRESH_TOKEN_TTL_SECONDS` | `5184000` | `auth.jwt.refresh_token_ttl_seconds` |
+| `NOVA_AUTH_JWT_ISSUER` | `my-nova` | `auth.jwt.issuer` |
+| `NOVA_AUTH_SESSION_BACKEND` | `memory` | `auth.session.backend` |
+| `NOVA_AUTH_SESSION_TTL_SECONDS` | `43200` | `auth.session.ttl_seconds` |
+| `NOVA_AUTH_SESSION_COOKIE_NAME` | `my_session` | `auth.session.cookie.name` |
+| `NOVA_AUTH_SESSION_COOKIE_SECURE` | `true` | `auth.session.cookie.secure` |
+| `NOVA_AUTH_SESSION_COOKIE_SAME_SITE` | `strict` | `auth.session.cookie.same_site` |
 ```
 
 ### 6.15 API Configuration

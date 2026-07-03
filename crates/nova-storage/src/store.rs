@@ -446,6 +446,60 @@ impl Store {
     }
 }
 
+/// Safe wrapper that makes Store usable as a StorageEngine.
+/// Store's internal BTree uses Cell for caching but its &self API is designed
+/// for concurrent access; the Cell is used only for best-effort caching.
+pub struct StorageEngineStore {
+    inner: Arc<Store>,
+}
+
+impl StorageEngineStore {
+    pub fn new(store: Arc<Store>) -> Self {
+        Self { inner: store }
+    }
+
+    pub fn inner(&self) -> &Store {
+        &self.inner
+    }
+}
+
+unsafe impl Send for StorageEngineStore {}
+unsafe impl Sync for StorageEngineStore {}
+
+impl nova_core::StorageEngine for StorageEngineStore {
+    fn get(&self, key: &nova_core::Key) -> nova_core::Result<Option<nova_core::Value>> {
+        Ok(self.inner.get(key)?)
+    }
+
+    fn set(&self, key: &nova_core::Key, value: nova_core::Value) -> nova_core::Result<()> {
+        Ok(self.inner.set(key.clone(), value)?)
+    }
+
+    fn delete(&self, key: &nova_core::Key) -> nova_core::Result<bool> {
+        Ok(self.inner.delete(key)?)
+    }
+
+    fn scan(&self, range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+        Ok(self.inner.scan(range)?)
+    }
+
+    fn batch(&self, ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {
+        let store_ops: Vec<WriteOperation> = ops.into_iter().map(|op| match op {
+            nova_core::WriteOperation::Set { key, value } => WriteOperation::Set { key, value },
+            nova_core::WriteOperation::Delete { key } => WriteOperation::Delete { key },
+        }).collect();
+        Ok(self.inner.batch(store_ops)?)
+    }
+
+    fn flush(&self) -> nova_core::Result<()> {
+        Ok(self.inner.flush()?)
+    }
+
+    fn sync(&self) -> nova_core::Result<()> {
+        Ok(self.inner.sync()?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1757,7 +1757,7 @@ sequenceDiagram
 
 | Metric | Target | Notes |
 |--------|--------|-------|
-| Unit test suite time (CI-small) | < 5 minutes | ~1236 tests across library and binary |
+| Unit test suite time (CI-small) | < 5 minutes | ~1359 tests across library and binary |
 | Integration test suite time (CI-small) | < 10 minutes | ~500 integration tests |
 | E2E smoke tests | < 5 minutes | 20 critical path scenarios |
 | Full E2E suite (nightly) | < 60 minutes | 200+ scenarios |
@@ -1907,11 +1907,11 @@ Fuzz crash triage:
 | Networking | 90% line, 85% branch | Connection handling, TLS, HTTP parsing, WebSocket |
 | Configuration | 95% line, 90% branch | Parsing, validation, merging, hot-reload |
 | Cache | 95% line, 90% branch | Set/get/delete, TTL, eviction, LRU, LFU (43 tests) |
-| Queue | 95% line, 90% branch | Enqueue, dequeue, TTR, delay, dead letter, priority |
-| Scheduler | 95% line, 90% branch | Cron parsing, job execution, retry, concurrency |
+| Queue | 95% line, 90% branch | Enqueue, dequeue, TTR, delay, dead letter, priority (21 tests) |
+| Scheduler | 95% line, 90% branch | Cron parsing, job execution, retry, concurrency (27 tests) |
 | Search | 95% line, 90% branch | Indexing, querying, scoring, facets, tokenization (55 tests) |
 | Blob Storage | 95% line, 90% branch | Upload, download, streaming, versioning, metadata (37 tests) |
-| Authentication | 95% line, 90% branch | Login, password hashing, token generation, MFA |
+| Authentication | 95% line, 90% branch | Login, password hashing, token generation, MFA (75 tests) |
 | SQL Layer | 90% line, 85% branch | SQL parsing, query planning, optimization, execution (37 tests) |
 | REST API | 90% line, 85% branch | Request handling, validation, routing, error formatting |
 | CLI | 80% line, 75% branch | Command parsing, argument validation, subcommand dispatch |
@@ -1943,7 +1943,27 @@ The following test types were introduced with the Phase 3 crates (nova-cache, no
 | Constraint enforcement tests | nova-sql | Verify NOT NULL, UNIQUE, CHECK, FOREIGN KEY constraints reject invalid mutations, constraint error messages, deferrable constraint semantics |
 | Unicode normalization tests | nova-sql | Verify NFC/NFD normalization on VARCHAR columns, collation-aware ordering for UTF-8 strings, Unicode identifier support in SQL |
 
-### 14.4 E2E Test Scenarios
+### 14.4 Phase 4 — Async Subsystem Test Types
+
+The following test types were introduced with the Phase 4 crates (nova-queue, nova-scheduler, nova-auth):
+
+| Test Type | Crate | Description |
+|-----------|-------|-------------|
+| Visibility timeout tests | nova-queue | Verify message becomes visible after timeout expires, extend-visibility-time API, max receive count triggers DLQ |
+| Delayed message tests | nova-queue | Verify messages with delay are not visible before delay elapses, delay accuracy under clock skew, batch delay with mixed delays |
+| Dead letter queue tests | nova-queue | Verify messages exceeding max delivery attempts move to DLQ, DLQ retention and replay, DLQ max entries enforcement |
+| Concurrent consumer tests | nova-queue | Verify multiple consumers don't receive same message, fair distribution, consumer disconnect and rebalance |
+| Cron expression tests | nova-scheduler | Verify standard cron (5-field) parsing, extended cron (6-field with seconds), invalid cron rejection, cron with timezone offsets |
+| Job execution tests | nova-scheduler | Verify one-shot job executes at scheduled time, recurring job executes at correct intervals, job cancellation before execution |
+| Retry with backoff tests | nova-scheduler | Verify exponential backoff, max retries enforcement, backoff reset after success, retry with jitter |
+| Concurrency policy tests | nova-scheduler | Verify max-concurrent-jobs limit, job queuing when at capacity, priority-based job ordering |
+| Password hashing tests | nova-auth | Verify Argon2id hash format validation, hash verification with correct/incorrect passwords, hash upgrade on login |
+| JWT token tests | nova-auth | Verify access token generation and validation, refresh token rotation, token expiry enforcement, RS256 signing verification |
+| Session management tests | nova-auth | Verify session creation from token, session expiry and cleanup, session invalidation on logout, concurrent session limits |
+| OIDC integration tests | nova-auth | Verify OIDC discovery document parsing, token exchange, ID token validation, JWKS key rotation |
+| RBAC tests | nova-auth | Verify role-based access control, permission inheritance, deny-override semantics, role hierarchy |
+
+### 14.5 E2E Test Scenarios
 
 ```rust
 /// Critical path E2E scenarios (run on every PR)
@@ -1994,7 +2014,7 @@ const FULL_SCENARIOS: &[&str] = &[
 ];
 ```
 
-### 14.5 Dashboard Test Scenarios
+### 14.6 Dashboard Test Scenarios
 
 ```typescript
 // Dashboard E2E test scenarios (Playwright)
@@ -2057,7 +2077,7 @@ const DASHBOARD_E2E_SCENARIOS = [
 ];
 ```
 
-### 14.6 Coverage Enforcement
+### 14.7 Coverage Enforcement
 
 ```rust
 /// Coverage gate configuration
@@ -2090,7 +2110,7 @@ const WARNING_GATES: &[CoverageDomain] = &[
 ];
 ```
 
-### 14.7 Test Data Management
+### 14.8 Test Data Management
 
 ```rust
 /// Data lifecycle for test fixtures
@@ -2145,7 +2165,7 @@ impl TestDataManager {
 }
 ```
 
-### 14.8 Benchmark Test Infrastructure
+### 14.9 Benchmark Test Infrastructure
 
 (Detailed in Document 28: Benchmark Strategy. This section covers the test infrastructure used by benchmark tests.)
 

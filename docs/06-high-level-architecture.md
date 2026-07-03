@@ -145,6 +145,8 @@ Nova Runtime is organized into five strict layers. Each layer may only depend on
 
 **Dependency rule:** A component in layer N may import and call components from layer N or higher-numbered layers (deeper in the stack). It may NEVER import from a lower-numbered layer. This prevents cycles and ensures the execution pipeline is always the entry point.
 
+**Phase 4 completion (2026-07-03):** Layer 4 (Subsystems) was extended with three async subsystems — Queue Engine (`nova-queue`), Scheduler Engine (`nova-scheduler`), and AuthN/AuthZ Service (`nova-auth`). All three integrate with the execution pipeline (Layer 3) via the standard `Subsystem` trait and use the unified storage engine, object model, and event system (Layer 5).
+
 ### 5.3 The Four Unification Principles
 
 #### 5.3.1 One Storage Engine

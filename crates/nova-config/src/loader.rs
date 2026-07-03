@@ -183,6 +183,8 @@ impl ConfigLoader {
             blob: overlay.blob,
             search: overlay.search,
             sql: overlay.sql,
+            queue: overlay.queue,
+            scheduler: overlay.scheduler,
         }
     }
 
@@ -259,11 +261,13 @@ fn apply_env_to_section(config: &mut Config, section: &str, field_path: &str, va
         "execution" => apply_env_execution(&mut config.execution, field_path, value, &val_str),
         "auth" => apply_env_auth(&mut config.auth, field_path, value, &val_str),
         "security" => apply_env_security(&mut config.security, field_path, value, &val_str),
-        "cache" => apply_env_cache(&mut config.cache, field_path, value, &val_str),
-        "blob" => apply_env_blob(&mut config.blob, field_path, value, &val_str),
-        "search" => apply_env_search(&mut config.search, field_path, value, &val_str),
-        "sql" => apply_env_sql(&mut config.sql, field_path, value, &val_str),
-        _ => {
+            "cache" => apply_env_cache(&mut config.cache, field_path, value, &val_str),
+            "blob" => apply_env_blob(&mut config.blob, field_path, value, &val_str),
+            "search" => apply_env_search(&mut config.search, field_path, value, &val_str),
+            "sql" => apply_env_sql(&mut config.sql, field_path, value, &val_str),
+            "queue" => apply_env_queue(&mut config.queue, field_path, value, &val_str),
+            "scheduler" => apply_env_scheduler(&mut config.scheduler, field_path, value, &val_str),
+            _ => {
             tracing::warn!("Unknown config section '{}' from env var", section);
         }
     }
@@ -403,15 +407,39 @@ fn apply_env_execution(cfg: &mut ExecutionConfig, field: &str, _val: &toml::Valu
 fn apply_env_auth(cfg: &mut AuthConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
         "session_ttl" | "ttl_seconds" => { if let Ok(n) = val_str.parse::<u32>() { cfg.session.ttl_seconds = n; } }
+        "max_active_sessions" => { if let Ok(n) = val_str.parse::<u32>() { cfg.session.max_active_sessions = n; } }
+        "token_length_bytes" => { if let Ok(n) = val_str.parse::<usize>() { cfg.session.token_length_bytes = n; } }
+        "session_cache_size" | "cache_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.session.cache_size = n; } }
         "password_min_length" | "min_length" => {
             if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_length = n; }
         }
         "password_max_length" | "max_length" => {
             if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.max_length = n; }
         }
+        "password_min_lowercase" | "min_lowercase" => {
+            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_lowercase = n; }
+        }
+        "password_min_uppercase" | "min_uppercase" => {
+            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_uppercase = n; }
+        }
+        "password_min_digits" | "min_digits" => {
+            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_digits = n; }
+        }
+        "password_min_special" | "min_special" => {
+            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_special = n; }
+        }
+        "bcrypt_cost" => { if let Ok(n) = val_str.parse::<u32>() { cfg.internal.bcrypt_cost = n; } }
         "lockout_max_attempts" | "max_attempts" => {
             if let Ok(n) = val_str.parse::<u8>() { cfg.internal.lockout.max_attempts = n; }
         }
+        "lockout_duration_secs" | "duration_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() { cfg.internal.lockout.duration_secs = n; }
+        }
+        "enable_brute_force_detection" | "brute_force_enabled" => {
+            if let Ok(b) = val_str.parse::<bool>() { cfg.internal.enable_brute_force_detection = b; }
+        }
+        "mfa_issuer" | "issuer" => cfg.internal.mfa.issuer = val_str.to_string(),
+        "mfa_window" | "window" => { if let Ok(n) = val_str.parse::<u8>() { cfg.internal.mfa.window = n; } }
         _ => { tracing::warn!("Unknown auth config field '{}'", field); }
     }
 }
@@ -469,6 +497,40 @@ fn apply_env_sql(cfg: &mut SQLConfig, field: &str, _val: &toml::Value, val_str: 
         "max_columns" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_columns = n; } }
         "default_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_limit = n; } }
         _ => { tracing::warn!("Unknown sql config field '{}'", field); }
+    }
+}
+
+fn apply_env_queue(cfg: &mut QueueConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "max_queues" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_queues = n; } }
+        "max_messages_per_queue" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_messages_per_queue = n; } }
+        "max_message_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_message_size = n; } }
+        "default_visibility_timeout_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_visibility_timeout_secs = n; } }
+        "message_ttl_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.message_ttl_secs = n; } }
+        "max_receive_count" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_receive_count = n; } }
+        "scanner_interval_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.scanner_interval_ms = n; } }
+        "backpressure_threshold" => { if let Ok(f) = val_str.parse::<f64>() { cfg.backpressure_threshold = f; } }
+        "dlq_max_entries" => { if let Ok(n) = val_str.parse::<usize>() { cfg.dlq_max_entries = n; } }
+        "dlq_max_retries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.dlq_max_retries = n; } }
+        "enable_dlq" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_dlq = b; } }
+        "enable_scanners" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_scanners = b; } }
+        _ => { tracing::warn!("Unknown queue config field '{}'", field); }
+    }
+}
+
+fn apply_env_scheduler(cfg: &mut SchedulerConfig, field: &str, _val: &toml::Value, val_str: &str) {
+    match field {
+        "time_wheel_tick_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.time_wheel_tick_ms = n; } }
+        "time_wheel_slots" => { if let Ok(n) = val_str.parse::<usize>() { cfg.time_wheel_slots = n; } }
+        "priority_queue_tick_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.priority_queue_tick_ms = n; } }
+        "max_jobs_per_queue" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_jobs_per_queue = n; } }
+        "max_concurrent_jobs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent_jobs = n; } }
+        "default_job_timeout_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_job_timeout_secs = n; } }
+        "default_max_retries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_max_retries = n; } }
+        "default_retry_delay_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_retry_delay_secs = n; } }
+        "enable_startup_recovery" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_startup_recovery = b; } }
+        "enable_catch_up" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_catch_up = b; } }
+        _ => { tracing::warn!("Unknown scheduler config field '{}'", field); }
     }
 }
 

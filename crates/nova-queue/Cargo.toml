@@ -1,0 +1,22 @@
+[package]
+name = "nova-queue"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nova-core = { path = "../nova-core" }
+nova-storage = { path = "../nova-storage" }
+async-trait = "0.1"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"

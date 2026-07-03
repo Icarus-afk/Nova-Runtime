@@ -16,6 +16,9 @@ members = [
     "crates/nova-blob",
     "crates/nova-sql",
     "crates/novad",
+    "crates/nova-queue",
+    "crates/nova-scheduler",
+    "crates/nova-auth",
 ]
 
 [workspace.package]

@@ -1339,6 +1339,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-auth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "hex",
+ "nova-cache",
+ "nova-core",
+ "nova-executor",
+ "nova-security",
+ "parking_lot",
+ "proptest",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "nova-blob"
 version = "0.1.0"
 dependencies = [
@@ -1497,6 +1523,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-queue"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "nova-core",
+ "nova-storage",
+ "parking_lot",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "nova-scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "nova-core",
+ "nova-storage",
+ "parking_lot",
+ "proptest",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "nova-search"
 version = "0.1.0"
 dependencies = [
@@ -1583,12 +1650,15 @@ dependencies = [
  "clap",
  "nix",
  "nova-api",
+ "nova-auth",
  "nova-blob",
  "nova-cache",
  "nova-config",
  "nova-core",
  "nova-executor",
  "nova-memory",
+ "nova-queue",
+ "nova-scheduler",
  "nova-search",
  "nova-sql",
  "nova-storage",
