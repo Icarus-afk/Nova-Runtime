@@ -4,11 +4,17 @@ use super::ast::{BoolOperator, Query};
 use crate::analysis::tokenizer::StandardTokenizer;
 use crate::analysis::stemmer::PorterStemmer;
 use crate::error::Result;
+use crate::error::SearchError;
 use crate::facet::FacetResult;
 use crate::fuzzy::levenshtein::find_fuzzy_matches;
 use crate::index::segment::InMemorySegment;
 use crate::scoring::bm25::BM25Scorer;
 use crate::scoring::collector::ScoredDocument;
+use unicode_normalization::UnicodeNormalization;
+
+fn normalize_term(value: &str) -> String {
+    value.nfc().collect::<String>()
+}
 
 pub struct QueryExecutor {
     segment: InMemorySegment,
@@ -18,6 +24,11 @@ pub struct QueryExecutor {
 impl QueryExecutor {
     pub fn new(segment: InMemorySegment) -> Self {
         let scorer = BM25Scorer::new(&segment);
+        QueryExecutor { segment, scorer }
+    }
+
+    pub fn with_config(segment: InMemorySegment, k1: f64, b: f64) -> Self {
+        let scorer = BM25Scorer::with_config(&segment, k1, b);
         QueryExecutor { segment, scorer }
     }
 
@@ -82,7 +93,8 @@ impl QueryExecutor {
                 } else {
                     self.segment.all_text_fields()
                 };
-                let stemmed = PorterStemmer::stem(value);
+                let normalized = normalize_term(value);
+                let stemmed = PorterStemmer::stem(&normalized);
                 for f in &fields {
                     if let Some(postings) = self.segment.inverted_index.get(&(f.to_string(), stemmed.clone())) {
                         let avg_field_len = self.segment.avg_field_length(f);
@@ -102,7 +114,8 @@ impl QueryExecutor {
                 }
             }
             Query::Phrase { field, value, slop: _ } => {
-                let stemmed_terms: Vec<String> = StandardTokenizer::tokenize(value)
+                let normalized_value = normalize_term(value);
+                let stemmed_terms: Vec<String> = StandardTokenizer::tokenize(&normalized_value)
                     .into_iter()
                     .map(|t| PorterStemmer::stem(&t.term))
                     .collect();
@@ -173,7 +186,8 @@ impl QueryExecutor {
                 } else {
                     self.segment.all_text_fields()
                 };
-                let stemmed = PorterStemmer::stem(value);
+                let normalized = normalize_term(value);
+                let stemmed = PorterStemmer::stem(&normalized);
                 for f in &fields {
                     let prefix = (f.to_string(), stemmed.clone());
                     for ((field_name, term), postings) in &self.segment.inverted_index {
@@ -206,7 +220,8 @@ impl QueryExecutor {
                 } else {
                     self.segment.all_text_fields()
                 };
-                let stemmed = PorterStemmer::stem(value);
+                let normalized = normalize_term(value);
+                let stemmed = PorterStemmer::stem(&normalized);
                 for f in &fields {
                     let candidates: Vec<String> = self
                         .segment
@@ -240,7 +255,7 @@ impl QueryExecutor {
             Query::Range { field, lower, upper, inclusive } => {
                 if let Some(postings) = self.segment.field_values.get(field) {
                     for (doc_id_str, val) in postings {
-                        let doc_id: u64 = doc_id_str.parse().unwrap_or(0);
+                        let doc_id: u64 = doc_id_str.parse().map_err(|e| SearchError::Internal(format!("invalid doc_id in field_values: {}", e)))?;
                         if Self::in_range(val, lower, upper, *inclusive) {
                             *scores.entry(doc_id).or_insert(0.0) += boost;
                         }
@@ -300,7 +315,7 @@ impl QueryExecutor {
             },
             Query::MatchAll => {
                 for (doc_id_str, _doc) in &self.segment.stored_documents {
-                    let doc_id: u64 = doc_id_str.parse().unwrap_or(0);
+                    let doc_id: u64 = doc_id_str.parse().map_err(|e| SearchError::Internal(format!("invalid doc_id in stored_documents: {}", e)))?;
                     scores.insert(doc_id, 1.0);
                 }
             }

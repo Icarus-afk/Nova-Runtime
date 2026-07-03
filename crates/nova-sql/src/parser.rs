@@ -2,14 +2,23 @@ use crate::ast::*;
 use crate::error::{Result, SQLError};
 use crate::lexer::Token;
 
+const MAX_NESTING_DEPTH: usize = 64;
+
 pub struct Parser {
     tokens: Vec<Token>,
+    positions: Vec<(usize, usize)>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+    pub fn new(tokens: Vec<Token>, positions: Vec<(usize, usize)>) -> Self {
+        Parser {
+            tokens,
+            positions,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     pub fn parse_program(&mut self) -> Result<Vec<Statement>> {
@@ -49,19 +58,16 @@ impl Parser {
                 let dt = self.parse_drop_table()?;
                 Ok(Statement::DropTable(dt))
             }
-            t => Err(SQLError::Syntax(format!(
+            t => Err(self.err_syntax(format!(
                 "unexpected token at start of statement: {:?}",
                 t
             ))),
         }
     }
 
-    // SELECT select_list FROM table_ref [WHERE expr]
-    //   [GROUP BY expr [, ...]] [HAVING expr]
-    //   [ORDER BY expr [ASC|DESC] [, ...]]
-    //   [LIMIT n] [OFFSET n]
     fn parse_select(&mut self) -> Result<SelectStatement> {
         self.expect(Token::Select)?;
+        let distinct = self.eat_if(Token::Distinct);
         let select_list = self.parse_select_list()?;
         self.expect(Token::From)?;
         let from = self.parse_table_ref()?;
@@ -98,6 +104,7 @@ impl Parser {
             None
         };
         Ok(SelectStatement {
+            distinct,
             select_list,
             from,
             where_clause,
@@ -123,7 +130,6 @@ impl Parser {
         } else if self.peek_is_identifier() {
             let saved = self.pos;
             let ident = self.parse_identifier()?;
-            // Check if the next token suggests this is an alias vs. part of a larger expression
             match self.peek() {
                 Token::Comma | Token::From | Token::Where
                 | Token::Group | Token::Order | Token::Having
@@ -172,10 +178,20 @@ impl Parser {
         } else {
             true
         };
-        Ok(OrderByExpr { expr, asc })
+        let nulls_first = if self.eat_if(Token::Nulls) {
+            if self.eat_if(Token::First) {
+                Some(true)
+            } else if self.eat_if(Token::Last) {
+                Some(false)
+            } else {
+                return Err(self.err_syntax("expected FIRST or LAST after NULLS".to_string()));
+            }
+        } else {
+            None
+        };
+        Ok(OrderByExpr { expr, asc, nulls_first })
     }
 
-    // INSERT INTO table_ref [(col, ...)] VALUES (val, ...) [, (val, ...)]
     fn parse_insert(&mut self) -> Result<InsertStatement> {
         self.expect(Token::Insert)?;
         self.expect(Token::Into)?;
@@ -203,7 +219,6 @@ impl Parser {
         Ok(exprs)
     }
 
-    // UPDATE table SET col = expr [, col = expr] [WHERE expr]
     fn parse_update(&mut self) -> Result<UpdateStatement> {
         self.expect(Token::Update)?;
         let table = self.parse_table_ref()?;
@@ -228,7 +243,6 @@ impl Parser {
         Ok(Assignment { column, value })
     }
 
-    // DELETE FROM table [WHERE expr]
     fn parse_delete(&mut self) -> Result<DeleteStatement> {
         self.expect(Token::Delete)?;
         self.expect(Token::From)?;
@@ -244,7 +258,6 @@ impl Parser {
         })
     }
 
-    // CREATE TABLE table (col_def, ...)
     fn parse_create_table(&mut self) -> Result<CreateTableStatement> {
         self.expect(Token::Create)?;
         self.expect(Token::Table)?;
@@ -258,24 +271,36 @@ impl Parser {
     fn parse_column_def(&mut self) -> Result<ColumnDef> {
         let name = self.parse_identifier()?;
         let sql_type = self.parse_sql_type()?;
-        let nullable = if self.eat_if(Token::Not) {
-            self.expect(Token::Null)?;
-            false
-        } else if self.eat_if(Token::Null) {
-            true
-        } else {
-            true
-        };
-        let default = if self.eat_if(Token::Default) {
-            Some(self.parse_literal()?)
-        } else {
-            None
-        };
+        let mut nullable = true;
+        let mut unique = false;
+        let mut is_primary_key = false;
+        let mut default = None;
+
+        loop {
+            if self.eat_if(Token::Not) {
+                self.expect(Token::Null)?;
+                nullable = false;
+            } else if self.eat_if(Token::Null) {
+                nullable = true;
+            } else if self.eat_if(Token::Default) {
+                default = Some(self.parse_literal()?);
+            } else if self.eat_if(Token::Primary) {
+                self.expect(Token::Key)?;
+                is_primary_key = true;
+                nullable = false;
+            } else if self.eat_if(Token::Unique) {
+                unique = true;
+            } else {
+                break;
+            }
+        }
         Ok(ColumnDef {
             name,
             sql_type,
             nullable,
             default,
+            unique,
+            is_primary_key,
         })
     }
 
@@ -286,11 +311,10 @@ impl Parser {
             "float" | "double" | "real" => Ok(SQLType::Float),
             "text" | "varchar" | "string" => Ok(SQLType::Text),
             "bool" | "boolean" => Ok(SQLType::Boolean),
-            other => Err(SQLError::Syntax(format!("unknown type: {}", other))),
+            other => Err(self.err_syntax(format!("unknown type: {}", other))),
         }
     }
 
-    // DROP TABLE table
     fn parse_drop_table(&mut self) -> Result<DropTableStatement> {
         self.expect(Token::Drop)?;
         self.expect(Token::Table)?;
@@ -298,9 +322,16 @@ impl Parser {
         Ok(DropTableStatement { table })
     }
 
-    // Expression parsing with precedence climbing
     fn parse_expression(&mut self) -> Result<Expr> {
-        self.parse_or()
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(SQLError::QueryTooComplex(
+                "max nesting depth exceeded".to_string(),
+            ));
+        }
+        self.depth += 1;
+        let result = self.parse_or();
+        self.depth -= 1;
+        result
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
@@ -477,6 +508,12 @@ impl Parser {
             self.expect(Token::RParen)?;
             return Ok(expr);
         }
+        if self.eat_if(Token::Case) {
+            return self.parse_case();
+        }
+        if self.eat_if(Token::Cast) {
+            return self.parse_cast();
+        }
         if let Some(token) = self.tokens.get(self.pos).cloned() {
             match token {
                 Token::Count | Token::Sum | Token::Avg | Token::Min | Token::Max => {
@@ -508,15 +545,74 @@ impl Parser {
         if self.peek_is_identifier() {
             let name = self.parse_identifier()?;
             if self.eat_if(Token::LParen) {
-                // Function call
                 let args = self.parse_comma_separated(Self::parse_expression)?;
                 self.expect(Token::RParen)?;
                 return Ok(Expr::Function { name, args });
             }
-            // Could be followed by IS NULL/IN/BETWEEN/LIKE
+            // Handle :: cast syntax
+            if self.eat_if(Token::ColonColon) {
+                let target_type = self.parse_sql_type()?;
+                return Ok(Expr::Cast {
+                    expr: Box::new(Expr::Column(name)),
+                    target_type,
+                });
+            }
             let mut expr = Expr::Column(name);
-            // Postfix operators
-            if self.eat_if(Token::Is) {
+            // Handle NOT IN / NOT BETWEEN / NOT LIKE / NOT ILIKE
+            let saved = self.pos;
+            if self.eat_if(Token::Not) {
+                if self.eat_if(Token::In) {
+                    self.expect(Token::LParen)?;
+                    let list = self.parse_comma_separated(Self::parse_expression)?;
+                    self.expect(Token::RParen)?;
+                    expr = Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(Expr::In { expr: Box::new(expr), list }),
+                    };
+                } else if self.eat_if(Token::Between) {
+                    let low = self.parse_comparison()?;
+                    self.expect(Token::And)?;
+                    let high = self.parse_expression()?;
+                    let between = Expr::Between { expr: Box::new(expr), low: Box::new(low), high: Box::new(high) };
+                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(between) };
+                } else if self.eat_if(Token::Like) {
+                    let pattern = self.parse_expression()?;
+                    let like = Expr::Like { expr: Box::new(expr), pattern: Box::new(pattern) };
+                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(like) };
+                } else if self.eat_if(Token::ILike) {
+                    let pattern = self.parse_expression()?;
+                    let ilike = Expr::ILike { expr: Box::new(expr), pattern: Box::new(pattern) };
+                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(ilike) };
+                } else {
+                    self.pos = saved;
+                    // Check IS / IN / BETWEEN / LIKE / ILIKE normally
+                    if self.eat_if(Token::Is) {
+                        if self.eat_if(Token::Not) {
+                            self.expect(Token::Null)?;
+                            expr = Expr::IsNotNull(Box::new(expr));
+                        } else {
+                            self.expect(Token::Null)?;
+                            expr = Expr::IsNull(Box::new(expr));
+                        }
+                    } else if self.eat_if(Token::In) {
+                        self.expect(Token::LParen)?;
+                        let list = self.parse_comma_separated(Self::parse_expression)?;
+                        self.expect(Token::RParen)?;
+                        expr = Expr::In { expr: Box::new(expr), list };
+                    } else if self.eat_if(Token::Between) {
+                        let low = self.parse_comparison()?;
+                        self.expect(Token::And)?;
+                        let high = self.parse_expression()?;
+                        expr = Expr::Between { expr: Box::new(expr), low: Box::new(low), high: Box::new(high) };
+                    } else if self.eat_if(Token::Like) {
+                        let pattern = self.parse_expression()?;
+                        expr = Expr::Like { expr: Box::new(expr), pattern: Box::new(pattern) };
+                    } else if self.eat_if(Token::ILike) {
+                        let pattern = self.parse_expression()?;
+                        expr = Expr::ILike { expr: Box::new(expr), pattern: Box::new(pattern) };
+                    }
+                }
+            } else if self.eat_if(Token::Is) {
                 if self.eat_if(Token::Not) {
                     self.expect(Token::Null)?;
                     expr = Expr::IsNotNull(Box::new(expr));
@@ -533,7 +629,7 @@ impl Parser {
                     list,
                 };
             } else if self.eat_if(Token::Between) {
-                let low = self.parse_expression()?;
+                let low = self.parse_comparison()?;
                 self.expect(Token::And)?;
                 let high = self.parse_expression()?;
                 expr = Expr::Between {
@@ -547,13 +643,56 @@ impl Parser {
                     expr: Box::new(expr),
                     pattern: Box::new(pattern),
                 };
+            } else if self.eat_if(Token::ILike) {
+                let pattern = self.parse_expression()?;
+                expr = Expr::ILike {
+                    expr: Box::new(expr),
+                    pattern: Box::new(pattern),
+                };
             }
             return Ok(expr);
         }
-        Err(SQLError::Syntax(format!(
+        Err(self.err_syntax(format!(
             "unexpected token: {:?}",
             self.peek()
         )))
+    }
+
+    fn parse_case(&mut self) -> Result<Expr> {
+        let mut whens = Vec::new();
+        let mut else_val = None;
+        loop {
+            if self.eat_if(Token::When) {
+                let cond = self.parse_expression()?;
+                self.expect(Token::Then)?;
+                let result = self.parse_expression()?;
+                whens.push((cond, result));
+            } else if self.eat_if(Token::Else) {
+                else_val = Some(Box::new(self.parse_expression()?));
+            } else if self.eat_if(Token::End) {
+                break;
+            } else {
+                return Err(self.err_syntax(
+                    "expected WHEN, ELSE, or END in CASE expression".to_string(),
+                ));
+            }
+        }
+        if whens.is_empty() {
+            return Err(self.err_syntax("CASE must have at least one WHEN".to_string()));
+        }
+        Ok(Expr::Case { whens, else_val })
+    }
+
+    fn parse_cast(&mut self) -> Result<Expr> {
+        self.expect(Token::LParen)?;
+        let expr = self.parse_expression()?;
+        self.expect(Token::As)?;
+        let target_type = self.parse_sql_type()?;
+        self.expect(Token::RParen)?;
+        Ok(Expr::Cast {
+            expr: Box::new(expr),
+            target_type,
+        })
     }
 
     fn parse_aggregate_function(&mut self) -> Result<Expr> {
@@ -578,7 +717,9 @@ impl Parser {
                 self.advance();
                 "max".to_string()
             }
-            _ => unreachable!(),
+            _ => {
+                return Err(self.err_syntax("expected aggregate function".to_string()));
+            }
         };
         self.expect(Token::LParen)?;
         let args = if self.eat_if(Token::Star) {
@@ -598,11 +739,10 @@ impl Parser {
     }
 
     fn parse_exists(&mut self) -> Result<Expr> {
-        self.advance(); // consume Exists
+        self.advance();
         self.expect(Token::LParen)?;
         let subquery = self.parse_select()?;
         self.expect(Token::RParen)?;
-        // For v1, just treat as a function call
         Ok(Expr::Function {
             name: "exists".to_string(),
             args: vec![Expr::Literal(LiteralValue::String(format!("{:?}", subquery)))],
@@ -613,12 +753,12 @@ impl Parser {
         if s.contains('.') || s.contains('e') || s.contains('E') {
             let val: f64 = s
                 .parse()
-                .map_err(|_| SQLError::Syntax(format!("invalid float: {}", s)))?;
+                .map_err(|_| SQLError::syntax(format!("invalid float: {}", s)))?;
             Ok(Expr::Literal(LiteralValue::Float(val)))
         } else {
             let val: i64 = s
                 .parse()
-                .map_err(|_| SQLError::Syntax(format!("invalid integer: {}", s)))?;
+                .map_err(|_| SQLError::syntax(format!("invalid integer: {}", s)))?;
             Ok(Expr::Literal(LiteralValue::Integer(val)))
         }
     }
@@ -629,7 +769,7 @@ impl Parser {
                 self.advance();
                 Ok(s)
             }
-            t => Err(SQLError::Syntax(format!(
+            t => Err(self.err_syntax(format!(
                 "expected identifier, got {:?}",
                 t
             ))),
@@ -651,19 +791,19 @@ impl Parser {
             if s.contains('.') || s.contains('e') || s.contains('E') {
                 let val: f64 = s
                     .parse()
-                    .map_err(|_| SQLError::Syntax(format!("invalid float: {}", s)))?;
+                    .map_err(|_| SQLError::syntax(format!("invalid float: {}", s)))?;
                 return Ok(LiteralValue::Float(val));
             }
             let val: i64 = s
                 .parse()
-                .map_err(|_| SQLError::Syntax(format!("invalid integer: {}", s)))?;
+                .map_err(|_| SQLError::syntax(format!("invalid integer: {}", s)))?;
             return Ok(LiteralValue::Integer(val));
         }
         if let Token::String(s) = self.peek() {
             self.advance();
             return Ok(LiteralValue::String(s));
         }
-        Err(SQLError::Syntax(format!(
+        Err(self.err_syntax(format!(
             "unexpected token in literal: {:?}",
             self.peek()
         )))
@@ -674,13 +814,11 @@ impl Parser {
             Token::Number(s) => {
                 self.advance();
                 s.parse()
-                    .map_err(|_| SQLError::Syntax(format!("invalid number: {}", s)))
+                    .map_err(|_| SQLError::syntax(format!("invalid number: {}", s)))
             }
-            t => Err(SQLError::Syntax(format!("expected number, got {:?}", t))),
+            t => Err(self.err_syntax(format!("expected number, got {:?}", t))),
         }
     }
-
-    // Helpers
 
     fn peek(&self) -> Token {
         self.tokens
@@ -699,7 +837,7 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(SQLError::Syntax(format!(
+            Err(self.err_syntax(format!(
                 "expected {:?}, got {:?}",
                 expected, actual
             )))
@@ -729,5 +867,10 @@ impl Parser {
             items.push(parser(self)?);
         }
         Ok(items)
+    }
+
+    fn err_syntax(&self, msg: String) -> SQLError {
+        let (start, end) = self.positions.get(self.pos).copied().unwrap_or((0, 0));
+        SQLError::Syntax { message: msg, start, end }
     }
 }

@@ -9,6 +9,10 @@ pub struct BM25Scorer {
 
 impl BM25Scorer {
     pub fn new(segment: &InMemorySegment) -> Self {
+        Self::with_config(segment, 1.2, 0.75)
+    }
+
+    pub fn with_config(segment: &InMemorySegment, k1: f64, b: f64) -> Self {
         let mut avg_field_lengths = std::collections::HashMap::new();
         for (field, lengths) in &segment.field_lengths {
             let total: u64 = lengths.values().sum();
@@ -18,8 +22,8 @@ impl BM25Scorer {
         }
 
         BM25Scorer {
-            k1: 1.2,
-            b: 0.75,
+            k1,
+            b,
             avg_field_lengths,
             total_docs: segment.doc_count,
         }

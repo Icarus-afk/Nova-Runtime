@@ -1,5 +1,6 @@
 use nova_search::document::IndexedDocument;
 use nova_search::manager::SearchManager;
+use nova_search::SearchConfig;
 
 fn make_doc(id: &str, title: &str, body: &str) -> IndexedDocument {
     IndexedDocument::new(id)
@@ -15,7 +16,7 @@ fn make_doc_with_category(id: &str, title: &str, category: &str) -> IndexedDocum
 
 #[test]
 fn test_index_and_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "The quick brown fox", "A fox is quick and brown"))
         .unwrap();
@@ -41,7 +42,7 @@ fn test_index_and_search() {
 
 #[test]
 fn test_phrase_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "hello world", "the quick brown fox jumps"))
         .unwrap();
@@ -55,7 +56,7 @@ fn test_phrase_search() {
 
 #[test]
 fn test_prefix_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "hello world", "running fast"))
         .unwrap();
@@ -69,7 +70,7 @@ fn test_prefix_search() {
 
 #[test]
 fn test_fuzzy_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "color", "The color is red"))
         .unwrap();
@@ -84,7 +85,7 @@ fn test_fuzzy_search() {
 
 #[test]
 fn test_boolean_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "apple pie", "Delicious apple pie recipe"))
         .unwrap();
@@ -112,7 +113,7 @@ fn test_boolean_search() {
 
 #[test]
 fn test_range_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(
             IndexedDocument::new("1")
@@ -141,7 +142,7 @@ fn test_range_search() {
 
 #[test]
 fn test_faceted_search() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc_with_category("1", "fiction book", "fiction"))
         .unwrap();
@@ -166,7 +167,7 @@ fn test_faceted_search() {
 
 #[test]
 fn test_delete_document() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "delete me", "This document will be deleted"))
         .unwrap();
@@ -182,7 +183,7 @@ fn test_delete_document() {
 
 #[test]
 fn test_highlighting() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "highlight me", "This is the text that should be highlighted in search results"))
         .unwrap();
@@ -193,7 +194,7 @@ fn test_highlighting() {
 
 #[test]
 fn test_multiple_fields() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(
             IndexedDocument::new("1")
@@ -227,7 +228,7 @@ fn test_empty_index() {
 
 #[test]
 fn test_large_document() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     let large_text = "word ".repeat(1000) + "needle " + &"word ".repeat(1000);
     manager
         .index_document(IndexedDocument::new("1").add_text("body", &large_text))
@@ -239,8 +240,8 @@ fn test_large_document() {
 }
 
 #[test]
-fn test_concurrent_index_search() {
-    let mut manager = SearchManager::new();
+fn test_index_many_documents() {
+    let manager = SearchManager::new();
     for i in 0..50 {
         let doc = IndexedDocument::new(format!("{}", i)).add_text("body", format!("document number {}", i));
         manager.index_document(doc).unwrap();
@@ -252,7 +253,7 @@ fn test_concurrent_index_search() {
 
 #[test]
 fn test_bm25_scoring() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "cat", "the cat sat on the mat"))
         .unwrap();
@@ -269,7 +270,7 @@ fn test_bm25_scoring() {
 
 #[test]
 fn test_match_all() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "first", "content one"))
         .unwrap();
@@ -283,7 +284,7 @@ fn test_match_all() {
 
 #[test]
 fn test_field_specific_phrase() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(
             IndexedDocument::new("1")
@@ -298,14 +299,14 @@ fn test_field_specific_phrase() {
 
 #[test]
 fn test_delete_nonexistent() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     let result = manager.delete_document("nonexistent");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_fuzzy_with_distance() {
-    let mut manager = SearchManager::new();
+    let manager = SearchManager::new();
     manager
         .index_document(make_doc("1", "hello", "hello world"))
         .unwrap();
@@ -318,4 +319,132 @@ fn test_fuzzy_with_distance() {
 
     let results = manager.search("hell~1", 10).unwrap();
     assert!(!results.is_empty());
+}
+
+#[test]
+fn test_bm25_configurable() {
+    let config = SearchConfig {
+        bm25_k1: 0.5,
+        bm25_b: 0.3,
+        ..SearchConfig::default()
+    };
+    let manager = SearchManager::with_config(config);
+    manager
+        .index_document(IndexedDocument::new("1").add_text("body", "cat cat cat"))
+        .unwrap();
+    manager
+        .index_document(IndexedDocument::new("2").add_text("body", "dog"))
+        .unwrap();
+    let results = manager.search("cat", 10).unwrap();
+    assert!(!results.is_empty());
+    assert!(results.iter().any(|r| r.doc_id == 1));
+}
+
+#[test]
+fn test_pagination() {
+    let manager = SearchManager::new();
+    for i in 0..20 {
+        let doc = IndexedDocument::new(format!("{}", i)).add_text("body", format!("document {}", i));
+        manager.index_document(doc).unwrap();
+    }
+    let page1 = manager.search_with_pagination("document", 5, None).unwrap();
+    assert_eq!(page1.hits.len(), 5);
+    assert_eq!(page1.total_hits, 20);
+    assert!(page1.search_time_ms < 10000);
+    assert!(page1.max_score > 0.0);
+
+    let last = page1.hits.last().unwrap();
+    let cursor = (last.score, last.doc_id);
+    let page2 = manager
+        .search_with_pagination("document", 5, Some(cursor))
+        .unwrap();
+    assert_eq!(page2.hits.len(), 5);
+    for hit in &page2.hits {
+        assert!(
+            hit.score < cursor.0 || (hit.score == cursor.0 && hit.doc_id > cursor.1),
+            "pagination cursor violated"
+        );
+    }
+}
+
+#[test]
+fn test_index_stats() {
+    let manager = SearchManager::new();
+    manager
+        .index_document(
+            IndexedDocument::new("1")
+                .add_text("title", "hello world")
+                .add_text("body", "test document"),
+        )
+        .unwrap();
+    manager
+        .index_document(
+            IndexedDocument::new("2")
+                .add_text("title", "goodbye world")
+                .add_text("body", "another test"),
+        )
+        .unwrap();
+    let stats = manager.stats();
+    assert_eq!(stats.num_docs, 2);
+    assert!(stats.num_terms > 0);
+    assert!(stats.field_count >= 2);
+}
+
+#[test]
+fn test_unicode_normalization() {
+    let manager = SearchManager::new();
+    manager
+        .index_document(
+            IndexedDocument::new("1")
+                .add_text("title", "café"),
+        )
+        .unwrap();
+    let nfd_query: String = "cafe\u{301}".to_string();
+    let results = manager.search(&nfd_query, 10).unwrap();
+    assert!(!results.is_empty(), "NFD query should match NFC stored text");
+}
+
+#[test]
+fn test_document_update() {
+    let manager = SearchManager::new();
+    manager
+        .index_document(
+            IndexedDocument::new("1")
+                .add_text("title", "original title")
+                .add_text("body", "original body"),
+        )
+        .unwrap();
+    let results = manager.search("original", 10).unwrap();
+    assert!(!results.is_empty());
+
+    manager
+        .update_document("1", IndexedDocument::new("1").add_text("title", "updated title").add_text("body", "updated body"))
+        .unwrap();
+
+    let old_results = manager.search("original", 10).unwrap();
+    assert!(old_results.is_empty(), "old content should be gone after update");
+
+    let new_results = manager.search("updated", 10).unwrap();
+    assert!(!new_results.is_empty(), "new content should be found after update");
+}
+
+#[test]
+fn test_concurrent_index_search() {
+    let manager = std::sync::Arc::new(SearchManager::new());
+    let mut handles = Vec::new();
+    for i in 0..10 {
+        let mgr = manager.clone();
+        handles.push(std::thread::spawn(move || {
+            for j in 0..10 {
+                let doc = IndexedDocument::new(format!("{}-{}", i, j))
+                    .add_text("body", format!("concurrent document {} from thread {}", j, i));
+                mgr.index_document(doc).unwrap();
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    let search_results = manager.search("concurrent", 200).unwrap();
+    assert_eq!(search_results.len(), 100);
 }

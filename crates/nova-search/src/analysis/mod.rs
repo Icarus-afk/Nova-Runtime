@@ -5,6 +5,7 @@ pub mod stop_words;
 use tokenizer::{Token, TokenizerKind};
 use stemmer::PorterStemmer;
 use stop_words::StopWordsFilter;
+use unicode_normalization::UnicodeNormalization;
 
 pub struct AnalyzerPipeline {
     tokenizer_kind: TokenizerKind,
@@ -33,7 +34,8 @@ impl AnalyzerPipeline {
     }
 
     pub fn analyze(&self, text: &str) -> Vec<Token> {
-        let tokens = tokenizer::tokenize(text, self.tokenizer_kind);
+        let normalized: String = text.nfc().collect();
+        let tokens = tokenizer::tokenize(&normalized, self.tokenizer_kind);
         let tokens = self.stop_words.filter(tokens);
         tokens
             .into_iter()
@@ -48,7 +50,8 @@ impl AnalyzerPipeline {
     }
 
     pub fn analyze_query(&self, text: &str) -> Vec<Token> {
-        let tokens = tokenizer::tokenize(text, self.tokenizer_kind);
+        let normalized: String = text.nfc().collect();
+        let tokens = tokenizer::tokenize(&normalized, self.tokenizer_kind);
         tokens
             .into_iter()
             .map(|t| {

@@ -13,6 +13,7 @@ use crate::metadata::BlobMetadata;
 
 pub struct FilesystemBackend {
     data_dir: PathBuf,
+    chunk_nesting_depth: usize,
     _lock: Arc<RwLock<()>>,
 }
 
@@ -20,6 +21,7 @@ impl FilesystemBackend {
     pub fn new(config: &BlobConfig) -> Self {
         Self {
             data_dir: PathBuf::from(&config.data_dir),
+            chunk_nesting_depth: config.chunk_nesting_depth,
             _lock: Arc::new(RwLock::new(())),
         }
     }
@@ -36,8 +38,14 @@ impl FilesystemBackend {
     }
 
     fn chunk_path(&self, hash: &str) -> PathBuf {
-        let dir = self.data_dir.join("chunks");
-        dir.join(&hash[..2]).join(&hash[2..4]).join(hash)
+        let mut dir = self.data_dir.join("chunks");
+        for i in 0..self.chunk_nesting_depth {
+            let start = i * 2;
+            if start + 2 <= hash.len() {
+                dir = dir.join(&hash[start..start + 2]);
+            }
+        }
+        dir.join(hash)
     }
 
     fn namespace_path(&self, namespace: &str) -> PathBuf {
@@ -97,9 +105,16 @@ impl BlobStore for FilesystemBackend {
         let path = self.chunk_path(hash);
         if path.exists() {
             fs::remove_file(&path).await?;
-            // Try to clean up parent dirs
-            let _ = fs::remove_dir(path.parent().unwrap()).await;
-            let _ = fs::remove_dir(path.parent().unwrap().parent().unwrap()).await;
+            for ancestor in path.ancestors().skip(1).take(self.chunk_nesting_depth) {
+                match fs::remove_dir(ancestor).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(e) => {
+                        tracing::warn!("failed to clean up dir {:?}: {}", ancestor, e);
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -129,6 +144,13 @@ impl BlobStore for FilesystemBackend {
         Ok(blobs)
     }
 
+    async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)> {
+        let all = self.list_blobs(namespace).await?;
+        let total = all.len();
+        let page: Vec<String> = all.into_iter().skip(offset).take(limit).collect();
+        Ok((page, total))
+    }
+
     async fn namespace_exists(&self, namespace: &str) -> Result<bool> {
         let path = self.namespace_path(namespace);
         Ok(path.exists())
@@ -153,5 +175,23 @@ impl BlobStore for FilesystemBackend {
             fs::remove_dir_all(&meta_dir).await?;
         }
         Ok(())
+    }
+
+    async fn list_namespaces(&self) -> Result<Vec<String>> {
+        let ns_path = self.data_dir.join("namespaces");
+        if !ns_path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = fs::read_dir(&ns_path).await
+            .map_err(|e| BlobError::Internal(e.to_string()))?;
+        let mut namespaces = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    namespaces.push(name.to_string());
+                }
+            }
+        }
+        Ok(namespaces)
     }
 }

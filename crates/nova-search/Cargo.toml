@@ -12,6 +12,7 @@ serde_json.workspace = true
 parking_lot.workspace = true
 regex.workspace = true
 unicode-segmentation = "1.12"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 proptest = "1"

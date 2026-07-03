@@ -10,6 +10,7 @@ pub enum Statement {
 
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
+    pub distinct: bool,
     pub select_list: Vec<SelectItem>,
     pub from: TableRef,
     pub where_clause: Option<Expr>,
@@ -101,6 +102,18 @@ pub enum Expr {
         expr: Box<Expr>,
         pattern: Box<Expr>,
     },
+    ILike {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+    },
+    Case {
+        whens: Vec<(Expr, Expr)>,
+        else_val: Option<Box<Expr>>,
+    },
+    Cast {
+        expr: Box<Expr>,
+        target_type: SQLType,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,10 +164,13 @@ pub struct ColumnDef {
     pub sql_type: SQLType,
     pub nullable: bool,
     pub default: Option<LiteralValue>,
+    pub unique: bool,
+    pub is_primary_key: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct OrderByExpr {
     pub expr: Expr,
     pub asc: bool,
+    pub nulls_first: Option<bool>,
 }

@@ -157,10 +157,12 @@ async fn main() -> anyhow::Result<()> {
             backend_type,
             redis_url: cfg.redis_url.clone(),
         };
-        let backend = Arc::new(nova_cache::HashMapBackend::new(
-            cache_cfg.max_size,
-            Arc::new(nova_cache::CacheMetrics::default()),
-        ));
+        let backend: Arc<dyn nova_cache::CacheBackend> = Arc::new(
+            nova_cache::HashMapBackend::new(
+                cache_cfg.max_size,
+                Arc::new(nova_cache::CacheMetrics::default()),
+            )?
+        );
         let _cache_mgr = Arc::new(nova_cache::CacheManager::new(backend, cache_cfg));
     }
     tracing::info!("Cache manager initialized");
@@ -174,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
             gc_interval_secs: cfg.gc_interval_secs,
             gc_grace_period_secs: cfg.gc_grace_period_secs,
             data_dir: cfg.data_dir,
+            chunk_nesting_depth: cfg.chunk_nesting_depth,
         }
     };
     let _blob_mgr = Arc::new(nova_blob::BlobManager::new(blob_cfg).await?);

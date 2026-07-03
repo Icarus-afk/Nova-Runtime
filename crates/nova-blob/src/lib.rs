@@ -23,6 +23,6 @@ pub use gc::GarbageCollector;
 pub use manager::BlobManager;
 pub use merkle::MerkleTree;
 pub use metadata::{BlobMetadata, ChunkRecord, UploadState};
-pub use namespace::NamespaceManager;
+pub use namespace::{validate_namespace, NamespaceManager};
 pub use stats::{BlobStats, StatsCollector};
-pub use upload::{UploadManager, UploadSession};
+pub use upload::{PartInfo, UploadManager, UploadSession};

@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::backend::BlobStore;
@@ -34,6 +37,8 @@ impl GarbageCollector {
     }
 
     pub async fn run_once(&self) -> Result<usize> {
+        let mut total = 0usize;
+
         let unreferenced = self
             .dedup
             .collect_unreferenced(self.config.gc_grace_period_secs);
@@ -48,23 +53,74 @@ impl GarbageCollector {
                 self.dedup.remove_tracked(hash);
             }
         }
+        total += count;
+
+        let expired = self.cleanup_expired_blobs().await?;
+        info!("GC: cleaned up {} expired blobs", expired);
+        total += expired as usize;
+
+        Ok(total)
+    }
+
+    async fn cleanup_expired_blobs(&self) -> Result<u64> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let namespaces = self.store.list_namespaces().await?;
+        let mut count = 0u64;
+
+        for ns in &namespaces {
+            let blobs = self.store.list_blobs(ns).await?;
+            for blob_id in &blobs {
+                if let Ok(meta) = self.store.get_metadata(blob_id).await {
+                    if let Some(expires_at) = meta.expires_at {
+                        if expires_at <= now {
+                            for chunk_hash in &meta.chunk_hashes {
+                                let ref_count = self.dedup.release_chunk(chunk_hash);
+                                if ref_count == 0 {
+                                    if let Err(e) = self.store.delete_chunk(chunk_hash).await {
+                                        error!("GC TTL: failed to delete chunk {}: {}", chunk_hash, e);
+                                    } else {
+                                        self.dedup.remove_tracked(chunk_hash);
+                                    }
+                                }
+                            }
+                            if let Err(e) = self.store.delete_metadata(blob_id).await {
+                                error!("GC TTL: failed to delete metadata {}: {}", blob_id, e);
+                            } else {
+                                count += 1;
+                                info!("GC TTL: deleted expired blob {} (namespace {})", blob_id, ns);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(count)
     }
 
-    pub async fn start_background(&'static self) {
-        self.running.store(true, std::sync::atomic::Ordering::Relaxed);
-        let interval = Duration::from_secs(self.config.gc_interval_secs);
-
-        while self.is_running() {
-            tokio::time::sleep(interval).await;
-            if let Err(e) = self.run_once().await {
-                error!("GC background run failed: {}", e);
+    pub fn start_background(self: Arc<Self>, interval: Duration, cancel: CancellationToken) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        if let Err(e) = self.run_once().await {
+                            error!("GC background run failed: {}", e);
+                        }
+                    }
+                    _ = cancel.cancelled() => {
+                        info!("GC shutting down");
+                        break;
+                    }
+                }
             }
-        }
+        })
     }
 
-    pub fn stop(&self) {
+    pub fn shutdown(&self) {
         self.running.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }

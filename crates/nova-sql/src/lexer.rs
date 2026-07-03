@@ -1,17 +1,20 @@
+use crate::error::{Result, SQLError};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // Keywords
     Select, From, Where, Insert, Into, Values, Update, Set, Delete, Create, Table, Drop,
-    And, Or, Not, Null, Is, In, Between, Like, True, False, As, On, Group, By, Having,
-    Order, Asc, Desc,     Limit, Offset, Distinct, All, Exists, Default,
-    Count, Sum, Avg, Min, Max,
+    And, Or, Not, Null, Is, In, Between, Like, ILike, True, False, As, On, Group, By, Having,
+    Order, Asc, Desc, Limit, Offset, Distinct, All, Exists, Default,
+    Count, Sum, Avg, Min, Max, Case, When, Then, Else, End, Cast,
+    Primary, Key, Unique, Nulls, First, Last,
     // Identifiers & literals
     Identifier(String),
     Number(String),
     String(String),
     // Operators
     Plus, Minus, Star, Slash, Percent,
-    Eq, NotEq, Lt, LtEq, Gt, GtEq, Concat,
+    Eq, NotEq, Lt, LtEq, Gt, GtEq, Concat, ColonColon,
     // Punctuation
     LParen, RParen, Comma, Semicolon, Dot,
     // Special
@@ -31,12 +34,15 @@ impl Lexer {
         }
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
+    pub fn tokenize(&mut self) -> Result<(Vec<Token>, Vec<(usize, usize)>)> {
         let mut tokens = Vec::new();
+        let mut positions = Vec::new();
         loop {
             self.skip_whitespace();
+            let start = self.pos;
             if self.pos >= self.chars.len() {
                 tokens.push(Token::EOF);
+                positions.push((start, start));
                 break;
             }
             let ch = self.chars[self.pos];
@@ -51,11 +57,13 @@ impl Lexer {
             } else if ch.is_ascii_alphabetic() || ch == '_' {
                 self.read_identifier_or_keyword()
             } else {
-                self.read_operator_or_punct()
+                self.read_operator_or_punct()?
             };
+            let end = self.pos;
             tokens.push(token);
+            positions.push((start, end));
         }
-        tokens
+        Ok((tokens, positions))
     }
 
     fn peek(&self) -> Option<char> {
@@ -75,7 +83,7 @@ impl Lexer {
     }
 
     fn read_string(&mut self) -> Token {
-        self.pos += 1; // skip opening '
+        self.pos += 1;
         let mut s = String::new();
         loop {
             if self.pos >= self.chars.len() {
@@ -158,6 +166,7 @@ impl Lexer {
             "in" => Token::In,
             "between" => Token::Between,
             "like" => Token::Like,
+            "ilike" => Token::ILike,
             "true" => Token::True,
             "false" => Token::False,
             "as" => Token::As,
@@ -179,61 +188,89 @@ impl Lexer {
             "avg" => Token::Avg,
             "min" => Token::Min,
             "max" => Token::Max,
+            "case" => Token::Case,
+            "when" => Token::When,
+            "then" => Token::Then,
+            "else" => Token::Else,
+            "end" => Token::End,
+            "cast" => Token::Cast,
+            "primary" => Token::Primary,
+            "key" => Token::Key,
+            "unique" => Token::Unique,
+            "nulls" => Token::Nulls,
+            "first" => Token::First,
+            "last" => Token::Last,
             _ => Token::Identifier(word),
         }
     }
 
-    fn read_operator_or_punct(&mut self) -> Token {
+    fn read_operator_or_punct(&mut self) -> Result<Token> {
         let ch = self.chars[self.pos];
         self.pos += 1;
         match ch {
-            '+' => Token::Plus,
-            '-' => Token::Minus,
-            '*' => Token::Star,
-            '/' => Token::Slash,
-            '%' => Token::Percent,
-            '=' => Token::Eq,
+            '+' => Ok(Token::Plus),
+            '-' => Ok(Token::Minus),
+            '*' => Ok(Token::Star),
+            '/' => Ok(Token::Slash),
+            '%' => Ok(Token::Percent),
+            '=' => Ok(Token::Eq),
             '!' => {
                 if self.pos < self.chars.len() && self.chars[self.pos] == '=' {
                     self.pos += 1;
-                    Token::NotEq
+                    Ok(Token::NotEq)
                 } else {
-                    Token::Not
+                    Ok(Token::Not)
                 }
             }
             '<' => {
                 if self.pos < self.chars.len() && self.chars[self.pos] == '=' {
                     self.pos += 1;
-                    Token::LtEq
+                    Ok(Token::LtEq)
                 } else if self.pos < self.chars.len() && self.chars[self.pos] == '>' {
                     self.pos += 1;
-                    Token::NotEq
+                    Ok(Token::NotEq)
                 } else {
-                    Token::Lt
+                    Ok(Token::Lt)
                 }
             }
             '>' => {
                 if self.pos < self.chars.len() && self.chars[self.pos] == '=' {
                     self.pos += 1;
-                    Token::GtEq
+                    Ok(Token::GtEq)
                 } else {
-                    Token::Gt
+                    Ok(Token::Gt)
                 }
             }
-            '(' => Token::LParen,
-            ')' => Token::RParen,
-            ',' => Token::Comma,
-            ';' => Token::Semicolon,
-            '.' => Token::Dot,
+            '(' => Ok(Token::LParen),
+            ')' => Ok(Token::RParen),
+            ',' => Ok(Token::Comma),
+            ';' => Ok(Token::Semicolon),
+            '.' => Ok(Token::Dot),
+            ':' => {
+                if self.pos < self.chars.len() && self.chars[self.pos] == ':' {
+                    self.pos += 1;
+                    Ok(Token::ColonColon)
+                } else {
+                    Err(SQLError::syntax_at("unexpected character: ':'", self.pos - 1, self.pos))
+                }
+            }
             '|' => {
                 if self.pos < self.chars.len() && self.chars[self.pos] == '|' {
                     self.pos += 1;
-                    Token::Concat
+                    Ok(Token::Concat)
                 } else {
-                    panic!("unexpected character: |")
+                    Err(SQLError::syntax_at(
+                        format!("unexpected character: |"),
+                        self.pos - 1,
+                        self.pos,
+                    ))
                 }
             }
-            _ => panic!("unexpected character: {}", ch),
+            c => Err(SQLError::syntax_at(
+                format!("unexpected character: {}", c),
+                self.pos - 1,
+                self.pos,
+            )),
         }
     }
 }

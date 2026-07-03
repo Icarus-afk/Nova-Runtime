@@ -36,7 +36,9 @@ impl BlobManager {
         let backend = FilesystemBackend::new(&config);
         backend.init().await?;
         let store: Arc<dyn BlobStore> = Arc::new(backend);
-        Ok(Self::new_with_backend(store, config))
+        let mgr = Self::new_with_backend(store, config);
+        mgr.load_dedup_state().await?;
+        Ok(mgr)
     }
 
     pub fn new_with_backend(store: Arc<dyn BlobStore>, config: BlobConfig) -> Self {
@@ -59,6 +61,31 @@ impl BlobManager {
             stats,
             config,
         }
+    }
+
+    async fn dedup_state_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.config.data_dir).join("dedup_state.json")
+    }
+
+    async fn load_dedup_state(&self) -> Result<()> {
+        let path = self.dedup_state_path().await;
+        if path.exists() {
+            self.dedup.load_state(&path)?;
+            tracing::info!("loaded dedup state from {:?}", path);
+        }
+        Ok(())
+    }
+
+    pub async fn save_dedup_state(&self) -> Result<()> {
+        let path = self.dedup_state_path().await;
+        self.dedup.save_state(&path)?;
+        tracing::info!("saved dedup state to {:?}", path);
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        self.save_dedup_state().await?;
+        Ok(())
     }
 
     pub async fn create_blob(
@@ -155,6 +182,11 @@ impl BlobManager {
         self.store.list_blobs(namespace).await
     }
 
+    pub async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)> {
+        crate::namespace::validate_namespace(namespace)?;
+        self.store.list_blobs_paginated(namespace, offset, limit).await
+    }
+
     pub async fn create_namespace(&self, namespace: &str) -> Result<()> {
         self.ns_manager.ensure_namespace(namespace).await
     }
@@ -172,10 +204,12 @@ impl BlobManager {
         namespace: &str,
         content_type: &str,
         metadata: HashMap<String, String>,
+        declared_total_size: u64,
     ) -> Result<UploadSession> {
+        crate::namespace::validate_namespace(namespace)?;
         self.ns_manager.ensure_namespace(namespace).await?;
         self.stats.increment_uploads();
-        self.upload_mgr.initiate(namespace, content_type, metadata)
+        self.upload_mgr.initiate(namespace, content_type, metadata, declared_total_size)
     }
 
     pub async fn upload_part(&self, upload_id: &str, data: Vec<u8>) -> Result<()> {
@@ -207,6 +241,10 @@ impl BlobManager {
             upload_id, meta.id, meta.namespace
         );
         Ok(meta)
+    }
+
+    pub fn list_parts(&self, upload_id: &str) -> Result<Vec<crate::upload::PartInfo>> {
+        self.upload_mgr.list_parts(upload_id)
     }
 
     pub async fn abort_upload(&self, upload_id: &str) -> Result<()> {

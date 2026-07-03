@@ -443,6 +443,7 @@ fn apply_env_blob(cfg: &mut BlobConfig, field: &str, _val: &toml::Value, val_str
         "gc_interval_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_interval_secs = n; } }
         "gc_grace_period_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_grace_period_secs = n; } }
         "data_dir" => cfg.data_dir = val_str.to_string(),
+        "chunk_nesting_depth" => { if let Ok(n) = val_str.parse::<usize>() { cfg.chunk_nesting_depth = n; } }
         _ => { tracing::warn!("Unknown blob config field '{}'", field); }
     }
 }

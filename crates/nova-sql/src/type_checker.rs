@@ -47,10 +47,26 @@ impl TypeChecker {
                 self.unify_types(&et, &ht)?;
                 Ok(SQLType::Boolean)
             }
-            Expr::Like { expr, pattern } => {
+            Expr::Like { expr, pattern } | Expr::ILike { expr, pattern } => {
                 self.check_types(expr, schema)?;
                 self.check_types(pattern, schema)?;
                 Ok(SQLType::Boolean)
+            }
+            Expr::Case { whens, else_val } => {
+                let mut result_type = SQLType::Null;
+                for (_, result) in whens {
+                    let rt = self.check_types(result, schema)?;
+                    result_type = self.unify_types(&result_type, &rt)?;
+                }
+                if let Some(e) = else_val {
+                    let rt = self.check_types(e, schema)?;
+                    result_type = self.unify_types(&result_type, &rt)?;
+                }
+                Ok(result_type)
+            }
+            Expr::Cast { expr, target_type } => {
+                self.check_types(expr, schema)?;
+                Ok(target_type.clone())
             }
         }
     }
@@ -153,10 +169,9 @@ impl TypeChecker {
             "count" => Ok(SQLType::Integer),
             "sum" | "avg" => {
                 if args.is_empty() {
-                    return Err(SQLError::Syntax(format!(
-                        "{} requires at least one argument",
-                        name
-                    )));
+                    return Err(SQLError::syntax(
+                        format!("{} requires at least one argument", name),
+                    ));
                 }
                 let arg_type = self.check_types(&args[0], schema)?;
                 match arg_type {
@@ -175,16 +190,14 @@ impl TypeChecker {
             }
             "min" | "max" => {
                 if args.is_empty() {
-                    return Err(SQLError::Syntax(format!(
-                        "{} requires at least one argument",
-                        name
-                    )));
+                    return Err(SQLError::syntax(
+                        format!("{} requires at least one argument", name),
+                    ));
                 }
                 let arg_type = self.check_types(&args[0], schema)?;
                 Ok(arg_type)
             }
             _ => {
-                // Unknown function - return Null
                 Ok(SQLType::Null)
             }
         }
@@ -244,6 +257,15 @@ impl TypeChecker {
             }
             (LiteralValue::String(s), SQLType::Text) => {
                 Ok(LiteralValue::String(s.clone()))
+            }
+            (LiteralValue::Integer(i), SQLType::Text) => {
+                Ok(LiteralValue::String(i.to_string()))
+            }
+            (LiteralValue::Float(f), SQLType::Text) => {
+                Ok(LiteralValue::String(f.to_string()))
+            }
+            (LiteralValue::Boolean(b), SQLType::Text) => {
+                Ok(LiteralValue::String(b.to_string()))
             }
             (LiteralValue::String(s), SQLType::Boolean) => {
                 let val = match s.to_lowercase().as_str() {

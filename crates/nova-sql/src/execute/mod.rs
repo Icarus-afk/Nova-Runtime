@@ -13,9 +13,23 @@ pub fn contains_aggregate(expr: &Expr) -> bool {
         }
         Expr::BinaryOp { left, right, .. } => contains_aggregate(left) || contains_aggregate(right),
         Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
+        Expr::Case { whens, else_val } => {
+            whens.iter().any(|(c, r)| contains_aggregate(c) || contains_aggregate(r))
+                || else_val.as_ref().map(|e| contains_aggregate(e)).unwrap_or(false)
+        }
+        Expr::Cast { expr, .. } => contains_aggregate(expr),
+        Expr::In { expr, list } => contains_aggregate(expr) || list.iter().any(|e| contains_aggregate(e)),
+        Expr::Between { expr, low, high } => {
+            contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high)
+        }
+        Expr::Like { expr, pattern } | Expr::ILike { expr, pattern } => {
+            contains_aggregate(expr) || contains_aggregate(pattern)
+        }
+        Expr::IsNull(expr) | Expr::IsNotNull(expr) => contains_aggregate(expr),
         _ => false,
     }
 }
+
 use crate::error::{Result, SQLError};
 use crate::schema::Schema;
 
@@ -80,7 +94,28 @@ pub fn evaluate_expr(
         Expr::Like { expr, pattern } => {
             let val = evaluate_expr(expr, row, schema)?;
             let pat = evaluate_expr(pattern, row, schema)?;
-            eval_like(&val, &pat)
+            eval_like(&val, &pat, false)
+        }
+        Expr::ILike { expr, pattern } => {
+            let val = evaluate_expr(expr, row, schema)?;
+            let pat = evaluate_expr(pattern, row, schema)?;
+            eval_like(&val, &pat, true)
+        }
+        Expr::Case { whens, else_val } => {
+            for (cond, result) in whens {
+                let cond_val = evaluate_expr(cond, row, schema)?;
+                if cond_val == LiteralValue::Boolean(true) {
+                    return evaluate_expr(result, row, schema);
+                }
+            }
+            match else_val {
+                Some(e) => evaluate_expr(e, row, schema),
+                None => Ok(LiteralValue::Null),
+            }
+        }
+        Expr::Cast { expr, target_type } => {
+            let val = evaluate_expr(expr, row, schema)?;
+            crate::type_checker::TypeChecker::coerce_value(&val, target_type)
         }
     }
 }
@@ -127,21 +162,21 @@ pub fn eval_binary_op(
                     BinaryOperator::LtEq => a <= b,
                     BinaryOperator::Gt => a > b,
                     BinaryOperator::GtEq => a >= b,
-                    _ => unreachable!(),
+                    _ => return Err(SQLError::Internal("unreachable comparison".to_string())),
                 },
                 (LiteralValue::Float(a), LiteralValue::Float(b)) => match op {
                     BinaryOperator::Lt => a < b,
                     BinaryOperator::LtEq => a <= b,
                     BinaryOperator::Gt => a > b,
                     BinaryOperator::GtEq => a >= b,
-                    _ => unreachable!(),
+                    _ => return Err(SQLError::Internal("unreachable comparison".to_string())),
                 },
                 (LiteralValue::String(a), LiteralValue::String(b)) => match op {
                     BinaryOperator::Lt => a < b,
                     BinaryOperator::LtEq => a <= b,
                     BinaryOperator::Gt => a > b,
                     BinaryOperator::GtEq => a >= b,
-                    _ => unreachable!(),
+                    _ => return Err(SQLError::Internal("unreachable comparison".to_string())),
                 },
                 _ => {
                     return Err(SQLError::TypeMismatch {
@@ -314,18 +349,21 @@ fn eval_function(name: &str, args: &[LiteralValue]) -> Result<LiteralValue> {
     }
 }
 
-fn eval_like(val: &LiteralValue, pattern: &LiteralValue) -> Result<LiteralValue> {
+fn eval_like(val: &LiteralValue, pattern: &LiteralValue, case_insensitive: bool) -> Result<LiteralValue> {
     let s = match val {
-        LiteralValue::String(s) => s.clone(),
+        LiteralValue::String(s) => {
+            if case_insensitive { s.to_lowercase() } else { s.clone() }
+        }
         LiteralValue::Null => return Ok(LiteralValue::Null),
         _ => return Ok(LiteralValue::Boolean(false)),
     };
     let pat = match pattern {
-        LiteralValue::String(p) => p.clone(),
+        LiteralValue::String(p) => {
+            if case_insensitive { p.to_lowercase() } else { p.clone() }
+        }
         LiteralValue::Null => return Ok(LiteralValue::Null),
         _ => return Ok(LiteralValue::Boolean(false)),
     };
-    // Convert SQL LIKE pattern to regex
     let regex_str = pat_to_regex(&pat);
     let re = regex::Regex::new(&regex_str)
         .map_err(|e| SQLError::Internal(format!("invalid LIKE pattern: {}", e)))?;
@@ -333,14 +371,32 @@ fn eval_like(val: &LiteralValue, pattern: &LiteralValue) -> Result<LiteralValue>
 }
 
 fn pat_to_regex(pat: &str) -> String {
-    let mut result = String::from("^");
+    let mut result = String::from("^(?s)");
     let mut chars = pat.chars();
     while let Some(c) = chars.next() {
         match c {
             '%' => result.push_str(".*"),
             '_' => result.push('.'),
+            '\\' => {
+                match chars.next() {
+                    Some(next) => {
+                        match next {
+                            '%' => result.push('%'),
+                            '_' => result.push('_'),
+                            '\\' => result.push_str("\\\\"),
+                            c => {
+                                result.push_str("\\\\");
+                                result.push(c);
+                            }
+                        }
+                    }
+                    None => {
+                        result.push_str("\\\\");
+                    }
+                }
+            }
             // Escape regex special chars
-            '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' => {
+            '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
                 result.push('\\');
                 result.push(c);
             }

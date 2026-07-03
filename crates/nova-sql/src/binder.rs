@@ -117,9 +117,21 @@ impl Binder {
                 self.resolve_expr(low, schema)?;
                 self.resolve_expr(high, schema)?;
             }
-            Expr::Like { expr, pattern } => {
+            Expr::Like { expr, pattern } | Expr::ILike { expr, pattern } => {
                 self.resolve_expr(expr, schema)?;
                 self.resolve_expr(pattern, schema)?;
+            }
+            Expr::Case { whens, else_val } => {
+                for (cond, result) in whens {
+                    self.resolve_expr(cond, schema)?;
+                    self.resolve_expr(result, schema)?;
+                }
+                if let Some(e) = else_val {
+                    self.resolve_expr(e, schema)?;
+                }
+            }
+            Expr::Cast { expr, .. } => {
+                self.resolve_expr(expr, schema)?;
             }
         }
         Ok(())

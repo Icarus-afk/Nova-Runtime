@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use lru::LruCache;
 use parking_lot::RwLock;
+use tokio::task::JoinHandle;
 use tracing::instrument;
 
-use super::{CacheBackend, CacheEntry, CacheKey, CacheValue};
-use crate::error::Result;
+use super::{matches_glob, CacheBackend, CacheEntry, CacheKey, CacheValue};
+use crate::error::{CacheError, Result};
 use crate::metrics::CacheMetrics;
 
 pub struct HashMapBackend {
@@ -20,18 +21,41 @@ pub struct HashMapBackend {
 }
 
 impl HashMapBackend {
-    pub fn new(max_bytes: usize, metrics: Arc<CacheMetrics>) -> Self {
-        let max_entries = std::cmp::max(max_bytes, 100).min(1_000_000);
-        Self {
-            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap())),
+    pub fn new(max_bytes: usize, metrics: Arc<CacheMetrics>) -> Result<Self> {
+        let max_entries = std::cmp::max(max_bytes / 100, 100).min(1_000_000);
+        let entries = NonZeroUsize::new(max_entries)
+            .ok_or_else(|| CacheError::Internal("invalid max entries computed to zero".into()))?;
+        Ok(Self {
+            cache: RwLock::new(LruCache::new(entries)),
             max_bytes,
             current_bytes: AtomicU64::new(0),
             metrics,
-        }
+        })
     }
 
     fn entry_size(key: &CacheKey, value: &CacheValue) -> u64 {
-        (key.len() + value.len() + std::mem::size_of::<CacheEntry>()) as u64
+        (key.len() + value.len()) as u64
+    }
+
+    async fn evict_expired(&self) {
+        let expired_keys: Vec<CacheKey> = {
+            let cache = self.cache.read();
+            cache
+                .iter()
+                .filter(|(_, e)| e.expires_at.map(|t| Instant::now() > t).unwrap_or(false))
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        if !expired_keys.is_empty() {
+            let mut cache = self.cache.write();
+            for k in &expired_keys {
+                if let Some(e) = cache.pop(k) {
+                    let sz = (k.len() + e.value.len()) as u64;
+                    self.current_bytes.fetch_sub(sz, Ordering::Relaxed);
+                    self.metrics.evictions.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
     }
 }
 
@@ -39,22 +63,35 @@ impl HashMapBackend {
 impl CacheBackend for HashMapBackend {
     #[instrument(skip(self))]
     async fn get(&self, key: &CacheKey) -> Result<Option<CacheValue>> {
-        let mut cache = self.cache.write();
-        match cache.get_mut(key) {
-            Some(entry) => {
-                if let Some(expires_at) = entry.expires_at {
-                    if Instant::now() > expires_at {
-                        cache.pop(key);
-                        self.metrics.misses.fetch_add(1, Ordering::Relaxed);
-                        return Ok(None);
+        let mut should_evict = false;
+        let result = {
+            let cache = self.cache.read();
+            match cache.peek(key) {
+                Some(entry) => {
+                    if let Some(expires_at) = entry.expires_at {
+                        if Instant::now() > expires_at {
+                            should_evict = true;
+                            None
+                        } else {
+                            Some(entry.value.clone())
+                        }
+                    } else {
+                        Some(entry.value.clone())
                     }
                 }
-                entry.access_count += 1;
-                let value = entry.value.clone();
+                None => None,
+            }
+        };
+        match result {
+            Some(value) => {
                 self.metrics.hits.fetch_add(1, Ordering::Relaxed);
                 Ok(Some(value))
             }
             None => {
+                if should_evict {
+                    let mut cache = self.cache.write();
+                    cache.pop(key);
+                }
                 self.metrics.misses.fetch_add(1, Ordering::Relaxed);
                 Ok(None)
             }
@@ -113,19 +150,30 @@ impl CacheBackend for HashMapBackend {
 
     #[instrument(skip(self))]
     async fn exists(&self, key: &CacheKey) -> Result<bool> {
-        let mut cache = self.cache.write();
-        match cache.get_mut(key) {
-            Some(entry) => {
-                if let Some(expires_at) = entry.expires_at {
-                    if Instant::now() > expires_at {
-                        cache.pop(key);
-                        return Ok(false);
+        let mut should_evict = false;
+        let found = {
+            let cache = self.cache.read();
+            match cache.peek(key) {
+                Some(entry) => {
+                    if let Some(expires_at) = entry.expires_at {
+                        if Instant::now() > expires_at {
+                            should_evict = true;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
                     }
                 }
-                Ok(true)
+                None => false,
             }
-            None => Ok(false),
+        };
+        if should_evict {
+            let mut cache = self.cache.write();
+            cache.pop(key);
         }
+        Ok(found)
     }
 
     #[instrument(skip(self))]
@@ -141,6 +189,35 @@ impl CacheBackend for HashMapBackend {
         let cache = self.cache.read();
         Ok(cache.len())
     }
+
+    async fn keys(&self) -> Result<Vec<CacheKey>> {
+        let cache = self.cache.read();
+        Ok(cache.iter().map(|(k, _)| k.clone()).collect())
+    }
+
+    async fn delete_matching(&self, pattern: &str) -> Result<usize> {
+        let all: Vec<CacheKey> = {
+            let cache = self.cache.read();
+            cache.iter().map(|(k, _)| k.clone()).collect()
+        };
+        let matched: Vec<CacheKey> = all.into_iter().filter(|k| matches_glob(pattern, k)).collect();
+        let mut count = 0;
+        for k in matched {
+            if self.delete(&k).await? {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    fn start_ttl_sweeper(self: Arc<Self>, interval: Duration) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                self.evict_expired().await;
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -151,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn test_basic_put_get() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         backend.set("key1".into(), b"value1".to_vec(), None).await.unwrap();
         let result = backend.get(&"key1".into()).await.unwrap();
@@ -161,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_missing() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         let result = backend.get(&"nonexistent".into()).await.unwrap();
         assert_eq!(result, None);
@@ -170,7 +247,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         backend.set("key1".into(), b"value1".to_vec(), None).await.unwrap();
         assert!(backend.delete(&"key1".into()).await.unwrap());
@@ -182,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn test_ttl_expiry() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         backend.set("key1".into(), b"value1".to_vec(), Some(Duration::from_millis(10))).await.unwrap();
         assert!(backend.get(&"key1".into()).await.unwrap().is_some());
@@ -194,11 +271,11 @@ mod tests {
     #[tokio::test]
     async fn test_lru_eviction() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(200, metrics);
+        let backend = HashMapBackend::new(10, metrics).unwrap();
 
-        backend.set("key1".into(), b"x".to_vec(), None).await.unwrap();
-        backend.set("key2".into(), b"y".to_vec(), None).await.unwrap();
-        backend.set("key3".into(), b"z".to_vec(), None).await.unwrap();
+        backend.set("key1".into(), b"xxxxx".to_vec(), None).await.unwrap();
+        backend.set("key2".into(), b"yyyyy".to_vec(), None).await.unwrap();
+        backend.set("key3".into(), b"zzzzz".to_vec(), None).await.unwrap();
 
         let result = backend.get(&"key1".into()).await.unwrap();
         assert_eq!(result, None);
@@ -207,7 +284,7 @@ mod tests {
     #[tokio::test]
     async fn test_flush() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         backend.set("key1".into(), b"v1".to_vec(), None).await.unwrap();
         backend.set("key2".into(), b"v2".to_vec(), None).await.unwrap();
@@ -221,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, metrics);
+        let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
         backend.set("key1".into(), b"old".to_vec(), None).await.unwrap();
         backend.set("key1".into(), b"new".to_vec(), None).await.unwrap();
@@ -232,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_access() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = Arc::new(HashMapBackend::new(1024 * 1024, metrics));
+        let backend = Arc::new(HashMapBackend::new(1024 * 1024, metrics).unwrap());
 
         let mut handles = Vec::new();
         for i in 0..10 {
@@ -254,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_tracking() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = HashMapBackend::new(1024 * 1024, Arc::clone(&metrics));
+        let backend = HashMapBackend::new(1024 * 1024, Arc::clone(&metrics)).unwrap();
 
         backend.get(&"miss".into()).await.unwrap();
         assert_eq!(metrics.misses(), 1);

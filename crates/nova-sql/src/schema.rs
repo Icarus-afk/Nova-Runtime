@@ -1,4 +1,4 @@
-use crate::ast::SQLType;
+use crate::ast::{LiteralValue, SQLType};
 
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
@@ -32,7 +32,10 @@ pub struct ColumnInfo {
     pub name: String,
     pub sql_type: SQLType,
     pub nullable: bool,
+    pub default: Option<LiteralValue>,
     pub ordinal: usize,
+    pub unique: bool,
+    pub is_primary_key: bool,
 }
 
 #[derive(Debug, Clone)]

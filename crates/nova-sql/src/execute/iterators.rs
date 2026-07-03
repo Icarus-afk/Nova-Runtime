@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use crate::ast::{BinaryOperator, Expr, LiteralValue, OrderByExpr};
 use crate::error::Result;
 use crate::execute::evaluate_expr;
@@ -129,6 +132,63 @@ impl Executor for ProjectionExecutor {
                     values.push(Some(val));
                 }
                 Ok(Some(Row::new(values)))
+            }
+        }
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.input.close()
+    }
+}
+
+pub struct DedupExecutor {
+    input: Box<dyn Executor>,
+    seen: Vec<u64>,
+}
+
+impl DedupExecutor {
+    pub fn new(input: Box<dyn Executor>) -> Self {
+        DedupExecutor {
+            input,
+            seen: Vec::new(),
+        }
+    }
+
+    fn row_hash(row: &Row) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for val in &row.values {
+            match val {
+                Some(LiteralValue::Null) => 0u64.hash(&mut hasher),
+                Some(LiteralValue::Boolean(b)) => b.hash(&mut hasher),
+                Some(LiteralValue::Integer(i)) => i.hash(&mut hasher),
+                Some(LiteralValue::Float(f)) => f.to_bits().hash(&mut hasher),
+                Some(LiteralValue::String(s)) => s.hash(&mut hasher),
+                None => 1u64.hash(&mut hasher),
+            }
+        }
+        hasher.finish()
+    }
+}
+
+impl Executor for DedupExecutor {
+    fn open(&mut self) -> Result<()> {
+        self.input.open()?;
+        self.seen.clear();
+        Ok(())
+    }
+
+    fn next(&mut self) -> Result<Option<Row>> {
+        loop {
+            match self.input.next()? {
+                None => return Ok(None),
+                Some(row) => {
+                    let h = Self::row_hash(&row);
+                    if self.seen.contains(&h) {
+                        continue;
+                    }
+                    self.seen.push(h);
+                    return Ok(Some(row));
+                }
             }
         }
     }
@@ -342,11 +402,15 @@ impl Executor for SortExecutor {
         let order_by = self.order_by.clone();
         rows.sort_by(|a, b| {
             for order in &order_by {
-                let a_val =
-                    evaluate_expr(&order.expr, &a.values, &schema).unwrap_or(LiteralValue::Null);
-                let b_val =
-                    evaluate_expr(&order.expr, &b.values, &schema).unwrap_or(LiteralValue::Null);
-                let cmp = compare_values(&a_val, &b_val);
+                let a_val = match evaluate_expr(&order.expr, &a.values, &schema) {
+                    Ok(v) => v,
+                    Err(_) => LiteralValue::Null,
+                };
+                let b_val = match evaluate_expr(&order.expr, &b.values, &schema) {
+                    Ok(v) => v,
+                    Err(_) => LiteralValue::Null,
+                };
+                let cmp = compare_values(&a_val, &b_val, order.nulls_first);
                 if cmp != std::cmp::Ordering::Equal {
                     return if order.asc { cmp } else { cmp.reverse() };
                 }
@@ -426,11 +490,16 @@ impl Executor for LimitExecutor {
     }
 }
 
-fn compare_values(a: &LiteralValue, b: &LiteralValue) -> std::cmp::Ordering {
+fn compare_values(a: &LiteralValue, b: &LiteralValue, nulls_first: Option<bool>) -> std::cmp::Ordering {
+    let nulls_first = nulls_first.unwrap_or(false);
     match (a, b) {
         (LiteralValue::Null, LiteralValue::Null) => std::cmp::Ordering::Equal,
-        (LiteralValue::Null, _) => std::cmp::Ordering::Less,
-        (_, LiteralValue::Null) => std::cmp::Ordering::Greater,
+        (LiteralValue::Null, _) => {
+            if nulls_first { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }
+        }
+        (_, LiteralValue::Null) => {
+            if nulls_first { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+        }
         (LiteralValue::Integer(x), LiteralValue::Integer(y)) => x.cmp(y),
         (LiteralValue::Integer(x), LiteralValue::Float(y)) => {
             (*x as f64).total_cmp(y)

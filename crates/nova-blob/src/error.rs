@@ -14,6 +14,8 @@ pub enum BlobError {
     QuotaExceeded(String),
     #[error("invalid range: {0}")]
     InvalidRange(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("internal error: {0}")]
     Internal(String),
 }

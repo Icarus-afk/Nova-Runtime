@@ -20,6 +20,22 @@ pub struct NamespaceQuota {
     pub current_bytes: u64,
 }
 
+pub fn validate_namespace(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(BlobError::InvalidInput("namespace name cannot be empty".into()));
+    }
+    if name.len() > 255 {
+        return Err(BlobError::InvalidInput("namespace name too long".into()));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains('\0') {
+        return Err(BlobError::InvalidInput("invalid namespace name".into()));
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(BlobError::InvalidInput("namespace must be alphanumeric".into()));
+    }
+    Ok(())
+}
+
 impl NamespaceManager {
     pub fn new(store: Arc<dyn BlobStore>) -> Self {
         Self {
@@ -29,6 +45,7 @@ impl NamespaceManager {
     }
 
     pub async fn ensure_namespace(&self, namespace: &str) -> Result<()> {
+        validate_namespace(namespace)?;
         if !self.store.namespace_exists(namespace).await? {
             self.store.create_namespace(namespace).await?;
             debug!("created namespace {}", namespace);
@@ -37,6 +54,7 @@ impl NamespaceManager {
     }
 
     pub async fn delete_namespace(&self, namespace: &str) -> Result<()> {
+        validate_namespace(namespace)?;
         if !self.store.namespace_exists(namespace).await? {
             return Err(BlobError::NamespaceNotFound(namespace.to_string()));
         }

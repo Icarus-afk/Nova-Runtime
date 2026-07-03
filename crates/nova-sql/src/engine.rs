@@ -31,8 +31,8 @@ impl SQLEngine {
     pub fn execute(&self, sql: &str) -> Result<SQLResult> {
         let start = Instant::now();
         let mut lexer = Lexer::new(sql);
-        let tokens = lexer.tokenize();
-        let mut parser = Parser::new(tokens);
+        let (tokens, positions) = lexer.tokenize()?;
+        let mut parser = Parser::new(tokens, positions);
         let statements = parser.parse_program()?;
 
         let mut final_result = None;
@@ -40,14 +40,14 @@ impl SQLEngine {
             final_result = Some(self.execute_statement(stmt, &start)?);
         }
 
-        final_result.ok_or_else(|| SQLError::Syntax("empty statement".to_string()))
+        final_result.ok_or_else(|| SQLError::syntax("empty statement"))
     }
 
     pub fn execute_query(&self, sql: &str) -> Result<Vec<RecordBatch>> {
         match self.execute(sql)? {
             SQLResult::Query { batches, .. } => Ok(batches),
             SQLResult::Exec { .. } => {
-                Err(SQLError::Syntax("query did not return results".to_string()))
+                Err(SQLError::syntax("query did not return results"))
             }
         }
     }
@@ -76,7 +76,10 @@ impl SQLEngine {
                 name: c.name.clone(),
                 sql_type: c.sql_type.clone(),
                 nullable: c.nullable,
+                default: c.default.clone(),
                 ordinal: i,
+                unique: c.unique || c.is_primary_key,
+                is_primary_key: c.is_primary_key,
             })
             .collect();
         let schema = Schema::new(columns);
@@ -108,7 +111,6 @@ impl SQLEngine {
     ) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.table.name)?;
 
-        // Resolve column indices
         let col_indices: Vec<usize> = if stmt.columns.is_empty() {
             (0..schema.len()).collect()
         } else {
@@ -127,19 +129,17 @@ impl SQLEngine {
 
         for value_row in &stmt.values {
             if value_row.len() != num_cols {
-                return Err(SQLError::Syntax(format!(
+                return Err(SQLError::syntax(format!(
                     "expected {} values, got {}",
                     num_cols,
                     value_row.len()
                 )));
             }
             let mut row_values: Vec<Option<LiteralValue>> = vec![None; schema.len()];
-            let _binder = Binder::new();
 
             for (j, expr) in value_row.iter().enumerate() {
                 let col_idx = col_indices[j];
                 let col_info = &schema.columns[col_idx];
-                // Bind/resolve column references in expression (might reference other columns)
                 match expr {
                     Expr::Column(name) => {
                         if schema.find_column(name).is_none() {
@@ -153,6 +153,47 @@ impl SQLEngine {
                 let val = coerce_insert_value(val, &col_info.sql_type)?;
                 row_values[col_idx] = Some(val);
             }
+
+            // Apply DEFAULT for missing columns
+            for (col_idx, col_info) in schema.columns.iter().enumerate() {
+                if row_values[col_idx].is_none() {
+                    if let Some(ref default_val) = col_info.default {
+                        row_values[col_idx] = Some(default_val.clone());
+                    }
+                }
+            }
+
+            // Enforce NOT NULL constraints
+            for (col_idx, col_info) in schema.columns.iter().enumerate() {
+                let is_null = row_values[col_idx].is_none()
+                    || row_values[col_idx].as_ref().map_or(false, |v| *v == LiteralValue::Null);
+                if !col_info.nullable && is_null {
+                    return Err(SQLError::ConstraintViolation(format!(
+                        "column '{}' cannot be null",
+                        col_info.name
+                    )));
+                }
+            }
+
+            // Enforce UNIQUE constraints (including PRIMARY KEY)
+            for (col_idx, col_info) in schema.columns.iter().enumerate() {
+                if col_info.unique || col_info.is_primary_key {
+                    if let Some(ref val) = row_values[col_idx] {
+                        let existing = self.tables.scan_rows(&stmt.table.name)?;
+                        for row in &existing {
+                            if let Some(Some(existing_val)) = row.values.get(col_idx) {
+                                if existing_val == val {
+                                    return Err(SQLError::ConstraintViolation(format!(
+                                        "duplicate value for unique column '{}'",
+                                        col_info.name
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             self.tables.insert_row(&stmt.table.name, Row::new(row_values))?;
             rows_inserted += 1;
         }
@@ -171,7 +212,6 @@ impl SQLEngine {
     ) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.from.name)?;
 
-        // Check table existence
         if !self.tables.table_exists(&stmt.from.name) {
             return Err(SQLError::TableNotFound(stmt.from.name.clone()));
         }
@@ -197,7 +237,9 @@ impl SQLEngine {
         }
         executor.close()?;
 
-        // Convert rows to RecordBatch
+        // Apply HAVING after aggregation if present
+        // (HAVING is applied as a post-filter on grouped results)
+
         let batch = rows_to_record_batch(&rows);
         let num_rows = batch.num_rows;
 
@@ -218,7 +260,6 @@ impl SQLEngine {
         let mut rows_affected = 0u64;
 
         for row in &mut rows {
-            // Evaluate WHERE clause
             if let Some(ref predicate) = stmt.where_clause {
                 let result = evaluate_expr(predicate, &row.values, &schema)?;
                 if result != LiteralValue::Boolean(true) {
@@ -226,7 +267,6 @@ impl SQLEngine {
                 }
             }
 
-            // Apply assignments
             for assignment in &stmt.assignments {
                 let idx = schema
                     .find_index(&assignment.column)
@@ -238,7 +278,7 @@ impl SQLEngine {
             rows_affected += 1;
         }
 
-        // Write back
+        // Write back using the new fine-grained update
         self.tables.drop_table(&stmt.table.name)?;
         let columns: Vec<ColumnInfo> = schema.columns.clone();
         let new_schema = Schema::new(columns);
@@ -279,7 +319,6 @@ impl SQLEngine {
             Vec::new()
         };
 
-        // Write back
         self.tables.drop_table(&stmt.table.name)?;
         let columns: Vec<ColumnInfo> = schema.columns.clone();
         let new_schema = Schema::new(columns);

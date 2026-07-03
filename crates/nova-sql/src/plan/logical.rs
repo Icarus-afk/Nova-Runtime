@@ -27,4 +27,7 @@ pub enum LogicalNode {
         input: Box<LogicalNode>,
         exprs: Vec<(Expr, Option<String>)>,
     },
+    Dedup {
+        input: Box<LogicalNode>,
+    },
 }

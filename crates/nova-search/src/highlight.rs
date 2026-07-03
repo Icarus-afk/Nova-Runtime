@@ -1,11 +1,22 @@
 use crate::analysis::tokenizer::Token;
 
+fn char_boundary(text: &str, index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+    let mut i = index;
+    while !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 pub struct Highlighter;
 
 impl Highlighter {
     pub fn highlight(text: &str, tokens: &[Token], snippet_len: usize) -> Vec<String> {
         if tokens.is_empty() {
-            let end = std::cmp::min(snippet_len, text.len());
+            let end = char_boundary(text, std::cmp::min(snippet_len, text.len()));
             return vec![text[..end].to_string()];
         }
 
@@ -17,11 +28,14 @@ impl Highlighter {
             let mut search_start = 0;
             while let Some(pos) = lower_text[search_start..].find(&term_lower) {
                 let abs_pos = search_start + pos;
-                let end = abs_pos + token.term.len();
+                let end = abs_pos + term_lower.len();
                 if end <= text.len() {
                     match_positions.push((abs_pos, end));
                 }
-                search_start = abs_pos + 1;
+                search_start = abs_pos.saturating_add(term_lower.len());
+                if search_start > lower_text.len() {
+                    break;
+                }
             }
         }
 
@@ -29,7 +43,7 @@ impl Highlighter {
         match_positions.dedup();
 
         if match_positions.is_empty() {
-            let end = std::cmp::min(snippet_len, text.len());
+            let end = char_boundary(text, std::cmp::min(snippet_len, text.len()));
             return vec![text[..end].to_string()];
         }
 
@@ -41,13 +55,15 @@ impl Highlighter {
                 continue;
             }
 
-            let snippet_start = if start > snippet_len / 2 {
+            let raw_snippet_start = if start > snippet_len / 2 {
                 start - snippet_len / 2
             } else {
                 0
             };
 
-            let snippet_end = std::cmp::min(snippet_start + snippet_len, text.len());
+            let snippet_start = char_boundary(text, raw_snippet_start);
+            let raw_snippet_end = std::cmp::min(snippet_start + snippet_len, text.len());
+            let snippet_end = char_boundary(text, raw_snippet_end);
             let mut snippet = text[snippet_start..snippet_end].to_string();
 
             for (ms, me) in &match_positions {
@@ -72,7 +88,7 @@ impl Highlighter {
         }
 
         if snippets.is_empty() {
-            let end = std::cmp::min(snippet_len, text.len());
+            let end = char_boundary(text, std::cmp::min(snippet_len, text.len()));
             snippets.push(text[..end].to_string());
         }
 
@@ -105,5 +121,34 @@ mod tests {
         let text = "hello world";
         let snippets = Highlighter::highlight(text, &[], 150);
         assert!(!snippets.is_empty());
+    }
+
+    #[test]
+    fn test_unicode_highlighting() {
+        let text = "Café au lait and résumé data";
+        let tokens = vec![Token {
+            term: "café".to_string(),
+            start_offset: 0,
+            end_offset: 4,
+            position: 0,
+        }];
+        let snippets = Highlighter::highlight(text, &tokens, 150);
+        assert!(!snippets.is_empty());
+        assert!(snippets[0].contains("Café"));
+
+        let emoji_text = "Hello 🌍 world 🌎 test";
+        let emoji_tokens = vec![Token {
+            term: "🌍".to_string(),
+            start_offset: 6,
+            end_offset: 10,
+            position: 0,
+        }];
+        let emoji_snippets = Highlighter::highlight(emoji_text, &emoji_tokens, 150);
+        assert!(!emoji_snippets.is_empty());
+
+        let cjk = "日本語テスト文章";
+        let cjk_end = std::cmp::min(3, cjk.len());
+        let cjk_snippets = Highlighter::highlight(cjk, &[], 3);
+        assert!(!cjk_snippets.is_empty());
     }
 }

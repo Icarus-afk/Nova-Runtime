@@ -1,8 +1,15 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
 
 use nova_blob::chunk::ChunkManager;
 use nova_blob::config::BlobConfig;
+use nova_blob::gc::GarbageCollector;
 use nova_blob::manager::BlobManager;
+use nova_blob::namespace::validate_namespace;
+use nova_blob::upload::UploadSession;
 
 fn test_config(tmp_dir: &tempfile::TempDir) -> BlobConfig {
     BlobConfig {
@@ -102,7 +109,6 @@ async fn test_namespace_isolation() {
     assert_eq!(ns1_blobs.len(), 1);
     assert_eq!(ns2_blobs.len(), 1);
 
-    // Blob from ns1 should not appear in ns2
     if !ns1_blobs.is_empty() && !ns2_blobs.is_empty() {
         assert_ne!(ns1_blobs[0], ns2_blobs[0]);
     }
@@ -136,7 +142,6 @@ async fn test_range_download() {
 #[tokio::test]
 async fn test_chunk_dedup() {
     let dir = tempfile::tempdir().unwrap();
-    // Use a 4-byte chunk size so each 4-byte block is a separate chunk
     let config = test_config_small_chunks(&dir, 4);
     let mgr = BlobManager::new(config).await.unwrap();
 
@@ -155,12 +160,10 @@ async fn test_chunk_dedup() {
 
     let dedup = mgr.dedup();
 
-    // The shared chunk "AAAA" should be referenced twice
     let shared_hash = ChunkManager::hash(shared);
     let ref_count = dedup.get_ref_count(&shared_hash);
     assert_eq!(ref_count, 2, "shared chunk should have ref_count=2");
 
-    // Each blob can be fully retrieved
     assert_eq!(mgr.get_blob(&meta1.id).await.unwrap(), data1);
     assert_eq!(mgr.get_blob(&meta2.id).await.unwrap(), data2);
 }
@@ -197,14 +200,207 @@ async fn test_merkle_integrity() {
 
     let root = MerkleTree::build(&hashes);
 
-    // Verify each chunk with its proof
     for (i, hash) in hashes.iter().enumerate() {
         let proof = MerkleTree::generate_proof(&hashes, i);
         assert!(MerkleTree::verify(hash, &proof, &root));
     }
 
-    // Verify a wrong hash fails
     let wrong_hash = ChunkManager::hash(b"wrong");
     let proof = MerkleTree::generate_proof(&hashes, 0);
     assert!(!MerkleTree::verify(&wrong_hash, &proof, &root));
+}
+
+#[tokio::test]
+async fn test_namespace_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let mgr = BlobManager::new(config).await.unwrap();
+
+    let err = mgr.create_blob("", b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "empty namespace should be rejected");
+
+    let err = mgr.create_blob("/slash", b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "namespace with '/' should be rejected");
+
+    let err = mgr.create_blob("\\backslash", b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "namespace with '\\' should be rejected");
+
+    let err = mgr.create_blob("..", b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "namespace with '..' should be rejected");
+
+    let err = mgr.create_blob("a\0b", b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "namespace with null byte should be rejected");
+
+    let long_name = "a".repeat(256);
+    let err = mgr.create_blob(&long_name, b"data", "text/plain", HashMap::new()).await;
+    assert!(err.is_err(), "namespace >255 chars should be rejected");
+
+    let result = mgr.create_blob("valid-ns_1.0", b"data", "text/plain", HashMap::new()).await;
+    assert!(result.is_ok(), "valid namespace should be accepted");
+
+    validate_namespace("").unwrap_err();
+    validate_namespace("/bad").unwrap_err();
+    validate_namespace("..").unwrap_err();
+    validate_namespace("valid-name.1").unwrap();
+}
+
+#[tokio::test]
+async fn test_blob_listing_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let mgr = BlobManager::new(config).await.unwrap();
+
+    for i in 0..25 {
+        let data = format!("blob-{}", i);
+        mgr.create_blob("page-ns", data.as_bytes(), "text/plain", HashMap::new())
+            .await
+            .unwrap();
+    }
+
+    let (page1, total) = mgr.list_blobs_paginated("page-ns", 0, 10).await.unwrap();
+    assert_eq!(page1.len(), 10, "first page should have 10 items");
+    assert_eq!(total, 25, "total should be 25");
+
+    let (page2, total2) = mgr.list_blobs_paginated("page-ns", 10, 10).await.unwrap();
+    assert_eq!(page2.len(), 10, "second page should have 10 items");
+    assert_eq!(total2, 25, "total should still be 25");
+
+    let (page3, total3) = mgr.list_blobs_paginated("page-ns", 20, 10).await.unwrap();
+    assert_eq!(page3.len(), 5, "third page should have 5 items");
+    assert_eq!(total3, 25, "total should still be 25");
+
+    let ids1: std::collections::HashSet<_> = page1.into_iter().collect();
+    let ids2: std::collections::HashSet<_> = page2.into_iter().collect();
+    let ids3: std::collections::HashSet<_> = page3.into_iter().collect();
+    assert!(ids1.is_disjoint(&ids2), "pages should not overlap");
+    assert!(ids1.is_disjoint(&ids3), "pages should not overlap");
+    assert!(ids2.is_disjoint(&ids3), "pages should not overlap");
+}
+
+#[tokio::test]
+async fn test_ttl_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let mgr = BlobManager::new(config).await.unwrap();
+
+    let meta = mgr
+        .create_blob("ttl-ns", b"expiring data", "text/plain", HashMap::new())
+        .await
+        .unwrap();
+
+    let store = mgr.store().clone();
+    store.delete_metadata(&meta.id).await.unwrap();
+    let mut expired_meta = meta.clone();
+    expired_meta.expires_at = Some(0);
+    expired_meta.created_at = 0;
+    store.put_metadata(&expired_meta).await.unwrap();
+
+    mgr.run_gc().await.unwrap();
+
+    let result = mgr.get_blob(&meta.id).await;
+    assert!(result.is_err(), "expired blob should be deleted after GC");
+}
+
+#[tokio::test]
+async fn test_gc_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(&dir);
+    config.gc_interval_secs = 1;
+    let config_for_store = config.clone();
+
+    let store = Arc::new(nova_blob::backend::filesystem::FilesystemBackend::new(&config_for_store));
+    store.init().await.unwrap();
+    let dedup = Arc::new(nova_blob::dedup::DeduplicationEngine::new());
+    let gc = Arc::new(GarbageCollector::new(store, dedup, &config_for_store));
+
+    let cancel = CancellationToken::new();
+    let handle = GarbageCollector::start_background(gc.clone(), Duration::from_millis(100), cancel.clone());
+
+    cancel.cancel();
+
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_dedup_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let shared = b"AAAA";
+    let data1 = [shared.as_slice(), b"BBBB"].concat();
+    let data2 = [shared.as_slice(), b"CCCC"].concat();
+
+    let config2 = BlobConfig {
+        chunk_size: 4,
+        ..test_config(&dir)
+    };
+
+    let mgr2 = BlobManager::new(config2).await.unwrap();
+    mgr2.create_blob("dedup-persist-ns", &data1, "text/plain", HashMap::new())
+        .await
+        .unwrap();
+    mgr2.create_blob("dedup-persist-ns", &data2, "text/plain", HashMap::new())
+        .await
+        .unwrap();
+
+    mgr2.save_dedup_state().await.unwrap();
+
+    let shared_hash = ChunkManager::hash(shared);
+    assert_eq!(mgr2.dedup().get_ref_count(&shared_hash), 2);
+
+    let config3 = BlobConfig {
+        data_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
+    let mgr3 = BlobManager::new(config3).await.unwrap();
+    assert_eq!(mgr3.dedup().get_ref_count(&shared_hash), 2, "dedup state should persist across manager instances");
+}
+
+#[tokio::test]
+async fn test_upload_part_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let mgr = BlobManager::new(config).await.unwrap();
+
+    let session: UploadSession = mgr
+        .initiate_upload("list-parts-ns", "text/plain", HashMap::new(), 30)
+        .await
+        .unwrap();
+
+    mgr.upload_part(&session.upload_id, b"hello ".to_vec()).await.unwrap();
+    mgr.upload_part(&session.upload_id, b"world ".to_vec()).await.unwrap();
+    mgr.upload_part(&session.upload_id, b"parts!".to_vec()).await.unwrap();
+
+    let parts = mgr.list_parts(&session.upload_id).unwrap();
+    assert_eq!(parts.len(), 3, "should have 3 parts");
+    assert_eq!(parts[0].size, 6, "first part size should be 6");
+    assert_eq!(parts[1].size, 6, "second part size should be 6");
+    assert_eq!(parts[2].size, 6, "third part size should be 6");
+    assert_eq!(parts[0].part_number, 1);
+    assert_eq!(parts[1].part_number, 2);
+    assert_eq!(parts[2].part_number, 3);
+}
+
+#[tokio::test]
+async fn test_upload_size_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(&dir);
+    let mgr = BlobManager::new(config).await.unwrap();
+
+    let session: UploadSession = mgr
+        .initiate_upload("size-val-ns", "text/plain", HashMap::new(), 20)
+        .await
+        .unwrap();
+
+    mgr.upload_part(&session.upload_id, b"hello world".to_vec()).await.unwrap();
+
+    let result = mgr.complete_upload(&session.upload_id).await;
+    assert!(result.is_err(), "should reject when declared total_size (20) != actual uploaded (11)");
+
+    let session2: UploadSession = mgr
+        .initiate_upload("size-val-ns2", "text/plain", HashMap::new(), 11)
+        .await
+        .unwrap();
+    mgr.upload_part(&session2.upload_id, b"hello world".to_vec()).await.unwrap();
+    let result2 = mgr.complete_upload(&session2.upload_id).await;
+    assert!(result2.is_ok(), "should accept when declared total matches actual");
 }

@@ -5,6 +5,7 @@ use crate::document::{FieldValue, IndexedDocument};
 use crate::error::{Result, SearchError};
 use crate::index::segment::InMemorySegment;
 use crate::posting::list::PostingEntry;
+use unicode_normalization::UnicodeNormalization;
 
 pub struct IndexWriter {
     segment: InMemorySegment,
@@ -25,7 +26,14 @@ impl IndexWriter {
         &self.segment
     }
 
-    pub fn add_document(&mut self, doc: IndexedDocument) -> Result<()> {
+    pub fn add_document(&mut self, mut doc: IndexedDocument) -> Result<()> {
+        for field in &mut doc.fields {
+            if let FieldValue::Text(text) = &mut field.value {
+                let normalized: String = text.nfc().collect();
+                *text = normalized;
+            }
+        }
+
         let doc_id = self.next_doc_id;
         self.next_doc_id += 1;
 

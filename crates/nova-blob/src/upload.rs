@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -10,6 +11,13 @@ use crate::config::BlobConfig;
 use crate::error::{BlobError, Result};
 use crate::merkle::MerkleTree;
 use crate::metadata::{BlobMetadata, UploadState};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartInfo {
+    pub part_number: usize,
+    pub size: u64,
+    pub hash: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct UploadSession {
@@ -43,6 +51,7 @@ impl UploadManager {
         namespace: &str,
         content_type: &str,
         user_metadata: HashMap<String, String>,
+        declared_total_size: u64,
     ) -> Result<UploadSession> {
         let upload_id = Uuid::new_v4().to_string();
         let blob_id = Uuid::new_v4().to_string();
@@ -56,7 +65,7 @@ impl UploadManager {
             namespace: namespace.to_string(),
             blob_id,
             content_type: content_type.to_string(),
-            total_size: 0,
+            total_size: declared_total_size,
             uploaded_parts: Vec::new(),
             completed: false,
             aborted: false,
@@ -84,15 +93,14 @@ impl UploadManager {
             return Err(BlobError::Internal("upload aborted".to_string()));
         }
 
-        let new_size = session.total_size + data.len() as u64;
-        if new_size > self.config.max_blob_size {
+        let accumulated: u64 = session.uploaded_parts.iter().map(|p| p.len() as u64).sum::<u64>() + data.len() as u64;
+        if accumulated > self.config.max_blob_size {
             return Err(BlobError::QuotaExceeded(format!(
                 "blob size {} exceeds max {}",
-                new_size, self.config.max_blob_size
+                accumulated, self.config.max_blob_size
             )));
         }
 
-        session.total_size = new_size;
         session.uploaded_parts.push(data);
         debug!(
             "uploaded part {} for upload {}",
@@ -110,6 +118,14 @@ impl UploadManager {
 
         if session.aborted {
             return Err(BlobError::Internal("upload aborted".to_string()));
+        }
+
+        let actual_size: u64 = session.uploaded_parts.iter().map(|p| p.len() as u64).sum();
+        if actual_size != session.total_size {
+            return Err(BlobError::Internal(format!(
+                "declared total size {} does not match actual part sizes {}",
+                session.total_size, actual_size
+            )));
         }
 
         session.completed = true;
@@ -162,5 +178,23 @@ impl UploadManager {
             .get(upload_id)
             .cloned()
             .ok_or_else(|| BlobError::UploadNotFound(upload_id.to_string()))
+    }
+
+    pub fn list_parts(&self, upload_id: &str) -> Result<Vec<PartInfo>> {
+        let sessions = self.sessions.read();
+        let session = sessions
+            .get(upload_id)
+            .ok_or_else(|| BlobError::UploadNotFound(upload_id.to_string()))?;
+        let parts = session
+            .uploaded_parts
+            .iter()
+            .enumerate()
+            .map(|(i, data)| PartInfo {
+                part_number: i + 1,
+                size: data.len() as u64,
+                hash: ChunkManager::hash(data),
+            })
+            .collect();
+        Ok(parts)
     }
 }

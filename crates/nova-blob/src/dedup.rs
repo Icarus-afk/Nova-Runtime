@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use tracing::debug;
 
+use crate::error::{BlobError, Result};
 use crate::metadata::ChunkRecord;
 
 pub struct DeduplicationEngine {
@@ -81,6 +83,32 @@ impl DeduplicationEngine {
 
     pub fn tracked_chunks(&self) -> Vec<ChunkRecord> {
         self.chunks.read().values().cloned().collect()
+    }
+
+    pub fn save_state(&self, path: &Path) -> Result<()> {
+        let chunks = self.chunks.read();
+        let data = serde_json::to_vec(&*chunks)
+            .map_err(|e| BlobError::Internal(format!("failed to serialize dedup state: {}", e)))?;
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| BlobError::Internal(format!("failed to create dedup state dir: {}", e)))?;
+        std::fs::write(path, &data)
+            .map_err(|e| BlobError::Internal(format!("failed to write dedup state: {}", e)))?;
+        debug!("saved {} chunk records to {:?}", chunks.len(), path);
+        Ok(())
+    }
+
+    pub fn load_state(&self, path: &Path) -> Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let data = std::fs::read(path)
+            .map_err(|e| BlobError::Internal(format!("failed to read dedup state: {}", e)))?;
+        let chunks: HashMap<String, ChunkRecord> = serde_json::from_slice(&data)
+            .map_err(|e| BlobError::Internal(format!("failed to deserialize dedup state: {}", e)))?;
+        let mut map = self.chunks.write();
+        *map = chunks;
+        debug!("loaded {} chunk records from {:?}", map.len(), path);
+        Ok(())
     }
 }
 

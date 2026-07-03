@@ -684,7 +684,8 @@ fn default_blob_chunk_size() -> usize { 1024 * 1024 }
 fn default_blob_max_size() -> u64 { 10 * 1024 * 1024 * 1024 }
 fn default_blob_gc_interval_secs() -> u64 { 3600 }
 fn default_blob_gc_grace_period_secs() -> u64 { 86400 }
-fn default_blob_data_dir() -> String { "/var/lib/novad/blobs".to_string() }
+fn default_blob_data_dir() -> String { "./novad-blobs".to_string() }
+fn default_blob_chunk_nesting_depth() -> usize { 3 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BlobConfig {
@@ -698,6 +699,8 @@ pub struct BlobConfig {
     pub gc_grace_period_secs: u64,
     #[serde(default = "default_blob_data_dir")]
     pub data_dir: String,
+    #[serde(default = "default_blob_chunk_nesting_depth")]
+    pub chunk_nesting_depth: usize,
 }
 
 impl Default for BlobConfig {
@@ -708,6 +711,7 @@ impl Default for BlobConfig {
             gc_interval_secs: default_blob_gc_interval_secs(),
             gc_grace_period_secs: default_blob_gc_grace_period_secs(),
             data_dir: default_blob_data_dir(),
+            chunk_nesting_depth: default_blob_chunk_nesting_depth(),
         }
     }
 }

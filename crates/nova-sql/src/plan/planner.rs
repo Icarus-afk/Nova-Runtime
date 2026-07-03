@@ -55,6 +55,12 @@ impl LogicalPlanner {
             };
         }
 
+        if stmt.distinct {
+            node = LogicalNode::Dedup {
+                input: Box::new(node),
+            };
+        }
+
         let limit = stmt.limit.unwrap_or(usize::MAX);
         let offset = stmt.offset.unwrap_or(0);
         node = LogicalNode::Limit {

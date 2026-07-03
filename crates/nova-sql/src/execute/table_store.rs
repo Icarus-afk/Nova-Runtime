@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use parking_lot::RwLock;
 
 use crate::ast::LiteralValue;
 use crate::error::{Result, SQLError};
@@ -31,12 +32,12 @@ impl Row {
 
 pub struct TableData {
     pub schema: Schema,
-    pub rows: Vec<Row>,
-    pub next_row_id: u64,
+    pub rows: RwLock<Vec<Row>>,
+    pub next_row_id: RwLock<u64>,
 }
 
 pub struct TableStore {
-    tables: DashMap<String, TableData>,
+    tables: DashMap<String, Arc<TableData>>,
 }
 
 impl TableStore {
@@ -48,15 +49,15 @@ impl TableStore {
 
     pub fn create_table(&self, name: &str, schema: Schema) -> Result<()> {
         if self.tables.contains_key(name) {
-            return Err(SQLError::Syntax(format!("table already exists: {}", name)));
+            return Err(SQLError::syntax(format!("table already exists: {}", name)));
         }
         self.tables.insert(
             name.to_string(),
-            TableData {
+            Arc::new(TableData {
                 schema,
-                rows: Vec::new(),
-                next_row_id: 0,
-            },
+                rows: RwLock::new(Vec::new()),
+                next_row_id: RwLock::new(0),
+            }),
         );
         Ok(())
     }
@@ -76,39 +77,52 @@ impl TableStore {
     }
 
     pub fn insert_row(&self, name: &str, row: Row) -> Result<()> {
-        let mut data = self
+        let data = self
             .tables
-            .get_mut(name)
+            .get(name)
             .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
         if row.values.len() != data.schema.len() {
-            return Err(SQLError::Syntax(format!(
+            return Err(SQLError::syntax(format!(
                 "expected {} columns, got {}",
                 data.schema.len(),
                 row.values.len()
             )));
         }
-        data.rows.push(row);
-        data.next_row_id += 1;
+        {
+            let mut rows = data.rows.write();
+            rows.push(row);
+        }
+        {
+            let mut rid = data.next_row_id.write();
+            *rid += 1;
+        }
         Ok(())
     }
 
     pub fn insert_rows(&self, name: &str, rows: Vec<Row>) -> Result<()> {
-        let mut data = self
+        let data = self
             .tables
-            .get_mut(name)
+            .get(name)
             .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
         for row in &rows {
             if row.values.len() != data.schema.len() {
-                return Err(SQLError::Syntax(format!(
+                return Err(SQLError::syntax(format!(
                     "expected {} columns, got {}",
                     data.schema.len(),
                     row.values.len()
                 )));
             }
         }
-        for row in rows {
-            data.rows.push(row);
-            data.next_row_id += 1;
+        let row_count = rows.len();
+        {
+            let mut rows_lock = data.rows.write();
+            for row in rows {
+                rows_lock.push(row);
+            }
+        }
+        {
+            let mut rid = data.next_row_id.write();
+            *rid += row_count as u64;
         }
         Ok(())
     }
@@ -118,7 +132,8 @@ impl TableStore {
             .tables
             .get(name)
             .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
-        Ok(data.rows.clone())
+        let rows = data.rows.read();
+        Ok(rows.clone())
     }
 
     pub fn num_rows(&self, name: &str) -> Result<usize> {
@@ -126,7 +141,8 @@ impl TableStore {
             .tables
             .get(name)
             .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
-        Ok(data.rows.len())
+        let rows = data.rows.read();
+        Ok(rows.len())
     }
 
     pub fn table_exists(&self, name: &str) -> bool {
@@ -135,6 +151,18 @@ impl TableStore {
 
     pub fn table_names(&self) -> Vec<String> {
         self.tables.iter().map(|e| e.key().clone()).collect()
+    }
+
+    pub fn update_rows<F>(&self, name: &str, mut updater: F) -> Result<()>
+    where
+        F: FnMut(&mut Vec<Row>) -> Result<()>,
+    {
+        let data = self
+            .tables
+            .get(name)
+            .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
+        let mut rows = data.rows.write();
+        updater(&mut rows)
     }
 }
 

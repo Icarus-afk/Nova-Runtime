@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::execute::iterators::{
-    AggregateExecutor, Executor, FilterExecutor, LimitExecutor, ProjectionExecutor,
+    AggregateExecutor, DedupExecutor, Executor, FilterExecutor, LimitExecutor, ProjectionExecutor,
     ScanExecutor, SortExecutor,
 };
 use crate::execute::table_store::TableStore;
@@ -60,6 +60,10 @@ pub fn build_executor(
             let input_exec = build_executor(input, tables.clone())?;
             Ok(Box::new(LimitExecutor::new(input_exec, *limit, *offset)))
         }
+        LogicalNode::Dedup { input } => {
+            let input_exec = build_executor(input, tables.clone())?;
+            Ok(Box::new(DedupExecutor::new(input_exec)))
+        }
     }
 }
 
@@ -70,6 +74,7 @@ fn resolve_schema(node: &LogicalNode, store: &TableStore) -> Result<Schema> {
         | LogicalNode::Selection { input, .. }
         | LogicalNode::Sort { input, .. }
         | LogicalNode::Limit { input, .. }
-        | LogicalNode::Aggregate { input, .. } => resolve_schema(input, store),
+        | LogicalNode::Aggregate { input, .. }
+        | LogicalNode::Dedup { input } => resolve_schema(input, store),
     }
 }

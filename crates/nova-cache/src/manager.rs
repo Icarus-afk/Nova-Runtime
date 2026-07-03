@@ -81,6 +81,27 @@ impl CacheManager {
         self.backend.len().await
     }
 
+    pub async fn get_or_insert_with(
+        &self,
+        key: CacheKey,
+        f: Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<CacheValue>> + Send>> + Send>,
+        ttl: Option<Duration>,
+    ) -> Result<CacheValue> {
+        self.backend.get_or_insert_with(key, f, ttl).await
+    }
+
+    pub async fn get_many(&self, keys: &[CacheKey]) -> Result<Vec<(CacheKey, CacheValue)>> {
+        self.backend.get_many(keys).await
+    }
+
+    pub async fn set_many(&self, items: Vec<(CacheKey, CacheValue, Option<Duration>)>) -> Result<()> {
+        self.backend.set_many(items).await
+    }
+
+    pub async fn delete_many(&self, keys: &[CacheKey]) -> Result<usize> {
+        self.backend.delete_many(keys).await
+    }
+
     pub fn attach_event_bus(&self, bus: &nova_event::EventBus) -> Result<()> {
         let topic = nova_event::TopicPattern::new("cache.invalidate.*")
             .map_err(|e| CacheError::Internal(e.to_string()))?;
@@ -124,10 +145,16 @@ impl CacheManager {
 
                 match result {
                     Ok(Ok(event)) => {
-                        let key = event.metadata.event_type.canonical;
-                        if let Some(k) = key.strip_prefix("cache.invalidate.") {
-                            if let Err(e) = backend.delete(&k.to_string()).await {
-                                tracing::warn!(key = %k, error = %e, "failed to invalidate cache entry");
+                        let canonical = &event.metadata.event_type.canonical;
+                        if let Some(rest) = canonical.strip_prefix("cache.invalidate.") {
+                            if let Some(pattern) = rest.strip_prefix("pattern.") {
+                                if let Err(e) = backend.delete_matching(pattern).await {
+                                    tracing::warn!(pattern = %pattern, error = %e, "pattern invalidation failed");
+                                }
+                            } else {
+                                if let Err(e) = backend.delete(&rest.to_string()).await {
+                                    tracing::warn!(key = %rest, error = %e, "failed to invalidate cache entry");
+                                }
                             }
                         }
                     }
@@ -150,7 +177,7 @@ mod tests {
         let backend = Arc::new(HashMapBackend::new(
             1024 * 1024,
             Arc::new(CacheMetrics::default()),
-        ));
+        ).unwrap());
         let config = CacheConfig::default();
         let manager = CacheManager::new(backend, config);
 
@@ -171,7 +198,7 @@ mod tests {
         let backend = Arc::new(HashMapBackend::new(
             1024 * 1024,
             Arc::clone(&metrics),
-        ));
+        ).unwrap());
         let manager = CacheManager::with_metrics(backend, CacheConfig::default(), Arc::clone(&metrics));
 
         manager.get("miss").await.unwrap();
@@ -187,7 +214,7 @@ mod tests {
         let backend = Arc::new(HashMapBackend::new(
             1024 * 1024,
             Arc::new(CacheMetrics::default()),
-        ));
+        ).unwrap());
         let mut config = CacheConfig::default();
         config.default_ttl_secs = 0;
         let manager = CacheManager::new(backend, config);

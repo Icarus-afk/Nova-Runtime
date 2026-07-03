@@ -15,6 +15,8 @@ pub trait BlobStore: Send + Sync {
     async fn namespace_exists(&self, namespace: &str) -> Result<bool>;
     async fn create_namespace(&self, namespace: &str) -> Result<()>;
     async fn delete_namespace(&self, namespace: &str) -> Result<()>;
+    async fn list_namespaces(&self) -> Result<Vec<String>>;
+    async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)>;
 }
 
 pub mod filesystem;
