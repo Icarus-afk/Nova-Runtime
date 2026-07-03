@@ -152,6 +152,9 @@ struct Config {
     /// Cache subsystem configuration
     cache: CacheConfig,
     
+    /// SQL layer configuration
+    sql: SQLConfig,
+    
     /// Queue subsystem configuration
     queue: QueueConfig,
     
@@ -554,20 +557,23 @@ struct MiddlewareConfig {
 
 ```rust
 struct CacheConfig {
-    /// Cache backend: "memory", "hybrid"
-    backend: String,                            // Default: "memory"
+    /// Cache backend type: "memory", "hybrid", "redis"
+    backend_type: String,                       // Default: "memory"
     
     /// Maximum cache size (bytes)
-    max_size_bytes: u64,                        // Default: 536870912 (512MB)
+    max_size: u64,                              // Default: 536870912 (512MB)
     
     /// Default TTL (seconds)
-    default_ttl_seconds: u64,                   // Default: 300 (5 minutes)
+    default_ttl_secs: u64,                      // Default: 300 (5 minutes)
     
     /// Maximum item size
     max_item_size_bytes: u32,                   // Default: 65536 (64KB)
     
-    /// Eviction policy
+    /// Eviction policy: "lru", "lfu", "ttl", "fifo"
     eviction_policy: String,                    // Default: "lru"
+    
+    /// Redis URL (only used when backend_type == "redis")
+    redis_url: Option<String>,                  // Default: None
     
     /// Enable/disable cache
     enabled: bool,                              // Default: true
@@ -578,6 +584,16 @@ struct CacheConfig {
     /// Hybrid cache (memory + disk) configuration
     hybrid: Option<HybridCacheConfig>,
 }
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_CACHE_BACKEND_TYPE` | `redis` | `cache.backend_type` |
+| `NOVA_CACHE_MAX_SIZE` | `1073741824` | `cache.max_size` |
+| `NOVA_CACHE_DEFAULT_TTL_SECS` | `600` | `cache.default_ttl_secs` |
+| `NOVA_CACHE_EVICTION_POLICY` | `lfu` | `cache.eviction_policy` |
+| `NOVA_CACHE_REDIS_URL` | `redis://:pass@host:6379` | `cache.redis_url` |
 
 struct MemoryCacheConfig {
     /// Number of shards for concurrent access
@@ -684,23 +700,50 @@ struct SearchConfig {
     max_index_size_bytes: u64,                  // Default: 1073741824 (1GB)
     
     /// Maximum result set size
-    max_results: u32,                           // Default: 100
+    max_limit: u32,                             // Default: 100
     
     /// Default result set size
-    default_results: u32,                       // Default: 10
+    default_limit: u32,                         // Default: 10
+    
+    /// BM25 ranking parameter k1 (term saturation)
+    bm25_k1: f64,                               // Default: 1.2
+    
+    /// BM25 ranking parameter b (length normalization)
+    bm25_b: f64,                                // Default: 0.75
+    
+    /// Maximum Levenshtein distance for fuzzy queries
+    fuzzy_max_distance: u8,                     // Default: 2
+    
+    /// Highlight snippet length in characters
+    highlight_snippet_len: u16,                 // Default: 150
+    
+    /// Maximum number of highlight snippets per result
+    highlight_max_snippets: u8,                 // Default: 3
     
     /// Tokenizer configuration
     tokenizer: TokenizerConfig,
     
-    /// Index refresh interval (seconds)
-    refresh_interval_seconds: u64,              // Default: 1
+    /// Index refresh interval (milliseconds)
+    refresh_interval_ms: u64,                   // Default: 1000
     
-    /// Merge policy
-    merge_policy: String,                       // Default: "tiered"
+    /// Segment merge threshold (number of segments before merge)
+    merge_segment_threshold: u32,               // Default: 10
     
     /// Enable/disable search
     enabled: bool,                              // Default: true
 }
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_SEARCH_DEFAULT_LIMIT` | `25` | `search.default_limit` |
+| `NOVA_SEARCH_MAX_LIMIT` | `500` | `search.max_limit` |
+| `NOVA_SEARCH_BM25_K1` | `1.5` | `search.bm25_k1` |
+| `NOVA_SEARCH_BM25_B` | `0.85` | `search.bm25_b` |
+| `NOVA_SEARCH_FUZZY_MAX_DISTANCE` | `1` | `search.fuzzy_max_distance` |
+| `NOVA_SEARCH_REFRESH_INTERVAL_MS` | `500` | `search.refresh_interval_ms` |
+| `NOVA_SEARCH_MERGE_SEGMENT_THRESHOLD` | `5` | `search.merge_segment_threshold` |
 
 struct TokenizerConfig {
     /// Default language
@@ -724,8 +767,11 @@ struct TokenizerConfig {
 
 ```rust
 struct BlobConfig {
-    /// Storage path
-    storage_path: String,                       // Default: "{data_dir}/blobs"
+    /// Data directory for blob chunks
+    data_dir: String,                           // Default: "{data_dir}/blobs"
+    
+    /// Chunk size for chunked blob uploads
+    chunk_size: u32,                            // Default: 4194304 (4MB)
     
     /// Maximum blob size
     max_blob_size: u64,                         // Default: 10737418240 (10GB)
@@ -735,6 +781,15 @@ struct BlobConfig {
     
     /// Storage layout
     layout: String,                             // Default: "content_hash" (content-addressed)
+    
+    /// Garbage collection interval (seconds)
+    gc_interval_secs: u64,                      // Default: 3600 (1 hour)
+    
+    /// GC grace period before reclaiming orphaned chunks (seconds)
+    gc_grace_period_secs: u64,                  // Default: 86400 (24 hours)
+    
+    /// Directory nesting depth for chunk storage
+    chunk_nesting_depth: u8,                    // Default: 2
     
     /// Compress blobs
     compression: BlobCompression,
@@ -746,6 +801,17 @@ struct BlobConfig {
     deduplication: bool,                        // Default: true
 }
 
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_BLOB_DATA_DIR` | `/mnt/nova/blobs` | `blob.data_dir` |
+| `NOVA_BLOB_CHUNK_SIZE` | `8388608` | `blob.chunk_size` |
+| `NOVA_BLOB_MAX_BLOB_SIZE` | `21474836480` | `blob.max_blob_size` |
+| `NOVA_BLOB_GC_INTERVAL_SECS` | `7200` | `blob.gc_interval_secs` |
+| `NOVA_BLOB_GC_GRACE_PERIOD_SECS` | `172800` | `blob.gc_grace_period_secs` |
+| `NOVA_BLOB_CHUNK_NESTING_DEPTH` | `3` | `blob.chunk_nesting_depth` |
+
 struct BlobCompression {
     algorithm: String,                          // Default: "zstd"
     level: u8,                                  // Default: 3
@@ -753,7 +819,34 @@ struct BlobCompression {
 }
 ```
 
-### 6.13 Authentication Configuration
+### 6.13 SQL Layer Configuration
+
+```rust
+struct SQLConfig {
+    /// Maximum batch size for batch INSERT/UPDATE operations
+    max_batch_size: u32,                        // Default: 1000
+    
+    /// Maximum number of columns in a table
+    max_columns: u16,                           // Default: 256
+    
+    /// Default LIMIT for SELECT queries (0 = no limit)
+    default_limit: u32,                         // Default: 100
+}
+
+// Validation:
+// - max_batch_size: must be >= 1 and <= 100000
+// - max_columns: must be >= 1 and <= 4096
+```
+
+**Environment variable overrides:**
+
+| Variable | Example | Overrides |
+|----------|---------|-----------|
+| `NOVA_SQL_MAX_BATCH_SIZE` | `5000` | `sql.max_batch_size` |
+| `NOVA_SQL_MAX_COLUMNS` | `128` | `sql.max_columns` |
+| `NOVA_SQL_DEFAULT_LIMIT` | `50` | `sql.default_limit` |
+
+### 6.14 Authentication Configuration
 
 ```rust
 struct AuthConfig {
@@ -880,7 +973,7 @@ struct CookieConfig {
 }
 ```
 
-### 6.14 API Configuration
+### 6.15 API Configuration
 
 ```rust
 struct ApiConfig {
@@ -963,7 +1056,7 @@ struct AdminApiConfig {
 }
 ```
 
-### 6.15 Security Configuration
+### 6.16 Security Configuration
 
 ```rust
 struct SecurityConfig {
@@ -1042,7 +1135,7 @@ struct VaultConfig {
 }
 ```
 
-### 6.16 Logging Configuration
+### 6.17 Logging Configuration
 
 ```rust
 struct LoggingConfig {
@@ -1078,7 +1171,7 @@ struct LoggingConfig {
 }
 ```
 
-### 6.17 Metrics Configuration
+### 6.18 Metrics Configuration
 
 ```rust
 struct MetricsConfig {
@@ -1106,7 +1199,7 @@ struct MetricsCollectors {
 }
 ```
 
-### 6.18 Tracing Configuration
+### 6.19 Tracing Configuration
 
 ```rust
 struct TracingConfig {
@@ -1462,9 +1555,9 @@ plan_cache_size = 10000
 plan_jit = false
 
 [cache]
-backend = "memory"
-max_size_bytes = 536870912  # 512 MB
-default_ttl_seconds = 300
+backend_type = "memory"
+max_size = 536870912  # 512 MB
+default_ttl_secs = 300
 max_item_size_bytes = 65536
 eviction_policy = "lru"
 enabled = true
@@ -1496,13 +1589,23 @@ history_retention_seconds = 604800
 timezone = "UTC"
 enabled = true
 
+[sql]
+max_batch_size = 1000
+max_columns = 256
+default_limit = 100
+
 [search]
 index_path = ""             # {data_dir}/search
 max_index_size_bytes = 1073741824 # 1 GB
-max_results = 100
-default_results = 10
-refresh_interval_seconds = 1
-merge_policy = "tiered"
+max_limit = 100
+default_limit = 10
+bm25_k1 = 1.2
+bm25_b = 0.75
+fuzzy_max_distance = 2
+highlight_snippet_len = 150
+highlight_max_snippets = 3
+refresh_interval_ms = 1000
+merge_segment_threshold = 10
 enabled = true
 
 [search.tokenizer]
@@ -1512,10 +1615,14 @@ filter_stop_words = true
 stemming = true
 
 [blob]
-storage_path = ""            # {data_dir}/blobs
-max_blob_size = 10737418240   # 10 GB
+data_dir = ""                # {data_dir}/blobs
+chunk_size = 4194304         # 4 MB
+max_blob_size = 10737418240  # 10 GB
 max_total_size = 10737418240 # 10 GB
 layout = "content_hash"
+gc_interval_secs = 3600
+gc_grace_period_secs = 86400
+chunk_nesting_depth = 2
 enabled = true
 deduplication = true
 
@@ -1858,6 +1965,13 @@ impl SecurityConfig {
     fn from_config(config: &Config) -> Self;
     fn encryption_at_rest(&self) -> &EncryptionAtRestConfig;
     fn audit(&self) -> &AuditConfig;
+}
+
+impl SQLConfig {
+    fn from_config(config: &Config) -> Self;
+    fn max_batch_size(&self) -> u32;
+    fn max_columns(&self) -> u16;
+    fn default_limit(&self) -> u32;
 }
 
 impl AuthConfig {

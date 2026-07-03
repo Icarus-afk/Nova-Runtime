@@ -9,33 +9,37 @@ The Blob Storage subsystem provides object storage capabilities within Nova Runt
 This document covers the complete blob storage subsystem:
 
 - Blob structure (ID, content, content type, size, checksum, metadata, timestamps)
-- Chunking algorithm (fixed-size 1 MB chunks with Merkle tree integrity)
+- Chunking algorithm (fixed-size configurable chunks with SHA-256 integrity)
 - Deduplication (content-addressed storage using SHA-256)
 - Upload mechanism (direct single-shot and multipart/chunked upload)
 - Download mechanism (full and range requests for partial downloads)
 - TTL/expiry for temporary blobs
-- Maximum blob size (5 TB effective, 10 GB recommended)
-- Storage mapping (chunks stored as records in Storage Engine)
-- Blob metadata management
+- Maximum blob size (10 GB default, configurable)
+- Storage mapping (chunks stored as files on the filesystem)
+- Blob metadata management (JSON-serialized metadata files)
 - Checksum verification for data integrity
-- Garbage collection for orphaned chunks
+- Garbage collection for orphaned chunks and expired blobs
+- Namespace validation and management
+- Dedup state persistence across restarts
 
 Out of scope: CDN integration (future), compression at rest (future), encryption at rest (future), S3-compatible API layer (future), cross-region replication (future).
 
 ## 3. Responsibilities
 
 - Accept blob data via single-shot and multipart uploads
-- Store blob data as fixed-size chunks in the Storage Engine
+- Store blob data as fixed-size chunks in the filesystem backend
 - Compute and verify content hashes (SHA-256) for integrity
 - Implement content-addressable deduplication (identical content stored once)
 - Support full and ranged downloads
 - Maintain blob metadata (content type, size, checksum, user metadata)
 - Enforce blob TTL/expiry for temporary storage
 - Manage multipart upload lifecycle (initiate, upload parts, complete, abort)
-- Verify chunk integrity on read using Merkle tree
+- Verify chunk integrity on read using per-chunk SHA-256
 - Provide checksums for uploaded and downloaded data
 - Track blob storage usage and quotas
-- Garbage collect orphaned chunks (no blob references them)
+- Garbage collect orphaned chunks (no blob references them) and expired blobs
+- Validate namespace names for security (path traversal prevention)
+- Persist and restore deduplication state across restarts
 - Report storage metrics (total size, chunk count, deduplication ratio)
 
 ## 4. Non Responsibilities
@@ -58,52 +62,38 @@ Out of scope: CDN integration (future), compression at rest (future), encryption
 graph TD
     subgraph "Blob Storage Subsystem"
         BM[Blob Manager]
-        UH[Upload Handler]
+        UM[Upload Manager]
         DH[Download Handler]
-        CH[Chunk Manager]
-        CP[Content Processor]
+        CM[Chunk Manager]
         DE[Deduplication Engine]
         MT[Merkle Tree Manager]
         GC[Garbage Collector]
+        NSM[Namespace Manager]
         MM[Metrics Manager]
         
-        subgraph "Chunk Storage"
-            CS[Chunk Store]
-            CI[Chunk Index]
+        subgraph "Backend Storage"
+            FB[Filesystem Backend]
         end
     end
-    
-    subgraph "Storage Engine"
-        SE[Storage Engine]
-    end
-    
-    subgraph "Execution Engine"
-        EE[Execution Pipeline]
-    end
-    
+
     subgraph "Event System"
-        ES[Event Bus]
+        TL[Telemetry / Logging]
     end
 
-    App[Application] --> EE
-    EE --> BM
-    BM --> UH
+    App[Application] --> BM
+    BM --> UM
     BM --> DH
-    UH --> CP
-    CP --> CH
-    CH --> DE
-    DE --> CS
-    DE --> CI
-    CS --> SE
-    CI --> SE
-    CH --> MT
-    MT --> CS
-    DH --> CS
-    DH --> MT
+    BM --> CM
+    BM --> DE
     BM --> GC
-    GC --> CS
+    BM --> NSM
     BM --> MM
-    MM --> ES
+    CM --> MT
+    DH --> FB
+    DE --> FB
+    NSM --> FB
+    GC --> FB
+    MM --> TL
 ```
 
 ### 5.2 Blob Chunking Structure
@@ -162,23 +152,25 @@ graph TD
 
 ```mermaid
 flowchart TD
-    U[Upload Request] --> SIZE{Size > 10MB?}
+    U[Upload Request] --> SIZE{Size > chunk_size?}
     SIZE -->|No| SINGLE[Single-shot Upload]
     SIZE -->|Yes| MULTI[Multipart Upload]
     
-    SINGLE --> RECV[Receive full body]
-    RECV --> CHUNK[Split into 1MB chunks]
+    SINGLE --> VAL_NS[Validate namespace]
+    VAL_NS --> RECV[Receive full body]
+    RECV --> CHUNK[Split into chunk_size blocks]
     CHUNK --> HASH[SHA-256 each chunk]
     HASH --> DEDUP{Chunk exists?}
     DEDUP -->|Yes| REF[Reference existing chunk]
     DEDUP -->|No| STORE[Store new chunk]
     REF --> CHECK[Verify all chunks stored]
     STORE --> CHECK
-    CHECK --> MERKLE[Build Merkle tree]
+    CHECK --> MERKLE[Build Merkle root hash]
     MERKLE --> META[Store blob metadata]
     META --> DONE[Upload Complete]
     
-    MULTI --> INIT[Initiate multipart upload]
+    MULTI --> VAL_NS2[Validate namespace]
+    VAL_NS2 --> INIT[Initiate multipart upload]
     INIT --> PID[Return upload_id]
     PID --> PART[Upload parts sequentially]
     PART --> PHASH[SHA-256 each part]
@@ -186,8 +178,36 @@ flowchart TD
     PSTORE --> NEXT{More parts?}
     NEXT -->|Yes| PART
     NEXT -->|No| COMPLETE[Complete multipart upload]
-    COMPLETE --> VERIFY[SHA-256 of assembled content]
-    VERIFY --> MERKLE
+    COMPLETE --> SIZE_CHECK{Part sum == declared total_size?}
+    SIZE_CHECK -->|No| ERR[Error: size mismatch]
+    SIZE_CHECK -->|Yes| VERIFY[SHA-256 of assembled content]
+    VERIFY --> CHUNK
+```
+
+### 5.4 Filesystem Layout
+
+```mermaid
+graph TD
+    ROOT[data_dir: ./novad-blobs]
+    META[metadata/]
+    CHUNKS[chunks/]
+    NS[namespaces/]
+    DEDUP[dedup_state.json]
+    
+    ROOT --> META
+    ROOT --> CHUNKS
+    ROOT --> NS
+    ROOT --> DEDUP
+    
+    META --> M1[<blob_id>.json]
+    META --> M2[...]
+    
+    CHUNKS --> L1[XX/]
+    L1 --> L2[YY/]
+    L2 --> L3[ZZ/]
+    L3 --> HASH[<sha256_hash>]
+    
+    NS --> NS1[<namespace>/]
 ```
 
 ## 6. Data Structures
@@ -196,485 +216,211 @@ flowchart TD
 
 ```rust
 struct BlobMetadata {
-    /// Blob ID (UUIDv4)
-    id: [u8; 16],                    // 16 bytes
+    /// Blob ID (UUIDv4 as string)
+    id: String,
     /// Storage namespace/bucket
-    namespace: String,                // variable, max 128 bytes
+    namespace: String,
     
     // Content info
     /// Total blob size in bytes
-    size: u64,                       // 8 bytes
+    size: u64,
     /// MIME content type
-    content_type: String,             // variable, max 128 bytes
-    /// Content encoding (e.g., "gzip")
-    content_encoding: Option<String>, // variable, max 32 bytes
+    content_type: String,
     
     // Checksums
-    /// SHA-256 of the entire blob
-    sha256: [u8; 32],                // 32 bytes
-    /// SHA-256 of the Merkle root (top hash)
-    merkle_root_hash: [u8; 32],      // 32 bytes
+    /// SHA-256 hex string of the entire blob
+    sha256: String,                    // 64 hex chars
+    /// Merkle root hash (hex string)
+    merkle_root: String,              // 64 hex chars
     
     // Chunking
-    /// Chunk size in bytes (fixed: 1_048_576 = 1 MiB)
-    chunk_size: u32,                 // 4 bytes
+    /// Chunk size in bytes (default: 1_048_576 = 1 MiB)
+    chunk_size: usize,
     /// Number of chunks
-    chunk_count: u64,                // 8 bytes
-    /// List of chunk hashes (SHA-256 of each chunk)
-    chunk_hashes: Vec<[u8; 32]>,     // 32 bytes each
-    /// Merkle tree (all internal nodes, breadth-first)
-    merkle_tree: Option<Vec<[u8; 32]>>, // variable
-    
-    // Deduplication
-    /// Number of unique chunks (for dedup ratio calculation)
-    unique_chunk_count: u64,         // 8 bytes
-    /// Storage size after deduplication
-    storage_size: u64,               // 8 bytes
+    chunk_count: u32,
+    /// List of chunk hashes (SHA-256 hex strings)
+    chunk_hashes: Vec<String>,        // 64 chars each
     
     // Multipart upload
     /// Upload ID (for multipart uploads)
-    upload_id: Option<String>,        // variable, max 64 bytes
-    /// Upload state: pending, active, completed, aborted
-    upload_state: Option<UploadState>, // 1 byte
+    upload_id: Option<String>,
+    /// Upload state: pending, completed, aborted
+    upload_state: UploadState,
     
     // User metadata
     /// User-defined key-value metadata
-    metadata: HashMap<String, String>, // variable, max 64 entries, 8 KB total
+    metadata: HashMap<String, String>,
     
     // Lifecycle
-    /// Creation timestamp (Unix nanoseconds)
-    created_at: i64,                 // 8 bytes
-    /// Last modification timestamp (Unix nanoseconds)
-    updated_at: i64,                 // 8 bytes
+    /// Creation timestamp (Unix seconds)
+    created_at: i64,
     /// Expiry timestamp (None = no expiry)
-    expires_at: Option<i64>,         // 8 bytes
-    
-    // Access tracking
-    /// Last access timestamp (Unix nanoseconds)
-    last_accessed_at: Option<i64>,   // 8 bytes
-    /// Access count
-    access_count: u64,              // 8 bytes
-    
-    // Owner
-    /// Owner principal ID
-    owner_id: Option<[u8; 16]>,     // 16 bytes
+    expires_at: Option<i64>,
 }
-// Minimum: ~144 bytes + variable fields
-// With 100 chunks: ~144 + 3200 = ~3344 bytes
 ```
 
 ### 6.2 Chunk Record
 
 ```rust
-/// A single chunk of blob data.
-/// Key: SHA-256 hash of chunk content (content-addressed)
-/// Value: ChunkRecord
+/// A single chunk of blob data tracked by the dedup engine.
+/// Key: SHA-256 hash of chunk content (hex string)
 struct ChunkRecord {
-    /// SHA-256 hash (content address, also the key)
-    hash: [u8; 32],                  // 32 bytes
-    
-    /// Chunk data
-    data: Vec<u8>,                   // variable, max 1_048_576 bytes (1 MiB)
-    
-    /// Compression info
-    /// Whether chunk is compressed (future)
-    compressed: bool,                // 1 byte
-    /// Original size before compression
-    original_size: Option<u64>,      // 8 bytes
-    
-    // Reference counting
+    /// SHA-256 hex hash (content address, also the key)
+    hash: String,                      // 64 hex chars
+    /// Chunk data size in bytes
+    size: u32,
     /// Number of blobs referencing this chunk
-    ref_count: u64,                  // 8 bytes
-    
-    /// Creation timestamp (Unix nanoseconds)
-    created_at: i64,                 // 8 bytes
-    /// Last reference update (Unix nanoseconds)
-    last_ref_update: i64,           // 8 bytes
-    
-    // Storage info
-    /// Storage Engine partition
-    partition: u64,                  // 8 bytes
-    /// Storage Engine record version
-    record_version: u32,            // 4 bytes
+    ref_count: u64,
+    /// Creation timestamp (Unix seconds)
+    created_at: i64,
 }
-// Minimum: ~70 bytes + data
-// Typical chunk: 1 MB data + ~70 bytes overhead = ~1,000,070 bytes
 ```
 
-### 6.3 Chunk Reference
+### 6.3 Upload Session
 
 ```rust
-/// Maps blob chunks to their content hashes.
-/// Key: (blob_id, chunk_index)
-/// Value: ChunkReference
-struct ChunkReference {
-    /// Blob ID
-    blob_id: [u8; 16],              // 16 bytes
-    /// Chunk index (0-based)
-    chunk_index: u64,                // 8 bytes
-    /// SHA-256 hash of chunk content
-    chunk_hash: [u8; 32],           // 32 bytes
-    /// Chunk offset in blob
-    offset: u64,                     // 8 bytes
-    /// Chunk size (last chunk may be smaller)
-    size: u32,                       // 4 bytes
-}
-// Total: 68 bytes per chunk reference
-```
-
-### 6.4 Multipart Upload
-
-```rust
-struct MultipartUpload {
+struct UploadSession {
     /// Upload ID (UUIDv4)
-    id: String,                      // 36 bytes
-    /// Blob ID (if already assigned)
-    blob_id: Option<[u8; 16]>,      // 16 bytes
+    upload_id: String,
     /// Namespace
-    namespace: String,               // variable, max 128 bytes
-    
-    /// Upload state
-    state: UploadState,              // 1 byte enum
-    /// Creation timestamp (Unix nanoseconds)
-    created_at: i64,                 // 8 bytes
-    /// Last activity timestamp (Unix nanoseconds)
-    last_active_at: i64,            // 8 bytes
-    
-    // Upload configuration
+    namespace: String,
+    /// Blob ID (assigned on initiate)
+    blob_id: String,
     /// Content type
-    content_type: String,            // variable, max 128 bytes
-    /// Content encoding
-    content_encoding: Option<String>, // variable, max 32 bytes
+    content_type: String,
+    /// Declared total size
+    total_size: u64,
+    /// Uploaded part data buffers
+    uploaded_parts: Vec<Vec<u8>>,
+    /// Whether upload is completed
+    completed: bool,
+    /// Whether upload is aborted
+    aborted: bool,
     /// User metadata
-    metadata: HashMap<String, String>, // variable
-    
-    // Parts tracking
-    /// Number of parts
-    part_count: u32,                // 4 bytes
-    /// Parts received (part_number -> PartInfo)
-    parts: HashMap<u32, PartInfo>,   // variable
-    /// Expected total size (if known)
-    expected_size: Option<u64>,      // 8 bytes
-    
-    // Completion
-    /// Blob SHA-256 (computed from parts)
-    blob_sha256: Option<[u8; 32]>,  // 32 bytes
-    /// Merkle root hash
-    merkle_root: Option<[u8; 32]>,  // 32 bytes
+    metadata: HashMap<String, String>,
+    /// Creation timestamp (Unix seconds)
+    created_at: i64,
 }
 
 struct PartInfo {
     /// Part number (1-based)
-    part_number: u32,               // 4 bytes
+    part_number: usize,
     /// Part size in bytes
-    size: u64,                      // 8 bytes
-    /// SHA-256 of part content
-    sha256: [u8; 32],               // 32 bytes
-    /// ETag (for client reference)
-    etag: String,                    // variable, 32 bytes (hex of sha256)
-    /// Chunk hash (if part maps to a single chunk)
-    chunk_hash: Option<[u8; 32]>,   // 32 bytes
-    /// Received timestamp (Unix nanoseconds)
-    received_at: i64,               // 8 bytes
+    size: u64,
+    /// SHA-256 hex hash of part content
+    hash: String,
 }
-// Total per part: ~92 bytes + etag string
 ```
 
-### 6.5 Upload Request
+### 6.4 Namespace Quota
 
 ```rust
-struct UploadBlobRequest {
-    /// Namespace/bucket
-    pub namespace: String,
-    /// Blob ID (optional, generated if not provided)
-    pub blob_id: Option<String>,
-    /// Content type (MIME)
-    pub content_type: String,
-    /// Content encoding
-    pub content_encoding: Option<String>,
-    /// Blob data
-    pub data: Vec<u8>,
-    /// SHA-256 of data (for client-side verification)
-    pub content_sha256: Option<[u8; 32]>,
-    /// User metadata
-    pub metadata: HashMap<String, String>,
-    /// TTL (optional, in nanoseconds from now)
-    pub ttl_ns: Option<i64>,
-    /// Maximum blob size override
-    pub max_size: Option<u64>,
+struct NamespaceQuota {
+    pub max_blobs: u64,
+    pub max_total_bytes: u64,
+    pub current_blobs: u64,
+    pub current_bytes: u64,
 }
 ```
 
-### 6.6 Multipart Upload Request Types
-
-```rust
-struct InitiateMultipartUploadRequest {
-    pub namespace: String,
-    pub content_type: String,
-    pub content_encoding: Option<String>,
-    pub metadata: HashMap<String, String>,
-    pub ttl_ns: Option<i64>,
-    pub expected_size: Option<u64>,
-}
-
-struct InitiateMultipartUploadResponse {
-    pub upload_id: String,
-    pub blob_id: [u8; 16],
-    pub namespace: String,
-    pub part_size: u32,  // 1 MiB
-    pub max_parts: u32,  // 10000
-}
-
-struct UploadPartRequest {
-    pub upload_id: String,
-    pub part_number: u32,  // 1-10000
-    pub data: Vec<u8>,
-    pub content_sha256: Option<[u8; 32]>,
-}
-
-struct UploadPartResponse {
-    pub part_number: u32,
-    pub etag: String,     // SHA-256 hex of part
-    pub chunk_hash: [u8; 32],
-}
-
-struct CompleteMultipartUploadRequest {
-    pub upload_id: String,
-    pub parts: Vec<PartIdentifier>,  // list of (part_number, etag)
-}
-
-struct PartIdentifier {
-    pub part_number: u32,
-    pub etag: String,
-}
-
-struct AbortMultipartUploadRequest {
-    pub upload_id: String,
-}
-```
-
-### 6.7 Download Request Types
-
-```rust
-struct DownloadBlobRequest {
-    pub blob_id: String,
-    /// Byte range (optional, for partial download)
-    pub range: Option<ByteRange>,
-    /// Whether to verify checksum on download
-    pub verify_checksum: bool,
-}
-
-struct ByteRange {
-    pub start: u64,
-    pub end: u64,         // inclusive
-}
-
-struct DownloadBlobResponse {
-    pub blob: BlobMetadata,
-    pub data: Vec<u8>,
-    pub content_range: Option<String>,  // "bytes start-end/total"
-}
-
-struct BlobListEntry {
-    pub blob_id: [u8; 16],
-    pub namespace: String,
-    pub size: u64,
-    pub content_type: String,
-    pub created_at: i64,
-    pub expires_at: Option<i64>,
-    pub metadata: HashMap<String, String>,
-}
-```
-
-### 6.8 Blob Statistics
+### 6.5 Blob Statistics
 
 ```rust
 struct BlobStats {
     /// Total number of blobs
-    total_blobs: u64,                // 8 bytes
-    /// Total logical size (sum of all blob sizes)
-    total_logical_size: u64,        // 8 bytes
-    /// Total storage size (after dedup)
-    total_storage_size: u64,        // 8 bytes
-    /// Deduplication ratio (logical / storage)
-    dedup_ratio: f64,               // 8 bytes
-    
-    /// Number of unique chunks
-    unique_chunks: u64,             // 8 bytes
+    total_blobs: u64,
+    /// Total logical bytes stored
+    total_bytes: u64,
     /// Total chunks (including duplicates)
-    total_chunks: u64,              // 8 bytes
-    
-    /// Number of multipart uploads in progress
-    active_multipart_uploads: u64,  // 8 bytes
-    /// Number of expired blobs pending cleanup
-    pending_cleanup: u64,           // 8 bytes
-    
-    /// Storage per namespace
-    namespace_stats: HashMap<String, NamespaceBlobStats>, // variable
+    total_chunks: u64,
+    /// Unique chunks tracked by dedup
+    unique_chunks: u64,
+    /// Dedup savings (ref_count > 1 contributions)
+    chunk_dedup_savings: u64,
+    /// Active multipart uploads
+    active_uploads: u64,
+    /// Number of namespaces
+    namespaces: u64,
 }
-
-struct NamespaceBlobStats {
-    pub blob_count: u64,
-    pub logical_size: u64,
-    pub storage_size: u64,
-}
-```
-
-### 6.9 Merkle Tree (Internal)
-
-```rust
-/// Binary Merkle tree for chunk integrity verification.
-/// Constructed from the list of chunk hashes.
-
-struct MerkleTree {
-    /// All nodes in breadth-first order.
-    /// Leaf nodes are chunk hashes.
-    /// Internal nodes are SHA-256(child_left || child_right).
-    nodes: Vec<[u8; 32]>,            // variable
-    
-    /// Number of leaf nodes (= number of chunks)
-    leaf_count: u64,                 // 8 bytes
-    /// Total number of nodes
-    node_count: u64,                 // 8 bytes
-    
-    /// Height of the tree (number of levels)
-    height: u32,                     // 4 bytes
-    
-    /// Root hash (top of tree)
-    root_hash: [u8; 32],            // 32 bytes
-}
-
-// Construction:
-// Given chunk hashes [H1, H2, H3, H4, H5, H6]:
-// Level 0 (leaves): [H1, H2, H3, H4, H5, H6]
-// Level 1: [SHA256(H1+H2), SHA256(H3+H4), SHA256(H5+H6)]
-// Level 2: [SHA256(L1_0+L1_1), SHA256(L1_2)]
-// Level 3 (root): [SHA256(L2_0+L2_1)]
-//
-// nodes = [root, L2_0, L2_1, L1_0, L1_1, L1_2, H1, H2, H3, H4, H5, H6]
-// (breadth-first from root to leaves)
-//
-// Verification:
-// To verify chunk at index i:
-//   Compute sibling path from leaf to root
-//   Recompute root from known correct sibling hashes
-//   Compare with stored root_hash
 ```
 
 ## 7. Algorithms
 
+### 7.0 Namespace Validation
+
+```
+Algorithm: ValidateNamespace
+Input:
+  - name: &str
+
+Output:
+  - Result<()>
+
+Steps:
+  1. If name.is_empty():
+     Return Err("namespace name cannot be empty")
+  2. If name.len() > 255:
+     Return Err("namespace name too long")
+  3. If name contains '/' or '\\' or '..' or '\0':
+     Return Err("invalid namespace name")
+  4. If name contains characters other than alphanumeric, '-', '_', '.':
+     Return Err("namespace must be alphanumeric")
+  5. Return Ok
+
+This validation is applied to all namespace operations:
+  - create_namespace, delete_namespace (via ensure_namespace)
+  - list_blobs_paginated
+  - initiate_upload
+  - create_blob (via ensure_namespace)
+```
+
 ### 7.1 Single-Shot Upload
 
 ```
-Algorithm: UploadBlob
+Algorithm: UploadBlob (create_blob)
 Input:
-  - request: UploadBlobRequest
-  - current_time: i64
-  - config: BlobConfig
+  - namespace: &str
+  - data: &[u8]
+  - content_type: &str
+  - metadata: HashMap<String, String>
 
 Output:
-  - blob_id: [u8; 16]
-  - metadata: BlobMetadata
+  - BlobMetadata
 
 Steps:
-  1. Validate request:
-     If request.data.len() > config.max_blob_size (default: 10 GB):
-       Return Err(BlobTooLarge(config.max_blob_size))
-     If request.namespace not found and auto-create disabled:
-       Return Err(NamespaceNotFound)
-     If request.content_type is empty:
-       content_type = "application/octet-stream"
-     If request.namespace is empty:
-       Return Err(InvalidNamespace)
-     If request.metadata has > 64 entries or total size > 8192 bytes:
-       Return Err(MetadataTooLarge)
-  
-  2. If request.blob_id is Some:
-     blob_id = parse UUID from request.blob_id
-     Check if blob_id already exists:
-       If exists, Return Err(BlobAlreadyExists)
-  3. Else:
+  1. Validate and ensure namespace exists:
+     ensure_namespace(namespace)
+     Check quota (blob count + byte size)
+     If namespace doesn't exist, auto-create it
+   
+  2. Chunk the data:
+     chunk_size = config.chunk_size (default: 1 MiB)
+     chunks, chunk_hashes = ChunkManager::split(data)
+   
+  3. Compute blob SHA-256:
+     sha256 = SHA-256(data) as hex string
+   
+  4. Build Merkle root:
+     merkle_root = MerkleTree::build(&chunk_hashes)
+   
+  5. Deduplicate and store chunks:
+     For each (chunk, hash) in (chunks, chunk_hashes):
+       is_dup = dedup.record_chunk(hash, chunk.len())
+       If not is_dup:
+         store.put_chunk(hash, chunk)
+   
+  6. Create and store BlobMetadata:
      blob_id = UUIDv4
-  
-  4. Validate content integrity (if client provided SHA-256):
-     If request.content_sha256 is Some:
-       computed = SHA-256(request.data)
-       If computed != request.content_sha256:
-         Return Err(ChecksumMismatch)
-  
-  5. Chunk the data:
-     chunk_size = 1_048_576 (1 MiB)
-     chunks = []
-     For offset in 0..data.len() step chunk_size:
-       end = min(offset + chunk_size, data.len())
-       chunk_data = data[offset..end]
-       chunk_hash = SHA-256(chunk_data)
-       chunks.push(Chunk { offset, data: chunk_data, hash: chunk_hash })
-  
-  6. Deduplicate and store chunks:
-     unique_chunks = 0
-     total_storage_size = 0
-     For each chunk in chunks:
-       existing = lookup_chunk(chunk.hash)
-       If existing is None:
-         // New unique chunk
-         store_chunk(chunk.hash, chunk.data)
-         chunk.ref_count = 1
-         unique_chunks += 1
-         total_storage_size += chunk.data.len()
-       Else:
-         // Duplicate: increment ref count
-         existing.ref_count += 1
-         update_chunk(existing)
-         total_storage_size += 0  // dedup savings
-     
-     // Also account for first chunk if it already existed:
-     // (ref_count was already incremented above)
-  
-  7. Build Merkle tree:
-     leaf_hashes = chunks.map(|c| c.hash)
-     merkle_tree = MerkleTree::build(leaf_hashes)
-  
-  8. Store blob references:
-     For i, chunk in enumerate(chunks):
-       ref = ChunkReference {
-         blob_id,
-         chunk_index: i as u64,
-         chunk_hash: chunk.hash,
-         offset: chunk.offset,
-         size: chunk.data.len() as u32,
-       }
-       store_chunk_reference(ref)
-  
-  9. Create BlobMetadata:
-     metadata = BlobMetadata {
-       id: blob_id,
-       namespace: request.namespace,
-       size: request.data.len() as u64,
-       content_type: request.content_type,
-       content_encoding: request.content_encoding,
-       sha256: SHA-256(request.data),
-       merkle_root_hash: merkle_tree.root_hash,
-       chunk_size: 1_048_576,
-       chunk_count: chunks.len() as u64,
-       chunk_hashes: leaf_hashes,
-       merkle_tree: Some(merkle_tree.nodes),
-       unique_chunk_count: unique_chunks,
-       storage_size: total_storage_size,
-       metadata: request.metadata,
-       created_at: current_time,
-       updated_at: current_time,
-       expires_at: request.ttl_ns.map(|ttl| current_time + ttl),
-       last_accessed_at: None,
-       access_count: 0,
-       owner_id: None,  // set by auth middleware
-     }
-     store_blob_metadata(metadata)
-  
-  10. Emit "blob.created" event:
-      { blob_id, namespace, size, content_type, chunk_count, unique_chunks }
-  
-  11. Return (blob_id, metadata)
+     metadata = { id, namespace, size, content_type, sha256,
+                  merkle_root, chunk_size, chunk_count, chunk_hashes,
+                  upload_state: Completed, metadata, created_at: now }
+     store.put_metadata(&metadata)
+   
+  7. Update usage tracking:
+     ns_manager.increment_usage(namespace, size)
+     stats.increment_blobs(1), add_bytes(size), increment_chunks(chunk_count)
+   
+  8. Return metadata
 ```
 
 ### 7.2 Multipart Upload (Initiate)
@@ -682,40 +428,23 @@ Steps:
 ```
 Algorithm: InitiateMultipartUpload
 Input:
-  - request: InitiateMultipartUploadRequest
-  - current_time: i64
+  - namespace: &str
+  - content_type: &str
+  - metadata: HashMap<String, String>
+  - declared_total_size: u64
 
 Output:
-  - response: InitiateMultipartUploadResponse
+  - UploadSession
 
 Steps:
-  1. Validate request:
-     If request.expected_size is Some and > config.max_blob_size:
-       Return Err(BlobTooLarge)
-  
-  2. Generate upload_id = UUIDv4 as string
-  3. Generate blob_id = UUIDv4
-  4. Create MultipartUpload record:
-     upload = MultipartUpload {
-       id: upload_id,
-       blob_id: Some(blob_id),
-       namespace: request.namespace,
-       state: Active,
-       created_at: current_time,
-       last_active_at: current_time,
-       content_type: request.content_type,
-       content_encoding: request.content_encoding,
-       metadata: request.metadata,
-       part_count: 0,
-       parts: HashMap::new(),
-       expected_size: request.expected_size,
-       blob_sha256: None,
-       merkle_root: None,
-     }
-     store_multipart_upload(upload)
-  
-  5. Return response with:
-     upload_id, blob_id, part_size = 1 MiB, max_parts = 10000
+  1. Validate namespace (validate_namespace)
+  2. Ensure namespace exists (ensure_namespace)
+  3. Generate upload_id = UUIDv4, blob_id = UUIDv4
+  4. Create UploadSession with state:
+     upload_id, blob_id, namespace, content_type, total_size,
+     empty uploaded_parts, completed: false, aborted: false
+  5. Store session in memory
+  6. Return UploadSession
 ```
 
 ### 7.3 Multipart Upload (Upload Part)
@@ -723,55 +452,26 @@ Steps:
 ```
 Algorithm: UploadPart
 Input:
-  - request: UploadPartRequest
-  - current_time: i64
+  - upload_id: &str
+  - data: Vec<u8>
 
 Output:
-  - response: UploadPartResponse
+  - Result<()>
 
 Steps:
-  1. Load MultipartUpload by request.upload_id
+  1. Load UploadSession by upload_id
      If not found: Return Err(UploadNotFound)
-     If state != Active: Return Err(UploadNotActive)
-     If expected_size reached: Return Err(UploadComplete)
-  
-  2. Validate part_number:
-     If part_number < 1 or part_number > 10000:
-       Return Err(InvalidPartNumber)
-     If part_number already uploaded:
-       Return Err(PartAlreadyUploaded(part_number))
-  
-  3. Validate part size:
-     If request.data.len() > 5 * 1_048_576 (5 MiB per part):
-       Return Err(PartTooLarge)
-     // Note: last part can be any size, other parts should be chunk_size
-     // But we don't strictly enforce this; we handle variable-size parts
-  
-  4. Compute SHA-256 of part data:
-     part_hash = SHA-256(request.data)
-     If request.content_sha256 is Some and request.content_sha256 != part_hash:
-       Return Err(ChecksumMismatch)
-  
-  5. Store part data as temporary chunk:
-     chunk_hash = part_hash
-     Part data will be finalized on complete; store temporarily
-     store_temporary_part_chunk(upload_id, part_number, request.data)
-  
-  6. Create PartInfo:
-     part_info = PartInfo {
-       part_number,
-       size: request.data.len() as u64,
-       sha256: part_hash,
-       etag: hex::encode(part_hash),
-       chunk_hash,
-       received_at: current_time,
-     }
-     upload.parts.insert(part_number, part_info)
-     upload.part_count += 1
-     upload.last_active_at = current_time
-     update_multipart_upload(upload)
-  
-  7. Return response with part_number, etag, chunk_hash
+     If completed: Return Err("upload already completed")
+     If aborted: Return Err("upload aborted")
+   
+  2. Validate total size:
+     accumulated = sum of existing parts + data.len()
+     If accumulated > config.max_blob_size:
+       Return Err(QuotaExceeded)
+   
+  3. Append data to session.uploaded_parts
+   
+  4. Update session in memory
 ```
 
 ### 7.4 Multipart Upload (Complete)
@@ -779,59 +479,32 @@ Steps:
 ```
 Algorithm: CompleteMultipartUpload
 Input:
-  - request: CompleteMultipartUploadRequest
-  - current_time: i64
+  - upload_id: &str
 
 Output:
-  - blob_id: [u8; 16]
-  - metadata: BlobMetadata
+  - BlobMetadata
 
 Steps:
-  1. Load MultipartUpload by request.upload_id
-     If not found: Return Err(UploadNotFound)
-     If state != Active: Return Err(UploadNotActive)
-  
-  2. Validate parts list:
-     Verify all part_numbers from 1 to upload.part_count are present
-     Verify each etag matches the stored part's SHA-256
-     If mismatch: Return Err(ChecksumMismatch)
-  
-  3. Assemble data from parts (in order):
-     all_data = Vec::new()
-     For part_number in 1..=upload.part_count:
-       part_data = load_temporary_part_chunk(upload_id, part_number)
-       all_data.extend(part_data)
-  
-  4. Chunk the assembled data (same as single-shot upload):
-     chunk_size = 1_048_576
-     chunks = []
-     For offset in 0..all_data.len() step chunk_size:
-       end = min(offset + chunk_size, all_data.len())
-       chunk_data = all_data[offset..end]
-       chunk_hash = SHA-256(chunk_data)
-       chunks.push(Chunk { offset, data: chunk_data, hash: chunk_hash })
-  
-  5. Deduplicate and store chunks (same as single-shot upload)
-  
-  6. Build Merkle tree (same as single-shot upload)
-  
-  7. Compute blob SHA-256:
-     blob_sha256 = SHA-256(all_data)
-  
-  8. Store chunk references (same as single-shot upload)
-  
-  9. Create and store BlobMetadata (same as single-shot upload)
-  
-  10. Clean up temporary data:
-      For each part:
-        delete_temporary_part_chunk(upload_id, part_number)
-      upload.state = Completed
-      update_multipart_upload(upload)
-      // Keep upload record for reference (ttl: 7 days)
-  
-  11. Emit "blob.created" event
-  
-  12. Return (blob_id, metadata)
+  1. Load and remove UploadSession by upload_id
+     If aborted: Return Err("upload aborted")
+   
+  2. Validate size:
+     actual_size = sum of all uploaded part sizes
+     If actual_size != session.total_size:
+       Return Err("declared total size does not match actual part sizes")
+   
+  3. Assemble data from parts:
+     all_data = concat(session.uploaded_parts)
+   
+  4. Chunk assembled data:
+     (chunks, chunk_hashes) = ChunkManager::split(&all_data)
+   
+  5. Compute blob SHA-256 and Merkle root
+   
+  6. Create BlobMetadata and store chunks via dedup
+     (same as single-shot upload steps 5-7)
+   
+  7. Return metadata
 ```
 
 ### 7.5 Multipart Upload (Abort)
@@ -839,384 +512,271 @@ Steps:
 ```
 Algorithm: AbortMultipartUpload
 Input:
-  - upload_id: String
+  - upload_id: &str
 
 Steps:
-  1. Load MultipartUpload
-     If not found: Return Err(UploadNotFound)
-  
-  2. For each part:
-     delete_temporary_part_chunk(upload_id, part_number)
-  
-  3. upload.state = Aborted
-     update_multipart_upload(upload)
-  
-  4. Emit "blob.upload.aborted" event
+  1. Load UploadSession
+  2. Mark session.aborted = true
+  3. In-memory only; part buffers are dropped on session removal
 ```
 
-### 7.6 Blob Download (Full)
+### 7.6 Part Listing
+
+```
+Algorithm: ListParts
+Input:
+  - upload_id: &str
+
+Output:
+  - Vec<PartInfo>
+
+Steps:
+  1. Load UploadSession by upload_id
+  2. For each uploaded part at index i:
+     part_info = {
+       part_number: i + 1,
+       size: data.len(),
+       hash: SHA-256(data) as hex
+     }
+  3. Return all part_infos
+```
+
+### 7.7 Blob Download (Full)
 
 ```
 Algorithm: DownloadBlob
 Input:
-  - blob_id: [u8; 16]
-  - verify_checksum: bool (default: true)
+  - blob_id: &str
 
 Output:
-  - metadata: BlobMetadata
-  - data: Vec<u8>
+  - Vec<u8> (blob data)
 
 Steps:
   1. Load BlobMetadata by blob_id
-     If not found: Return Err(BlobNotFound)
-  
-  2. Check expiry:
-     If metadata.expires_at is Some and current_time > metadata.expires_at:
-       Return Err(BlobExpired)
-  
-  3. Load all chunks:
-     data = Vec::with_capacity(metadata.size as usize)
-     For i in 0..metadata.chunk_count:
-       ref = load_chunk_reference(blob_id, i)
-       chunk = load_chunk(ref.chunk_hash)
-       If chunk is None:
-         Return Err(ChunkNotFound(ref.chunk_hash))
-       data.extend_from_slice(&chunk.data)
-  
-  4. Verify integrity:
-     If verify_checksum:
-       computed_sha256 = SHA-256(&data)
-       If computed_sha256 != metadata.sha256:
-         Return Err(DataCorruption)
-       
-       // Verify Merkle tree (optional, heavier)
-       reconstructed_leaves = compute_chunk_hashes(metadata.chunk_count)
-       If reconstruct_merkle_root(reconstructed_leaves) != metadata.merkle_root_hash:
-         Return Err(MerkleRootMismatch)
-  
-  5. Update access tracking:
-     metadata.access_count += 1
-     metadata.last_accessed_at = current_time
-     update_blob_metadata(metadata)  // async, best-effort
-  
-  6. Return (metadata, data)
+     If not found: Return Err(NotFound)
+   
+  2. Load all chunks:
+     For each chunk_hash in metadata.chunk_hashes:
+       chunk_data = store.get_chunk(chunk_hash)
+       actual_hash = SHA-256(chunk_data) as hex
+       If actual_hash != chunk_hash:
+         Return Err(ChecksumMismatch)
+       Append chunk_data to result
+   
+  3. Verify full blob integrity:
+     full_hash = SHA-256(result) as hex
+     If full_hash != metadata.sha256:
+       Return Err(ChecksumMismatch)
+   
+  4. Return assembled blob data
 ```
 
-### 7.7 Blob Download (Partial/Range)
+### 7.8 Blob Download (Partial/Range)
 
 ```
 Algorithm: DownloadBlobRange
 Input:
-  - blob_id: [u8; 16]
-  - range: ByteRange { start, end }
+  - blob_id: &str
+  - offset: u64
+  - length: u64
 
 Output:
-  - metadata: BlobMetadata
-  - data: Vec<u8>
-  - content_range: String
+  - Vec<u8> (range data)
 
 Steps:
   1. Load BlobMetadata
-  2. Check expiry
-  
-  3. Validate range:
-     If start >= metadata.size:
-       Return Err(InvalidRange)
-     end = min(end, metadata.size - 1)
-     If start > end:
-       Return Err(InvalidRange)
-  
-  4. Determine which chunks to load:
-     chunk_size = metadata.chunk_size as u64
-     start_chunk = start / chunk_size
-     end_chunk = end / chunk_size
-     chunk_count = end_chunk - start_chunk + 1
-  
-  5. Load chunks and extract range:
-     data = Vec::new()
-     For i in start_chunk..=end_chunk:
-       ref = load_chunk_reference(blob_id, i)
-       chunk = load_chunk(ref.chunk_hash)
-       
-       If i == start_chunk:
-         chunk_start = start % chunk_size
-       Else:
-         chunk_start = 0
-       
-       If i == end_chunk:
-         chunk_end = end % chunk_size + 1
-       Else:
-         chunk_end = chunk.data.len()
-       
-       data.extend_from_slice(&chunk.data[chunk_start..chunk_end])
-  
-  6. Update access tracking (async, best-effort)
-  
-  7. Return:
-     metadata, data, content_range = "bytes {start}-{end}/{metadata.size}"
+  2. Validate range:
+     If offset >= metadata.size: Return Err(InvalidRange)
+     end = min(offset + length, metadata.size)
+   
+  3. Determine which chunks to load:
+     chunk_size = metadata.chunk_size
+     start_chunk = offset / chunk_size
+     end_chunk = (end - 1) / chunk_size
+   
+  4. Load relevant chunks and extract sub-range:
+     For chunk_idx in start_chunk..=end_chunk:
+       chunk_data = store.get_chunk(metadata.chunk_hashes[chunk_idx])
+       Calculate chunk_start, chunk_end within chunk
+       Extract chunk_data[chunk_start..chunk_end]
+       Append to result
+   
+  5. Return extracted range data
 ```
 
-### 7.8 Chunk Deduplication
+### 7.9 Chunk Deduplication
 
 ```
-Algorithm: StoreChunk
+Algorithm: DedupEngine::record_chunk
 Input:
-  - chunk_hash: [u8; 32]
-  - chunk_data: Vec<u8>
+  - hash: &str (SHA-256 hex of chunk content)
+  - size: u32
+
+Output:
+  - bool (true if duplicate, false if new)
 
 Steps:
-  1. Check if chunk already exists:
-     existing = load_chunk(chunk_hash)
-     If existing is Some:
-       // Chunk exists, just increment ref count
-       existing.ref_count += 1
-       existing.last_ref_update = current_time
-       update_chunk(existing)
-       Return  // No new storage needed
-  
-  2. Create new chunk record:
-     chunk = ChunkRecord {
-       hash: chunk_hash,
-       data: chunk_data,
-       compressed: false,
-       ref_count: 1,
-       created_at: current_time,
-       last_ref_update: current_time,
-     }
-     store_chunk(chunk)
-  
-  3. Emit "blob.chunk.stored" event with chunk size
+  1. Look up hash in in-memory map:
+     If found:
+       Record.ref_count += 1
+       Return true (duplicate)
+     If not found:
+       Insert new ChunkRecord { hash, size, ref_count: 1, created_at: now }
+       Return false (new chunk)
 ```
 
+### 7.10 Dedup State Persistence
+
 ```
-Algorithm: ReleaseChunk (on blob delete)
+Algorithm: DedupEngine::save_state
 Input:
-  - chunk_hash: [u8; 32]
+  - path: &Path
 
 Steps:
-  1. Load chunk record
-     If not found: Return (orphan, but should not happen)
-  
-  2. Decrement ref count:
-     chunk.ref_count -= 1
-     
-     If chunk.ref_count == 0:
-       // No more blobs reference this chunk
-       // Either delete immediately or mark for GC
-       mark_chunk_for_deletion(chunk.hash)
-       chunk.state = PendingDeletion
-     
-     update_chunk(chunk)
+  1. Serialize in-memory chunk HashMap to JSON bytes
+  2. Create parent directory if needed
+  3. Write JSON bytes to file at path
+
+Algorithm: DedupEngine::load_state
+Input:
+  - path: &Path
+
+Steps:
+  1. If file doesn't exist at path, return Ok
+  2. Read file bytes
+  3. Deserialize JSON into HashMap<String, ChunkRecord>
+  4. Replace in-memory chunk map with deserialized data
+
+On BlobManager initialization:
+  - After backend init, call load_dedup_state()
+  - On shutdown(), call save_dedup_state()
 ```
 
-### 7.9 Merkle Tree Construction
+### 7.11 Merkle Tree Construction
 
 ```
 Algorithm: MerkleTree::build
 Input:
-  - leaf_hashes: Vec<[u8; 32]>
+  - chunk_hashes: &[String] (hex SHA-256 hashes)
 
 Output:
-  - merkle_tree: MerkleTree
+  - root_hash: String
 
 Steps:
-  1. If leaf_hashes.is_empty():
-     leaf_hashes = [SHA-256(empty_bytes)]  // hash of empty data
-  
-  2. Initialize current_level = leaf_hashes.clone()
-  3. nodes = []  // will store root-first BFS
-  4. levels = [leaf_hashes]  // leaf level at index [0]
-  
-  5. While current_level.len() > 1:
+  1. If chunk_hashes.is_empty():
+     Return SHA-256("") as hex
+   
+  2. Initialize current_level = chunk_hashes
+   
+  3. While current_level.len() > 1:
      next_level = []
-     For i in 0..current_level.len() step 2:
-       left = current_level[i]
-       If i + 1 < current_level.len():
-         right = current_level[i + 1]
+     For each pair in current_level (chunks of 2):
+       If pair has 2 elements:
+         combined = pair[0] || pair[1] (string concatenation)
+         hash = SHA-256(combined) as hex
+         next_level.push(hash)
        Else:
-         right = left  // duplicate last if odd
-       
-       combined = [left, right].concat()
-       parent_hash = SHA-256(&combined)
-       next_level.push(parent_hash)
-     
-     levels.push(next_level)
+         next_level.push(pair[0])  (promote odd element)
      current_level = next_level
-  
-  6. root_hash = current_level[0] (single hash at top)
-  
-  7. Build BFS node array (root first):
-     bfs_nodes = []
-     For level in levels.reverse():  // top to bottom
-       bfs_nodes.extend(level)
-  
-  8. Return MerkleTree {
-     nodes: bfs_nodes,
-     leaf_count: leaf_hashes.len(),
-     node_count: bfs_nodes.len(),
-     height: levels.len(),
-     root_hash,
-   }
+   
+  4. Return current_level[0] (root hash)
 ```
 
-### 7.10 Merkle Tree Verification
+### 7.12 Garbage Collection
 
 ```
-Algorithm: MerkleTree::verify_chunk
+Algorithm: GarbageCollector::run_once
 Input:
-  - chunk_index: u64
-  - chunk_data: Vec<u8>
-  - merkle_tree: MerkleTree
+  - (self) references store, dedup, config
 
 Output:
-  - valid: bool
+  - total_items_collected: usize
 
 Steps:
-  1. Compute chunk_hash = SHA-256(chunk_data)
-  
-  2. Get all leaf hashes from tree:
-     leaf_start = merkle_tree.node_count - merkle_tree.leaf_count
-     leaf_hash = merkle_tree.nodes[leaf_start + chunk_index]
-     
-     If chunk_hash != leaf_hash:
-       Return false  // Chunk data doesn't match stored hash
-  
-  3. Compute sibling path to root:
-     // Structure: BFS from root. For leaf at position P in level L:
-     // sibling is at position P+1 if P even, P-1 if P odd
-     
-     current_hash = chunk_hash
-     current_index = leaf_start + chunk_index
-     
-     While current_index > 0:
-       sibling_index = if current_index % 2 == 0:
-         current_index - 1  // left sibling
-       else:
-         current_index + 1  // right sibling
-       
-       parent_index = (current_index - 1) / 2  // integer division
-       
-       // Order matters: left || right
-       If current_index % 2 == 0:
-         // I'm right child, sibling is left
-         combined = [merkle_tree.nodes[sibling_index], current_hash].concat()
-       Else:
-         // I'm left child, sibling is right
-         combined = [current_hash, merkle_tree.nodes[sibling_index]].concat()
-       
-       parent_hash = SHA-256(&combined)
-       
-       If parent_hash != merkle_tree.nodes[parent_index]:
-         Return false  // Integrity violation
-       
-       current_hash = parent_hash
-       current_index = parent_index
-  
-  4. Return current_hash == merkle_tree.root_hash
+  1. Collect unreferenced chunks:
+     candidates = dedup.collect_unreferenced(gc_grace_period_secs)
+     For each hash in candidates:
+       store.delete_chunk(hash)
+       dedup.remove_tracked(hash)
+   
+  2. Clean up expired blobs (TTL enforcement):
+     expired_count = cleanup_expired_blobs()
+   
+  3. Log summary
+     Return total (unreferenced + expired)
+
+Algorithm: CleanupExpiredBlobs
+Steps:
+  1. List all namespaces via store
+  2. For each namespace:
+     List all blob IDs via store
+     For each blob_id:
+       Load metadata, check expires_at
+       If expires_at is Some and expires_at <= now:
+         Release all chunk references via dedup
+         Delete chunks with ref_count reaching 0
+         Delete blob metadata
+         Increment count
+  3. Return count of expired blobs deleted
 ```
 
-### 7.11 Garbage Collection
+### 7.13 GC Background Loop
 
 ```
-Algorithm: GarbageCollectChunks
-Runs: Periodically (every 3600 seconds = 1 hour)
+Algorithm: GarbageCollector::start_background
 Input:
-  - current_time: i64
+  - self: Arc<Self>
+  - interval: Duration
+  - cancel: CancellationToken
+
+Output:
+  - JoinHandle<()>
 
 Steps:
-  1. Scan for chunks with state == PendingDeletion and
-     last_ref_update < current_time - 86400_000_000_000 (24 hours grace period)
-     // Grace period prevents deleting chunks that might be re-referenced
-     // during concurrent writes
-  
-  2. For each candidate chunk:
-     a. Verify ref_count is still 0 (re-check to avoid race)
-     b. If confirmed 0:
-        delete_chunk(chunk.hash)
-        Emit "blob.chunk.deleted" event
-        freed_bytes += chunk.data.len()
-  
-  3. Scan for expired temporary multipart uploads:
-     uploads where state == Active AND
-     last_active_at < current_time - 86400_000_000_000 (24 hours no activity)
-     
-     For each expired upload:
-       Call AbortMultipartUpload (cleans up temp parts)
-       Emit "blob.upload.expired" event
-  
-  4. Scan for expired blobs:
-     blobs where expires_at is Some AND expires_at < current_time
-     
-     For each expired blob:
-       Call DeleteBlob (cleans up chunks, decrements ref counts)
-  
-  5. Log GC report:
-     { chunks_freed, bytes_freed, uploads_aborted, blobs_expired, duration_ns }
+  1. Spawn tokio task with loop:
+     tokio::select! {
+       _ = sleep(interval) => run_once()
+       _ = cancel.cancelled() => break (shutdown)
+     }
 ```
 
-### 7.12 Blob Deletion
+### 7.14 Blob Deletion
 
 ```
 Algorithm: DeleteBlob
 Input:
-  - blob_id: [u8; 16]
+  - blob_id: &str
 
 Steps:
   1. Load BlobMetadata
-     If not found: Return Err(BlobNotFound)
-  
-  2. Load all ChunkReferences for blob_id
-  
-  3. For each chunk reference:
-     // Decrement chunk ref count
-     chunk = load_chunk(ref.chunk_hash)
-     If chunk is Some:
-       chunk.ref_count -= 1
-       If chunk.ref_count == 0:
-         mark_chunk_for_deletion(chunk.hash)
-       update_chunk(chunk)
-  
-  4. Delete all chunk references for blob_id
-  
-  5. Delete BlobMetadata
-  
-  6. Emit "blob.deleted" event with blob_id and size
+  2. For each chunk_hash in metadata.chunk_hashes:
+     ref_count = dedup.release_chunk(chunk_hash)
+     If ref_count == 0:
+       store.delete_chunk(chunk_hash)
+  3. store.delete_metadata(blob_id)
+  4. Update usage tracking:
+     ns_manager.decrement_usage(namespace, size)
+     stats.decrement_blobs(1), remove_bytes(size)
 ```
 
-### 7.13 Blob Listing and Pagination
+### 7.15 Blob Listing (Paginated)
 
 ```
-Algorithm: ListBlobs
+Algorithm: ListBlobsPaginated
 Input:
-  - namespace: String
-  - prefix: Option<String>  (filter by blob_id prefix)
-  - offset: u32
-  - limit: u32 (max: 1000)
-  - sort_by: SortBy (created_at, size, name; default: created_at desc)
+  - namespace: &str
+  - offset: usize
+  - limit: usize
 
 Output:
-  - blobs: Vec<BlobListEntry>
-  - total_count: u64
-  - next_offset: Option<u32>
+  - (blob_ids: Vec<String>, total_count: usize)
 
 Steps:
-  1. Query Storage Engine for blobs in namespace
-     Filter by prefix if provided
-     Sort by specified field
-     Apply offset and limit
-     Count total (capped at 100,000)
-  
-  2. Return paginated results with next_offset for continuation
-
-// For namespace management:
-Algorithm: CreateNamespace
-  - Create namespace record (just a name + config)
-  
-Algorithm: DeleteNamespace
-  - Delete namespace (fails if non-empty, force option available)
-  
-Algorithm: GetNamespaceStats
-  - Return blob count and total size for namespace
+  1. Validate namespace (validate_namespace)
+  2. List all blob IDs in namespace (via backend)
+  3. Calculate total = all.len()
+  4. Apply offset + limit: page = all[offset..offset+limit]
+  5. Return (page, total)
 ```
 
 ## 8. Interfaces
@@ -1225,123 +785,89 @@ Algorithm: GetNamespaceStats
 
 ```rust
 struct BlobManager {
-    storage: Arc<StorageEngine>,
-    event_bus: Arc<EventBus>,
+    store: Arc<dyn BlobStore>,
+    chunk_manager: ChunkManager,
     dedup: Arc<DeduplicationEngine>,
-    gc: Arc<GarbageCollector>,
+    upload_mgr: UploadManager,
+    download_handler: DownloadHandler,
+    gc: GarbageCollector,
+    ns_manager: NamespaceManager,
+    stats: Arc<StatsCollector>,
     config: BlobConfig,
 }
 
 impl BlobManager {
-    fn new(
-        storage: Arc<StorageEngine>,
-        event_bus: Arc<EventBus>,
-        config: BlobConfig,
-    ) -> Self;
+    async fn new(config: BlobConfig) -> Result<Self>;
+    fn new_with_backend(store: Arc<dyn BlobStore>, config: BlobConfig) -> Self;
+    
+    // Lifecycle
+    async fn shutdown(&self) -> Result<()>;
+    async fn save_dedup_state(&self) -> Result<()>;
     
     // Namespace management
-    fn create_namespace(&self, name: &str, config: NamespaceConfig) -> Result<(), BlobError>;
-    fn delete_namespace(&self, name: &str, force: bool) -> Result<(), BlobError>;
-    fn list_namespaces(&self) -> Result<Vec<String>, BlobError>;
-    fn get_namespace_stats(&self, name: &str) -> Result<NamespaceBlobStats, BlobError>;
+    async fn create_namespace(&self, namespace: &str) -> Result<()>;
+    async fn delete_namespace(&self, namespace: &str) -> Result<()>;
+    async fn namespace_exists(&self, namespace: &str) -> Result<bool>;
+    fn set_namespace_quota(&self, namespace: &str, max_blobs: u64, max_total_bytes: u64);
     
     // Single-shot upload/download
-    fn upload_blob(&self, request: UploadBlobRequest) -> Result<BlobMetadata, BlobError>;
-    fn download_blob(&self, request: DownloadBlobRequest) -> Result<DownloadBlobResponse, BlobError>;
-    fn delete_blob(&self, blob_id: &[u8; 16]) -> Result<(), BlobError>;
-    fn get_blob_metadata(&self, blob_id: &[u8; 16]) -> Result<BlobMetadata, BlobError>;
-    fn list_blobs(&self, namespace: &str, filter: BlobFilter) -> Result<Vec<BlobListEntry>, BlobError>;
+    async fn create_blob(&self, namespace: &str, data: &[u8],
+        content_type: &str, metadata: HashMap<String, String>) -> Result<BlobMetadata>;
+    async fn get_blob(&self, blob_id: &str) -> Result<Vec<u8>>;
+    async fn get_blob_range(&self, blob_id: &str, offset: u64, length: u64) -> Result<Vec<u8>>;
+    async fn delete_blob(&self, blob_id: &str) -> Result<()>;
+    async fn get_metadata(&self, blob_id: &str) -> Result<BlobMetadata>;
+    async fn list_blobs(&self, namespace: &str) -> Result<Vec<String>>;
+    async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize)
+        -> Result<(Vec<String>, usize)>;
     
     // Multipart upload
-    fn initiate_multipart_upload(&self, request: InitiateMultipartUploadRequest) -> Result<InitiateMultipartUploadResponse, BlobError>;
-    fn upload_part(&self, request: UploadPartRequest) -> Result<UploadPartResponse, BlobError>;
-    fn complete_multipart_upload(&self, request: CompleteMultipartUploadRequest) -> Result<BlobMetadata, BlobError>;
-    fn abort_multipart_upload(&self, upload_id: &str) -> Result<(), BlobError>;
-    fn list_parts(&self, upload_id: &str) -> Result<Vec<PartInfo>, BlobError>;
+    async fn initiate_upload(&self, namespace: &str, content_type: &str,
+        metadata: HashMap<String, String>, declared_total_size: u64) -> Result<UploadSession>;
+    async fn upload_part(&self, upload_id: &str, data: Vec<u8>) -> Result<()>;
+    async fn complete_upload(&self, upload_id: &str) -> Result<BlobMetadata>;
+    async fn abort_upload(&self, upload_id: &str) -> Result<()>;
+    fn list_parts(&self, upload_id: &str) -> Result<Vec<PartInfo>>;
+    fn get_upload_session(&self, upload_id: &str) -> Result<UploadSession>;
     
-    // Blob management
-    fn update_blob_metadata(&self, blob_id: &[u8; 16], updates: UpdateMetadataRequest) -> Result<BlobMetadata, BlobError>;
-    fn set_blob_ttl(&self, blob_id: &[u8; 16], ttl_ns: Option<i64>) -> Result<(), BlobError>;
-    fn copy_blob(&self, source_id: &[u8; 16], destination_namespace: &str) -> Result<BlobMetadata, BlobError>;
-    // copy_blob copies metadata only; chunks shared via ref counting
+    // GC
+    async fn run_gc(&self) -> Result<usize>;
     
     // Monitoring
-    fn get_blob_stats(&self) -> Result<BlobStats, BlobError>;
-    fn check_blob_exists(&self, blob_id: &[u8; 16]) -> Result<bool, BlobError>;
-    fn get_chunk_info(&self, chunk_hash: &[u8; 32]) -> Result<ChunkRecord, BlobError>;
+    fn stats(&self) -> BlobStats;
+    fn dedup(&self) -> &Arc<DeduplicationEngine>;
+    fn store(&self) -> &Arc<dyn BlobStore>;
+    fn chunk_manager(&self) -> &ChunkManager;
 }
 
 struct BlobConfig {
-    pub max_blob_size: u64,              // default: 10 GB (10_737_418_240)
-    pub max_blob_size_effective: u64,    // default: 5 TB (5_497_558_138_880)
-    pub chunk_size: u32,                 // default: 1_048_576 (1 MiB)
-    pub max_parts: u32,                  // default: 10000
-    pub max_part_size: u64,              // default: 5_242_880 (5 MiB)
-    pub max_metadata_entries: u32,       // default: 64
-    pub max_metadata_size: u64,          // default: 8192 (8 KB)
-    pub default_ttl_ns: Option<i64>,     // default: None (no expiry)
-    pub multipart_timeout_ns: i64,       // default: 86400_000_000_000 (24h)
-    pub gc_interval_ns: i64,             // default: 3600_000_000_000 (1h)
-    pub gc_grace_period_ns: i64,         // default: 86400_000_000_000 (24h)
-}
-
-struct NamespaceConfig {
-    pub max_blobs: Option<u64>,          // max blobs in namespace
-    pub max_total_size: Option<u64>,     // max total storage in namespace
-    pub default_ttl_ns: Option<i64>,     // default ttl for blobs in namespace
-    pub allow_public_access: bool,       // future
-}
-
-struct BlobFilter {
-    pub prefix: Option<String>,
-    pub offset: u32,
-    pub limit: u32,
-    pub sort_by: Option<SortBy>,
-    pub sort_order: Option<SortOrder>,
-}
-
-struct UpdateMetadataRequest {
-    pub content_type: Option<String>,
-    pub metadata: Option<HashMap<String, Option<String>>>,  // Some = set, None = remove
-    pub content_encoding: Option<Option<String>>,
+    pub chunk_size: usize,                    // default: 1_048_576 (1 MiB)
+    pub max_blob_size: u64,                   // default: 10 GB
+    pub gc_interval_secs: u64,                // default: 3600 (1h)
+    pub gc_grace_period_secs: u64,            // default: 86400 (24h)
+    pub data_dir: String,                     // default: "./novad-blobs"
+    pub chunk_nesting_depth: usize,           // default: 3
 }
 ```
 
-### 8.2 Execution Engine Blob Extension
+### 8.2 BlobStore Trait
 
 ```rust
-impl ExecutionEngine {
-    fn blob_upload(&self, ctx: &ExecutionContext, params: BlobUploadParams) -> Result<Value, RuntimeError>;
-    fn blob_download(&self, ctx: &ExecutionContext, params: BlobDownloadParams) -> Result<Value, RuntimeError>;
-    fn blob_delete(&self, ctx: &ExecutionContext, blob_id: &str) -> Result<Value, RuntimeError>;
-    fn blob_metadata(&self, ctx: &ExecutionContext, blob_id: &str) -> Result<Value, RuntimeError>;
-    fn blob_list(&self, ctx: &ExecutionContext, params: BlobListParams) -> Result<Value, RuntimeError>;
-    fn blob_initiate_multipart(&self, ctx: &ExecutionContext, params: MultipartInitParams) -> Result<Value, RuntimeError>;
-    fn blob_upload_part(&self, ctx: &ExecutionContext, params: PartUploadParams) -> Result<Value, RuntimeError>;
-    fn blob_complete_multipart(&self, ctx: &ExecutionContext, params: MultipartCompleteParams) -> Result<Value, RuntimeError>;
-    fn blob_abort_multipart(&self, ctx: &ExecutionContext, upload_id: &str) -> Result<Value, RuntimeError>;
-}
-
-struct BlobUploadParams {
-    pub namespace: String,
-    pub data: Vec<u8>,
-    pub content_type: Option<String>,
-    pub filename: Option<String>,
-    pub metadata: Option<HashMap<String, String>>,
-    pub ttl_seconds: Option<u64>,
-}
-
-struct BlobDownloadParams {
-    pub blob_id: String,
-    pub range_start: Option<u64>,
-    pub range_end: Option<u64>,
-}
-
-struct BlobListParams {
-    pub namespace: String,
-    pub prefix: Option<String>,
-    pub offset: Option<u32>,
-    pub limit: Option<u32>,
+#[async_trait]
+trait BlobStore: Send + Sync {
+    async fn put_metadata(&self, metadata: &BlobMetadata) -> Result<()>;
+    async fn get_metadata(&self, blob_id: &str) -> Result<BlobMetadata>;
+    async fn delete_metadata(&self, blob_id: &str) -> Result<()>;
+    async fn put_chunk(&self, hash: &str, data: &[u8]) -> Result<()>;
+    async fn get_chunk(&self, hash: &str) -> Result<Vec<u8>>;
+    async fn delete_chunk(&self, hash: &str) -> Result<()>;
+    async fn list_blobs(&self, namespace: &str) -> Result<Vec<String>>;
+    async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize)
+        -> Result<(Vec<String>, usize)>;
+    async fn namespace_exists(&self, namespace: &str) -> Result<bool>;
+    async fn create_namespace(&self, namespace: &str) -> Result<()>;
+    async fn delete_namespace(&self, namespace: &str) -> Result<()>;
+    async fn list_namespaces(&self) -> Result<Vec<String>>;
 }
 ```
 
@@ -1349,59 +875,17 @@ struct BlobListParams {
 
 ```rust
 enum BlobError {
-    // Blob errors
-    BlobNotFound,
-    BlobAlreadyExists,
-    BlobExpired,
-    BlobTooLarge(u64),         // max size
-    BlobCorrupted,
-    
-    // Namespace errors
+    NotFound(String),           // blob or chunk not found
     NamespaceNotFound(String),
-    NamespaceAlreadyExists(String),
-    NamespaceNotEmpty(String),
-    NamespaceQuotaExceeded,
-    
-    // Upload errors
     UploadNotFound(String),
-    UploadNotActive(String),
-    UploadComplete(String),
-    UploadExpired(String),
-    InvalidPartNumber(u32),
-    PartAlreadyUploaded(u32),
-    PartTooLarge(u64),
-    PartOrderInvalid,
-    
-    // Chunk errors
-    ChunkNotFound([u8; 32]),
-    ChunkCorrupted([u8; 32]),
-    
-    // Checksum errors
-    ChecksumMismatch,
-    MerkleRootMismatch,
-    DataCorruption,
-    
-    // Range errors
-    InvalidRange,
-    RangeNotSatisfiable(u64),  // total size
-    
-    // Metadata errors
-    MetadataTooLarge(u64),
-    InvalidContentType(String),
-    
-    // Configuration errors
-    InvalidConfiguration(String),
-    
-    // Storage errors
-    StorageError(String),
-    
-    // Quota errors
-    StorageQuotaExceeded,
-    BlobCountQuotaExceeded,
-    
-    // Internal errors
-    Internal(String),
+    ChecksumMismatch { expected: String, actual: String },
+    QuotaExceeded(String),
+    InvalidRange(String),
+    InvalidInput(String),
+    Internal(String),           // wraps IO, serialization, etc.
 }
+
+impl From<std::io::Error> for BlobError;  // mapped to Internal
 ```
 
 ## 9. Sequence Diagrams
@@ -1411,44 +895,36 @@ enum BlobError {
 ```mermaid
 sequenceDiagram
     participant A as Application
-    participant EE as ExecutionEngine
     participant BM as BlobManager
+    participant NS as NamespaceManager
     participant DE as DedupEngine
-    participant CH as ChunkStore
+    participant ST as BlobStore
     participant MT as MerkleTree
-    participant SE as StorageEngine
 
-    A->>EE: blob.upload("images", data, content_type="image/png")
-    EE->>BM: upload_blob(request)
+    A->>BM: create_blob("images", data, content_type)
+    BM->>NS: ensure_namespace("images")
+    NS->>NS: validate_namespace("images")
+    NS->>ST: create_namespace (if new)
     
-    BM->>BM: Validate request, check size
-    
-    BM->>BM: Split data into 1MB chunks (7 chunks for 6.2MB)
+    BM->>BM: Split data into chunks (7 chunks for 6.2MB)
     
     loop For each chunk
-        BM->>DE: Check if chunk exists (SHA-256)
-        DE->>CH: Lookup by hash
-        CH-->>DE: Found / Not found
-        
-        alt Chunk exists
-            DE->>CH: Increment ref_count
-        else Chunk not found
-            DE->>CH: Store new chunk
-            CH->>SE: Write chunk record
-            SE-->>CH: Stored
+        BM->>DE: record_chunk(hash, size)
+        alt Chunk exists (dedup)
+            DE-->>BM: true (ref_count++)
+        else New chunk
+            DE-->>BM: false
+            BM->>ST: put_chunk(hash, data)
         end
     end
     
-    BM->>MT: Build Merkle tree from chunk hashes
-    MT-->>BM: merkle_root, tree_nodes
+    BM->>MT: MerkleTree::build(chunk_hashes)
+    MT-->>BM: root_hash
     
-    BM->>SE: Store ChunkReferences (blob_id -> chunk_hashes)
-    BM->>SE: Store BlobMetadata
+    BM->>ST: put_metadata(metadata)
+    BM->>NS: increment_usage(namespace, size)
     
-    SE-->>BM: Stored
-    
-    BM-->>EE: BlobMetadata { id, size, sha256, chunk_count }
-    EE-->>A: 201 Created { blob_id, size, sha256, merkle_root }
+    BM-->>A: BlobMetadata { id, size, sha256 }
 ```
 
 ### 9.2 Chunk Deduplication
@@ -1458,43 +934,36 @@ sequenceDiagram
     participant A1 as App 1
     participant A2 as App 2
     participant BM as BlobManager
-    participant CH as ChunkStore
-    participant SE as StorageEngine
+    participant DE as DedupEngine
+    participant ST as BlobStore
 
-    A1->>BM: upload("logos", logo_a.png, 3.2MB)
+    A1->>BM: create_blob("logos", logo_a.png, ...)
     BM->>BM: Chunk into 4 chunks
-    BM->>CH: Store chunk 1 (hash_1)
-    CH->>SE: Write hash_1 -> data
-    BM->>CH: Store chunk 2 (hash_2)
-    CH->>SE: Write hash_2 -> data
-    BM->>CH: Store chunk 3 (hash_3)
-    CH->>SE: Write hash_3 -> data
-    BM->>CH: Store chunk 4 (hash_4)
-    CH->>SE: Write hash_4 -> data
-    BM->>SE: Store metadata for blob A
+    
+    BM->>DE: record_chunk(hash_1, size) -> false (new)
+    BM->>ST: put_chunk(hash_1, data)
+    BM->>DE: record_chunk(hash_2, size) -> false (new)
+    BM->>ST: put_chunk(hash_2, data)
+    BM->>DE: record_chunk(hash_3, size) -> false (new)
+    BM->>ST: put_chunk(hash_3, data)
+    BM->>DE: record_chunk(hash_4, size) -> false (new)
+    BM->>ST: put_chunk(hash_4, data)
+    
     BM-->>A1: blob_id_a
     
-    Note over SE: Storage: 4 chunks = 3.2MB
+    A2->>BM: create_blob("logos", logo_b.png, ...)
+    Note over A2: logo_b identical to logo_a
+    BM->>BM: Same 4 chunk hashes
     
-    A2->>BM: upload("logos", logo_b.png, 3.2MB)
-    Note over A2: logo_b is identical to logo_a
+    BM->>DE: record_chunk(hash_1, size) -> true (dup, ref=2)
+    BM->>DE: record_chunk(hash_2, size) -> true (dup, ref=2)
+    BM->>DE: record_chunk(hash_3, size) -> true (dup, ref=2)
+    BM->>DE: record_chunk(hash_4, size) -> true (dup, ref=2)
     
-    BM->>BM: Chunk into 4 chunks (same hashes)
-    
-    BM->>CH: Store chunk 1 (hash_1)
-    CH->>CH: EXISTS! ref_count 1 -> 2
-    BM->>CH: Store chunk 2 (hash_2)
-    CH->>CH: EXISTS! ref_count 1 -> 2
-    BM->>CH: Store chunk 3 (hash_3)
-    CH->>CH: EXISTS! ref_count 1 -> 2
-    BM->>CH: Store chunk 4 (hash_4)
-    CH->>CH: EXISTS! ref_count 1 -> 2
-    
-    BM->>SE: Store metadata for blob B (references same chunks)
     BM-->>A2: blob_id_b
     
-    Note over SE: Storage: STILL 4 chunks = 3.2MB (not 6.4MB!)
-    Note over SE: Dedup ratio: 2.0 (6.4MB logical, 3.2MB physical)
+    Note over ST: Storage: 4 chunks = 3.2MB (not 6.4MB!)
+    Note over ST: Dedup ratio: 2.0 (6.4MB logical, 3.2MB physical)
 ```
 
 ### 9.3 Multipart Upload (Large File)
@@ -1503,45 +972,30 @@ sequenceDiagram
 sequenceDiagram
     participant A as Application
     participant BM as BlobManager
-    participant CH as ChunkStore
-    participant SE as StorageEngine
+    participant NS as NamespaceManager
+    participant ST as BlobStore
 
     Note over A: Uploading 100MB video
     
-    A->>BM: initiate_multipart_upload("videos", content_type="video/mp4")
-    BM->>SE: Create MultipartUpload record
-    SE-->>BM: upload_id = "upl_abc123"
-    BM-->>A: { upload_id: "upl_abc123", part_size: 1MB, max_parts: 10000 }
-    
-    Note over A: Upload parts in parallel (or sequentially)
+    A->>BM: initiate_upload("videos", "video/mp4", {}, total_size=100MB)
+    BM->>NS: validate_namespace("videos")
+    BM->>NS: ensure_namespace("videos")
+    BM-->>A: UploadSession { upload_id, blob_id }
     
     loop Upload 100 parts
-        A->>BM: upload_part("upl_abc123", part_number=1, data=[1MB])
-        BM->>CH: Store temporary part data
-        BM->>SE: Update MultipartUpload
-        BM-->>A: { part_number: 1, etag: "abc..." }
+        A->>BM: upload_part(upload_id, data[1MB])
+        BM->>BM: Append to session.uploaded_parts
+        BM-->>A: ok
         
-        A->>BM: upload_part("upl_abc123", part_number=2, data=[1MB])
-        BM-->>A: { part_number: 2, etag: "def..." }
-        
-        Note over A: ... continues for 100 parts ...
+        Note over A: ... continues for rest of parts ...
     end
     
-    A->>BM: complete_multipart_upload("upl_abc123", parts=[(1,"abc..."), (2,"def..."), ...])
-    
-    BM->>SE: Load all temporary parts
-    BM->>BM: Assemble and chunk into 1MB blocks
-    
-    Note over BM: Dedup: some chunks may already exist (other videos with same segments)
-    
-    BM->>CH: Store unique chunks
-    BM->>BM: Build Merkle tree
-    
-    BM->>SE: Delete temporary parts
-    BM->>SE: Store ChunkReferences
-    BM->>SE: Store BlobMetadata (size=100MB, chunks=100)
-    
-    BM-->>A: { blob_id, size=100MB, sha256, chunk_count=100 }
+    A->>BM: complete_upload(upload_id)
+    BM->>BM: Validate actual_size == declared total (100MB)
+    BM->>BM: Assemble data and re-chunk
+    BM->>BM: Dedup and store chunks
+    BM->>ST: put_metadata(metadata)
+    BM-->>A: BlobMetadata { blob_id, size=100MB }
 ```
 
 ### 9.4 Full Download
@@ -1550,36 +1004,22 @@ sequenceDiagram
 sequenceDiagram
     participant A as Application
     participant BM as BlobManager
-    participant CH as ChunkStore
-    participant MT as MerkleTree
-    participant SE as StorageEngine
+    participant ST as BlobStore
 
-    A->>BM: download_blob("blob_id_123")
+    A->>BM: get_blob("blob_id_123")
+    BM->>ST: get_metadata("blob_id_123")
+    ST-->>BM: { size: 5.2MB, chunk_hashes: [...] }
     
-    BM->>SE: Load BlobMetadata
-    SE-->>BM: { size: 5.2MB, chunk_count: 6, chunk_hashes: [...], merkle_root }
-    
-    BM->>BM: Check expiry
-    
-    loop For each of 6 chunks
-        BM->>SE: Load ChunkReference (blob_id, index)
-        SE-->>BM: { chunk_hash, offset, size }
-        
-        BM->>CH: Load chunk by hash
-        CH-->>BM: Chunk data (1MB each, last 0.2MB)
+    loop For each of 6 chunk hashes
+        BM->>ST: get_chunk(hash)
+        ST-->>BM: Chunk data (1MB each)
+        BM->>BM: Verify SHA-256(chunk) matches hash
     end
     
-    alt Verify checksum
-        BM->>BM: Compute SHA-256 of assembled data
-        BM->>BM: Compare with metadata.sha256
-    end
+    BM->>BM: Compute SHA-256 of assembled data
+    BM->>BM: Verify matches metadata.sha256
     
-    alt Verify Merkle tree
-        BM->>MT: verify_chunk for each chunk
-        MT-->>BM: All valid
-    end
-    
-    BM-->>A: { data: [5.2MB binary], content_type: "application/zip" }
+    BM-->>A: [5.2MB binary data]
 ```
 
 ### 9.5 Range Download
@@ -1588,75 +1028,92 @@ sequenceDiagram
 sequenceDiagram
     participant A as Application
     participant BM as BlobManager
-    participant CH as ChunkStore
-    participant SE as StorageEngine
+    participant ST as BlobStore
 
-    A->>BM: download_blob("video_abc", range={start: 0, end: 1048575})
+    A->>BM: get_blob_range("blob_id", offset=0, length=1MB)
+    BM->>ST: get_metadata("blob_id")
+    ST-->>BM: { size: 100MB, chunk_size: 1MB }
     
-    BM->>SE: Load BlobMetadata
-    SE-->>BM: { size: 104857600, chunk_size: 1048576 }
+    BM->>BM: start_chunk = 0, end_chunk = 0
     
-    BM->>BM: Calculate: start_chunk = 0, end_chunk = 0
-    
-    BM->>SE: Load ChunkReference (blob_id, index=0)
-    SE-->>BM: { chunk_hash }
-    
-    BM->>CH: Load chunk by hash
-    CH-->>BM: Chunk data (1MB)
-    
-    BM->>BM: Extract range [0..1048576] from chunk
-    
-    BM-->>A: { data: [first 1MB], content_range: "bytes 0-1048575/104857600" }
+    BM->>ST: get_chunk(chunk_hashes[0])
+    ST-->>BM: First chunk (1MB)
+    BM->>BM: Extract range [0..1MB]
+    BM-->>A: [first 1MB]
     
     Note over A: Client requests middle section
     
-    A->>BM: download_blob("video_abc", range={start: 52428800, end: 52428800+2097151})
-    
+    A->>BM: get_blob_range("blob_id", offset=50MB, length=2MB)
     BM->>BM: start_chunk = 50, end_chunk = 51
-    BM->>SE: Load ChunkReference index 50, 51
-    BM->>CH: Load chunks 50, 51
-    
+    BM->>ST: get_chunk(chunk_hashes[50])
+    BM->>ST: get_chunk(chunk_hashes[51])
     BM->>BM: Extract range across 2 chunks
-    BM-->>A: { data: [2MB from middle], content_range: "bytes 52428800-54525951/104857600" }
+    BM-->>A: [2MB from middle]
 ```
 
 ### 9.6 Garbage Collection
 
 ```mermaid
 sequenceDiagram
-    participant A as Application
     participant BM as BlobManager
-    participant CH as ChunkStore
+    participant DE as DedupEngine
     participant GC as GarbageCollector
-    participant SE as StorageEngine
+    participant ST as BlobStore
 
-    A->>BM: delete_blob("blob_id_123")
-    BM->>SE: Load metadata (6 chunks)
-    BM->>SE: Load chunk references
+    BM->>BM: delete_blob("blob_id")
+    BM->>DE: release_chunk(hash_1) -> ref=0
+    BM->>ST: delete_chunk(hash_1)
+    BM->>DE: release_chunk(hash_2) -> ref=0
+    BM->>ST: delete_chunk(hash_2)
     
-    loop Each chunk
-        BM->>CH: Decrement ref_count
-        CH-->>BM: ref_count now 0
-        CH->>CH: Mark for deletion (pending)
+    Note over GC: GC cycle runs (on call or background)
+    
+    GC->>DE: collect_unreferenced(grace_period=24h)
+    DE-->>GC: [] (all already cleaned up on delete)
+    
+    GC->>GC: cleanup_expired_blobs()
+    GC->>ST: list_namespaces()
+    GC->>ST: list_blobs(ns)
+    GC->>ST: get_metadata(blob_id)
+    Note over GC: Check expires_at <= now
+    GC->>DE: release_chunk(hash)
+    GC->>ST: delete_chunk(hash) (if ref=0)
+    GC->>ST: delete_metadata(blob_id)
+```
+
+### 9.7 GC Background Loop with Graceful Shutdown
+
+```mermaid
+sequenceDiagram
+    participant GC as GarbageCollector
+    participant C as CancellationToken
+    
+    Note over GC: start_background(self, interval, cancel)
+    
+    loop Every interval
+        GC->>GC: run_once()
+        Note right of GC: tokio::select! sleep vs cancel
     end
     
-    BM->>SE: Delete metadata and references
-    BM-->>A: 200 OK
+    C->>C: cancel()
+    Note over GC: CancellationToken triggers
+    GC-->>C: Break loop, task completes
+```
+
+### 9.8 Dedup State Persistence on Startup/Shutdown
+
+```mermaid
+sequenceDiagram
+    participant BM as BlobManager
     
-    Note over GC: 1 hour later (GC cycle)
+    Note over BM: On startup (BlobManager::new)
+    BM->>BM: FilesystemBackend::init()
+    BM->>BM: load_dedup_state() -> reads dedup_state.json
+    Note right of BM: Auto-loads chunk hash map from disk
     
-    GC->>CH: Scan PendingDeletion chunks (grace period > 24h)
-    CH-->>GC: [chunk_hash_1, chunk_hash_3, chunk_hash_4, chunk_hash_5]
-    
-    loop Each candidate
-        GC->>CH: Re-check ref_count == 0
-        CH-->>GC: Confirmed
-        GC->>SE: Delete chunk data
-        SE-->>GC: Freed (3.2MB)
-    end
-    
-    GC->>BM: Emit GC report
-    Note over BM: Freed 4 chunks, 3.2MB recovered
+    Note over BM: On shutdown
+    BM->>BM: save_dedup_state() -> writes dedup_state.json
+    Note right of BM: Persists all ref_counts for restart
 ```
 
 ## 10. Failure Modes
@@ -1665,31 +1122,32 @@ sequenceDiagram
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Blob too large | data > max_blob_size (10 GB) | Upload rejected with BlobTooLarge |
-| Checksum mismatch | Network corruption or client error | Upload rejected with ChecksumMismatch |
-| Chunk store failure | Storage Engine full | Upload fails partway; partial chunks stored as orphans |
-| Multipart upload timeout | Client abandons upload > 24h | Upload auto-aborted; temporary parts cleaned up |
-| Part too large | Part > 5 MiB (for multipart) | Part rejected with PartTooLarge |
-| Duplicate part number | Client sends same part twice | Second upload rejected with PartAlreadyUploaded |
+| Blob too large | data > max_blob_size (10 GB) | Upload rejected with QuotaExceeded |
+| Checksum mismatch | Data corruption | Download/read returns ChecksumMismatch |
+| Chunk store failure | Filesystem full or IO error | Upload fails with Internal error |
+| Part size mismatch | Declared total_size != actual part sum | complete_upload rejected with size mismatch |
+| Namespace invalid | Empty, contains `/`, `\\`, `..`, `\0`, non-alphanumeric, >255 chars | Upload rejected with InvalidInput |
+| Upload already completed | Client calls upload_part after complete | Error: "upload already completed" |
+| Upload aborted | Client calls upload_part after abort | Error: "upload aborted" |
 
 ### 10.2 Download Failures
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Blob not found | Blob ID invalid or deleted | Download returns BlobNotFound |
-| Blob expired | TTL reached before download | Download returns BlobExpired |
-| Chunk not found | Orphaned chunk reference | Download returns ChunkNotFound |
-| Data corruption | Bit rot on stored chunk | Checksum or Merkle verification fails; DataCorruption error |
-| Range invalid | start > end or start > blob size | Download returns InvalidRange |
+| Blob not found | Blob ID invalid or deleted | Download returns NotFound |
+| Blob expired | TTL reached before download | GC deletes blob; download returns NotFound |
+| Chunk not found | Orphaned chunk reference | Download returns NotFound(chunk) |
+| Data corruption | Bit rot on stored chunk | SHA-256 verification fails; ChecksumMismatch |
+| Range invalid | offset >= blob size | Download returns InvalidRange |
 
 ### 10.3 Deduplication Failures
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
 | Chunk ref_count overflow | > 2^64 references to same chunk | Theoretical; essentially impossible |
-| Chunk deleted while referenced | Race condition in ref counting | Download fails with ChunkNotFound |
+| Chunk deleted while referenced | Race condition | Download fails with NotFound |
 | Hash collision | SHA-256 collision | Two different chunks map to same hash; data corruption |
-| Ref count leak | Blob deleted but chunk ref not decremented | Orphaned chunks accumulate; storage leak |
+| Dedup state lost | No persistence file or corruption | On restart, previously stored chunks treated as new (dedup ratio reset) |
 
 ### 10.4 Garbage Collection Failures
 
@@ -1698,16 +1156,14 @@ sequenceDiagram
 | Chunk in use but marked for deletion | Race condition during concurrent upload | Chunk deleted while being referenced |
 | GC deletes chunk still referenced | Ref count tracking bug | Irrecoverable data loss |
 | GC misses expired blobs | GC cycle fails or delayed | Storage grows unbounded with expired data |
-| GC backlog too large | Millions of chunks pending deletion | Next GC cycle takes too long |
+| GC background task fails | CancellationToken cancelled | Next cycle resumes on restart |
 
 ### 10.5 Integrity Failures
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Merkle tree corruption | Storage Engine bit rot on tree nodes | Verification fails for all chunks |
-| Chunk reference points to wrong hash | Metadata corruption | Wrong data returned for blob |
-| Duplicate blob IDs | UUID collision (negligible) | BlobAlreadyExists on upload |
-| Metadata size mismatch | Metadata says size X, but chunks total different | Partial or truncated download |
+| Chunk reference points to wrong hash | Metadata corruption | SHA-256 verification catches on read |
+| Duplicate blob IDs | UUID collision (negligible) | Blob metadata overwritten |
 
 ## 11. Recovery Strategy
 
@@ -1715,32 +1171,33 @@ sequenceDiagram
 
 | Failure | Recovery |
 |---------|---------|
-| Upload interrupted | 1. Single-shot: client retries entire upload. 2. Multipart: client retries only failed parts. 3. Temporary parts cleaned up by GC after 24h. |
-| Checksum mismatch | 1. Client should retry with correct data. 2. Client should compute SHA-256 before sending. 3. Server returns specific error identifying mismatch. |
-| Chunk store failure during upload | 1. Already-stored unique chunks remain (ref_count persists). 2. Client retries; dedup identifies already-stored chunks. 3. No data loss for previously stored chunks. |
-| Multipart upload timeout | 1. GC auto-aborts after 24h inactivity. 2. Temporary parts cleaned up. 3. Client can restart with new upload. |
+| Upload interrupted | 1. Single-shot: client retries entire upload. 2. Multipart: client retries only failed parts. 3. Incomplete parts dropped with session. |
+| Checksum mismatch | 1. Client should retry with correct data. 2. Server returns specific error identifying mismatch. |
+| Chunk store failure during upload | 1. Already-stored unique chunks remain (ref_count persists). 2. Client retries; dedup identifies already-stored chunks. |
+| Part size mismatch | 1. Client specifies correct total_size on initiate. 2. complete_upload validates sum matches declared total. |
+| Namespace validation failure | 1. Client supplies valid alphanumeric namespace (3-255 chars). 2. Namespace must not contain path separators. |
 
 ### 11.2 Download Failure Recovery
 
 | Failure | Recovery |
 |---------|---------|
-| Chunk not found | 1. Admin should investigate orphaned references. 2. Blob integrity check tool reports missing chunks. 3. Blob marked as corrupted; admin may re-upload. |
-| Data corruption detected | 1. Merkle tree identifies which chunk is corrupted. 2. Admin can re-upload the specific chunk (if source available). 3. Blob-level checksum (SHA-256) provides second verification. |
-| Expired blob | 1. Client should refresh TTL before expiry. 2. Admin can extend TTL if blob still needed. 3. Expired blob marked for GC but not immediately deleted. |
+| Chunk not found | 1. Blob may have been partially deleted. 2. Re-upload blob. |
+| Data corruption detected | 1. SHA-256 per chunk verifies integrity on read. 2. Re-upload corrupted blob. |
+| Expired blob | 1. Client should refresh TTL before expiry. 2. Expired blob cleaned up by GC. |
 
 ### 11.3 Integrity Recovery
 
 | Failure | Recovery |
 |---------|---------|
-| Merkle tree corruption | 1. Rebuild Merkle tree from chunk hashes stored in metadata. 2. Root hash compared with stored root. 3. If metadata corrupted, rebuild from chunk references + data. |
-| Hash collision | 1. SHA-256 collision is practically impossible (2^-256). 2. No special recovery needed. 3. For paranoid deployments, SHA-512 option (future). |
+| Checksum mismatch | 1. Per-chunk SHA-256 verification detects which chunk is corrupted. 2. Re-upload the blob. |
+| Hash collision | 1. SHA-256 collision is practically impossible (2^-256). For paranoid deployments, SHA-512 option (future). |
 
 ### 11.4 GC Failure Recovery
 
 | Failure | Recovery |
 |---------|---------|
-| Chunk deleted prematurely | 1. GC grace period (24h) prevents immediate deletion. 2. If chunk is re-referenced during grace, deletion is canceled. 3. Worst case: blob is corrupted, manual re-upload needed. |
-| GC backlog | 1. GC is rate-limited (max 10,000 chunks per cycle). 2. Multiple cycles clear backlog. 3. Admin can trigger manual GC via admin API. |
+| Chunk deleted prematurely | 1. GC grace period (24h) prevents immediate deletion. 2. If chunk is re-referenced during grace, deletion is canceled. |
+| GC backlog | 1. Multiple cycles clear backlog. 2. Admin can trigger manual GC. |
 
 ## 12. Performance Considerations
 
@@ -1752,47 +1209,45 @@ sequenceDiagram
 | Multipart upload (per part) | O(P) where P = part size | Hashing + storage per part |
 | Full download | O(N) | Read chunks + assemble |
 | Range download | O(C) where C = chunks in range | Read subset of chunks |
-| Dedup check | O(1) hash lookup | Content-addressed lookup |
+| Dedup check | O(1) hash lookup | In-memory HashMap lookup |
 | Merkle tree build | O(C) where C = chunks | Build tree from leaves |
 | Merkle tree verify | O(log C) | Verify single chunk |
-| GC cycle | O(M) where M = pending chunks | Scan and delete |
+| GC cycle | O(M) where M = chunks + blobs | Scan and delete |
 
 ### 12.2 Memory Usage
 
 | Component | Memory | Notes |
 |-----------|--------|-------|
-| Upload buffer | Up to 10 GB (worst case) | Streamed, not held entirely in memory |
-| Chunk cache (hot data) | Configurable, default 256 MB | LRU eviction for frequently accessed chunks |
-| Metadata cache | ~3 KB per blob | 100K blobs = ~300 MB |
-| Merkle tree (in memory) | ~32 bytes × 2× chunks = ~64 bytes/chunk | 10K chunks = ~640 KB |
-| Temporary multipart data | Up to 5 TB spread across parts | Stored in Storage Engine, not in memory |
+| Upload buffer | Up to max_blob_size (10 GB worst case) | Parts held in memory until complete |
+| Dedup index | ~60 bytes per unique chunk | HashMap of ChunkRecord |
+| Metadata cache | Variable | Per-blob metadata loaded on demand |
+| Merkle tree | ~64 bytes per chunk (hex strings) | Only root hash stored; rebuilt on demand |
 
 ### 12.3 I/O Characteristics
 
 | Operation | I/O Pattern | Frequency |
 |-----------|-------------|-----------|
 | Upload (single) | Sequential write of N chunks | Per blob upload |
-| Upload (multipart) | Random writes (parts may arrive out of order) | Per part upload |
-| Download (full) | Sequential read of N chunks | Per blob download |
-| Download (range) | Random read of C chunks | Per range request |
-| Dedup lookup | 1 random read per chunk | Per chunk during upload |
-| GC scan | Sequential scan of pending chunks | Every 1 hour |
+| Upload (multipart) | Sequential writes to memory | Per part upload |
+| Download (full) | Sequential read of N chunk files | Per blob download |
+| Download (range) | Random read of C chunk files | Per range request |
+| Dedup persistence | 1 write on shutdown, 1 read on startup | Per lifecycle |
+| GC cycle | Sequential scan of namespaces/blobs | Every gc_interval_secs |
 
 ### 12.4 Storage Overhead
 
 | Component | Overhead | Notes |
 |-----------|----------|-------|
-| Blob metadata | ~3 KB per blob | Fixed + chunk hashes |
-| Chunk reference | 68 bytes per chunk | Per chunk per blob |
-| Chunk data | 1 MB + ~70 bytes overhead | Content + record overhead |
-| Merkle tree | ~32 bytes × (2*chunks - 1) | BFS nodes, one extra leaf level |
+| Blob metadata | ~200 bytes + chunk hashes | JSON file per blob |
+| Chunk data | chunk_size bytes + file overhead | Filesystem-level storage |
+| Dedup state | ~60 bytes per unique chunk | dedup_state.json |
+| Namespace marker | 0 bytes (empty directory) | Directory entry |
 
 For 1 GB blob (1024 chunks):
-- Metadata: ~3 KB + 1024 × 32 bytes = ~35 KB
-- Chunk references: 1024 × 68 bytes = ~70 KB
-- Chunk data: 1024 × 1,000,070 = ~1,000,071,680 bytes (~977 MB after dedup)
-- Merkle tree: ~32 × 2047 = ~65 KB
-- Total overhead: ~170 KB on 1 GB = ~0.017% overhead
+- Metadata: ~200 + 1024 * 64 = ~65 KB
+- Chunk data: 1024 * 1,048,576 = 1 GB
+- Dedup state entry: ~60 bytes per unique chunk
+- Total overhead: ~65 KB on 1 GB = ~0.006% overhead
 
 ### 12.5 Throughput Targets
 
@@ -1801,18 +1256,18 @@ For 1 GB blob (1024 chunks):
 | Single-shot upload (1 MB) | 10,000 blobs/s | Small files, max throughput |
 | Single-shot upload (10 MB) | 1,000 blobs/s | Limited by chunking + hashing |
 | Single-shot upload (1 GB) | 10 blobs/s | Large file, sequential write |
-| Multipart upload (per part) | 5,000 parts/s | Parallel uploads |
-| Full download (1 MB) | 15,000 downloads/s | Cached chunks |
+| Multipart upload (per part) | 5,000 parts/s | Sequential parts |
+| Full download (1 MB) | 15,000 downloads/s | Single chunk read |
 | Full download (10 MB) | 1,500 downloads/s | Sequential read |
 | Range download (1 MB) | 15,000 requests/s | Single chunk read |
-| GC cleanup | 10,000 chunks/cycle | Rate-limited to avoid I/O spikes |
+| GC cleanup | 10,000 items/cycle | Rate-limited to avoid I/O spikes |
 
 ### 12.6 Bottlenecks
 
 - **SHA-256 hashing**: CPU-bound. Each chunk requires SHA-256 for dedup. Mitigation: Use hardware-accelerated SHA (SHA-NI instructions).
-- **Chunk storage writes**: I/O-bound. Each unique chunk requires a storage write. Mitigation: Batch small chunks (if content under 1 MB, still stored as single chunk).
-- **Large blob assembly**: Memory-bound for very large blobs. Mitigation: Streaming assembly that writes directly to response instead of buffering.
-- **Dedup hash lookups**: I/O-bound for first-time uploads (all new chunks). Mitigation: Write-through cache for recently created hashes.
+- **Chunk storage writes**: I/O-bound. Each unique chunk requires a filesystem write.
+- **Large blob assembly**: Memory-bound for very large blobs. Mitigation: Streaming assembly (future).
+- **Dedup hash lookups**: In-memory, fast (HashMap). State persistence is a single read/write.
 
 ## 13. Security
 
@@ -1822,248 +1277,125 @@ For 1 GB blob (1024 chunks):
 |--------|--------|--------|----------|
 | Unauthorized blob read | No auth on download | Data exposure | Critical |
 | Unauthorized blob write | No auth on upload | Malware storage, storage fill | High |
-| Blob ID enumeration | Sequential or predictable IDs | Information disclosure | Medium |
-| Storage quota bypass | Upload without namespace limits | Storage exhaustion, denial of service | High |
+| Namespace injection | Malicious namespace with path separators | Directory traversal, arbitrary file write | Critical |
+| Path traversal via namespace | Namespace containing `..` or `/` | Access files outside data_dir | Critical |
+| Storage quota bypass | Upload without namespace limits | Storage exhaustion | High |
 | Metadata injection | Malicious metadata keys/values | Metadata processing vulnerability | Low |
 | Chunk hash collision | Theoretical SHA-256 collision | Wrong data returned (negligible risk) | Low |
-| Timing attack on blob existence | Different response times for existing/non-existing | Information leakage | Low |
-| Multipart upload abuse | Initiate many uploads without completing | Temporary storage fill, denial of service | Medium |
+| Multipart upload abuse | Initiate many uploads without completing | Memory exhaustion | Medium |
 
 ### 13.2 Mitigations
 
 | Threat | Mitigation |
 |--------|------------|
-| Unauthorized access | 1. All blob operations authenticated via Auth subsystem. 2. Per-namespace RBAC permissions: `blob:<namespace>:read`, `blob:<namespace>:write`, `blob:<namespace>:delete`, `blob:<namespace>:admin`. 3. Default: deny all. |
-| Malware storage | 1. Content-type validation. 2. Maximum blob size limits. 3. Namespace-level quotas. 4. Future: virus scanning integration. |
-| Blob ID enumeration | 1. UUIDv4 blob IDs (random, 122 bits of entropy). 2. No sequential IDs exposed. 3. List operations require auth per namespace. |
-| Storage quota abuse | 1. Per-namespace max_blobs and max_total_size quotas. 2. Global storage limit enforced by Storage Engine. 3. Rate limiting on upload API. |
-| Metadata injection | 1. Metadata key/value length limits. 2. Keys must match `^[a-zA-Z0-9_-]{1,128}$`. 3. Total metadata size limited to 8 KB. |
+| Unauthorized access | All blob operations authenticated via Auth subsystem. Per-namespace RBAC. |
+| Namespace injection / path traversal | `validate_namespace()` rejects names with `/`, `\\`, `..`, `\0`, non-alphanumeric chars, and names > 255 chars. Applied to ALL namespace operations. |
+| Storage quota abuse | Per-namespace max_blobs and max_total_bytes quotas. Global max_blob_size limit (10 GB). |
+| Metadata injection | Metadata key/value stored as-is (application responsibility). |
+| Chunk content integrity | SHA-256 per chunk verified on every read. Full blob SHA-256 verified on download. |
 
 ### 13.3 Content Verification
 
 - All blobs have SHA-256 checksum computed on upload
-- Chunk-level SHA-256 computed for each 1 MB chunk
-- Merkle tree provides efficient partial blob verification
-- Client can optionally provide expected SHA-256 for upload verification
-- On download, SHA-256 is verified (configurable)
-- Background integrity checker scans chunks periodically (future)
+- Chunk-level SHA-256 computed for each chunk
+- On download, each chunk hash is verified
+- On download, full blob SHA-256 is verified
+- Merkle root hash provides additional integrity layer
 
 ### 13.4 Data Isolation
 
 - Blobs are isolated by namespace (logical bucket)
-- Each namespace can have its own auth configuration
-- Cross-namespace blob access is blocked by default
-- Blob metadata does not expose sensitive internal information
+- Namespace names are validated for security
+- Chunk nesting depth configurable to spread files across directories
+- No cross-namespace access without explicit auth
 
 ## 14. Testing
 
 ### 14.1 Unit Tests
 
 ```
-Test Suite: ChunkManager
-  - test_chunk_data_into_1mb_blocks
-  - test_chunk_last_block_smaller
-  - test_chunk_exact_1mb
-  - test_chunk_empty_data
-  - test_chunk_single_byte
-  - test_chunk_large_file_10gb
-  - test_chunk_verify_integrity
+Test Suite: ChunkManager (5 tests)
+  - test_split_small_data
+  - test_split_empty_data
+  - test_split_multiple_chunks
+  - test_hash_consistency
+  - test_chunk_count
 
-Test Suite: DeduplicationEngine
-  - test_store_new_chunk
-  - test_store_existing_chunk_increments_refcount
-  - test_release_chunk_decrements_refcount
-  - test_release_chunk_to_zero_marks_for_deletion
-  - test_lookup_existing_chunk
-  - test_lookup_nonexistent_chunk
-  - test_dedup_ratio_calculation
+Test Suite: DeduplicationEngine (4 tests)
+  - test_record_new_chunk
+  - test_record_duplicate_chunk
+  - test_release_chunk
+  - test_is_duplicate
 
-Test Suite: MerkleTree
+Test Suite: MerkleTree (4 tests)
   - test_build_single_chunk
-  - test_build_two_chunks
-  - test_build_power_of_two_chunks
-  - test_build_odd_number_of_chunks
-  - test_build_empty (computes hash of empty)
-  - test_verify_valid_chunk
-  - test_verify_corrupted_chunk
-  - test_verify_wrong_chunk
-  - test_root_hash_consistency
+  - test_verify_valid_proof
+  - test_verify_invalid_proof
+  - test_build_empty
 
-Test Suite: BlobManager
-  - test_upload_small_blob
-  - test_upload_large_blob
-  - test_upload_blob_with_checksum_verification
-  - test_upload_blob_checksum_mismatch
-  - test_upload_blob_metadata_too_large
-  - test_download_full_blob
-  - test_download_range_first_chunk
+Test Suite: DownloadHandler (4 tests)
+  - test_download_full
   - test_download_range_middle
-  - test_download_range_last_chunk
-  - test_download_range_cross_chunk_boundary
-  - test_download_nonexistent_blob
-  - test_download_expired_blob
-  - test_delete_blob_cleans_references
-  - test_copy_blob_shares_chunks
-  - test_list_blobs_pagination
+  - test_download_range_exact_end
+  - test_download_range_invalid_offset
 
-Test Suite: MultipartUpload
-  - test_initiate_multipart_upload
-  - test_upload_part_valid
-  - test_upload_part_duplicate_number
-  - test_upload_part_invalid_number
-  - test_complete_multipart_upload
-  - test_complete_multipart_checksum_verify
-  - test_abort_multipart_upload
-  - test_abort_cleans_temporary_data
-  - test_multipart_upload_timeout
-  - test_complete_with_missing_parts
-  - test_complete_with_wrong_etag
-
-Test Suite: NamespaceManager
-  - test_create_namespace
-  - test_delete_empty_namespace
-  - test_delete_nonempty_namespace_without_force_fails
-  - test_delete_nonempty_namespace_with_force
-  - test_namespace_quota_enforcement
-  - test_namespace_blob_count_limit
-
-Test Suite: GarbageCollector
-  - test_collect_pending_chunks
-  - test_skip_chunks_in_grace_period
-  - test_skip_chunks_with_positive_refcount
-  - test_cleanup_expired_blobs
-  - test_cleanup_expired_multipart_uploads
-  - test_gc_rate_limiting
+Test Suite: GarbageCollector (2 tests)
+  - test_gc_no_unreferenced
+  - test_gc_collects_unreferenced
 ```
 
 ### 14.2 Integration Tests
 
 ```
-Test Suite: Upload-Download End-to-End
-  - test_upload_then_download_returns_same_data
-  - test_upload_then_range_download
-  - test_multipart_upload_then_download
-  - test_dedup_same_content_multiple_times
-  - test_upload_with_ttl_expiry_and_cleanup
-  - test_blob_persistence_across_restart
-
-Test Suite: Storage Engine Integration
-  - test_chunk_storage_and_retrieval
-  - test_chunk_reference_consistency
-  - test_metadata_persistence
-  - test_large_blob_stress_test
-  - test_concurrent_upload_and_download
-
-Test Suite: Execution Engine Integration
-  - test_blob_upload_via_execution_engine
-  - test_blob_download_via_execution_engine
-  - test_blob_auth_middleware
-  - test_blob_permission_checking
-
-Test Suite: GC Integration
-  - test_gc_cleans_orphaned_chunks
-  - test_gc_does_not_remove_referenced_chunks
-  - test_gc_cleans_expired_blobs
-  - test_gc_handles_multiple_cycles
+Test Suite: BlobManager Integration (15 tests)
+  - test_create_and_get
+  - test_metadata_roundtrip
+  - test_delete
+  - test_namespace_isolation
+  - test_range_download
+  - test_chunk_dedup
+  - test_empty_blob
+  - test_merkle_integrity
+  - test_namespace_validation
+      - empty namespace rejected
+      - namespace with '/' rejected
+      - namespace with '\' rejected
+      - namespace with '..' rejected
+      - namespace with null byte rejected
+      - namespace >255 chars rejected
+      - valid alphanumeric namespace accepted
+  - test_blob_listing_pagination
+      - 25 blobs split across 3 pages (10, 10, 5)
+      - total count returned correctly
+      - no overlap between pages
+  - test_ttl_expiry
+      - expired blob (expires_at = 0) cleaned up by GC
+  - test_gc_shutdown
+      - CancellationToken cancels background GC loop
+  - test_dedup_persistence
+      - Saved dedup state survives manager restart
+  - test_upload_part_listing
+      - list_parts returns correct part_number, size, hash
+  - test_upload_size_validation
+      - complete_upload fails when actual != declared total_size
+      - complete_upload succeeds when sizes match
 ```
 
-### 14.3 Property-Based Tests
+### 14.3 Edge Cases
 
 ```
-Property: Upload-Download Roundtrip
-  - For any byte sequence B, upload(B) followed by download(id) returns B
-  - For any byte sequence B and any valid range R in B,
-    upload(B) followed by download(id, R) returns B[R]
-
-Property: Deduplication
-  - upload(B) then upload(B) results in the same chunks stored (dedup)
-  - Storage size after second upload is less than or equal to first
-  - Both blobs return correct data on download
-
-Property: Checksum Verification
-  - SHA-256(upload(B)) == SHA-256(download(id))
-  - Merkle root of uploaded blob matches stored root
-  - Merkle verification of any valid chunk succeeds
-
-Property: Chunk Reference Counting
-  - After N blobs reference the same chunk, ref_count == N
-  - After deleting K of those blobs, ref_count == N - K
-  - When ref_count reaches 0, chunk is marked for deletion
-  - A chunk with ref_count > 0 is never garbaged collected
-
-Property: Multipart Upload
-  - Multipart upload of data B produces the same blob as single-shot upload of B
-  - Parts can be uploaded in any order (but completed in order)
-  - Aborted multipart upload does not create a visible blob
-  - All temporary parts are cleaned up after abort or completion
-```
-
-### 14.4 Chaos Tests
-
-```
-Test: Crash During Single-Shot Upload
-  - Server crashes after storing some chunks but before metadata
-  - On restart, orphaned chunks exist (no blob references them)
-  - GC eventually cleans up orphaned chunks
-  - Client retries, blob is created correctly
-
-Test: Crash During Blob Download
-  - Server crashes while streaming a large blob
-  - Client reconnects and retries with range request
-  - Partial download resumes from where it left off
-
-Test: Disk Full During Upload
-  - Storage Engine runs out of space mid-upload
-  - Upload fails with storage error
-  - Partial chunks remain as orphans
-  - After space is freed, GC cleans up orphans
-  - Client retries upload
-
-Test: Concurrent Upload of Same Content
-  - 10 clients upload the same 1 GB file simultaneously
-  - All succeed, all reference the same chunks
-  - ref_count for each chunk = 10
-  - Storage used = 1 GB (not 10 GB)
-
-Test: Concurrent Upload and Delete
-  - Client A uploading blob X
-  - Client B deleting blob X's only unique chunk (different blob)
-  - ref_count race condition
-  - Verify: no data corruption, either delete succeeds or upload succeeds
-
-Test: Long-Running Multipart Upload
-  - Client initiates multipart, uploads 1 part per hour
-  - After 23 hours, still active
-  - After 25 hours, auto-aborted by GC
-  - Client must restart with new upload
-```
-
-### 14.5 Edge Cases
-
-```
-- Empty blob (0 bytes): stored with 1 chunk (SHA-256 of empty). Download returns empty data.
-- Single byte blob: stored as 1 chunk of 1 byte. Minimally possible.
-- Blob exactly 1 MiB (1,048,576 bytes): stored as exactly 1 chunk. No padding.
-- Blob of 1 MiB + 1 byte: stored as 2 chunks (1 MiB + 1 byte).
-- Blob at maximum recommended size (10 GB): stored as 10,240 chunks.
-- Blob at effective maximum (5 TB): stored as 5,242,880 chunks. Metadata includes all chunk hashes.
-- Metadata with 64 entries: allowed (at limit).
-- Metadata with 65 entries: rejected.
-- Content type with 0 characters: defaults to "application/octet-stream".
-- Content type with 256 characters: rejected.
-- Namespace with special characters: validated to match ^[a-z0-9_-]{3,128}$.
-- Blob ID in wrong UUID format: rejected.
-- Multipart upload with 10,000 parts: allowed (at limit).
-- Multipart upload with 10,001 parts: rejected.
-- Part number 0: rejected (1-based).
-- Range request with start > end: rejected.
-- Range request with start == end: returns single byte.
-- Range request with start > blob size: returns InvalidRange.
-- Copy blob across namespaces: copies metadata, shares chunks via ref counting.
-- TTL of 0: expires immediately. Upload succeeds but blob immediately expired.
-- TTL negative: treated as 0 (immediate expiry).
-- Delete blob that is already being deleted: idempotent (no-op if already deleted).
-- Concurrent uploads of same blob_id: second upload fails with BlobAlreadyExists.
+- Empty blob (0 bytes): stored with 1 empty chunk.
+- Single byte blob: stored as 1 chunk of 1 byte.
+- Blob exactly chunk_size: stored as exactly 1 chunk.
+- Blob of chunk_size + 1: stored as 2 chunks.
+- Blob at maximum size (10 GB): stored as 10,240 chunks.
+- Namespace with '-' '_' '.' characters: allowed.
+- Namespace empty, '/', '\\', '..', '\0': rejected.
+- Namespace > 255 chars: rejected.
+- Namespace non-alphanumeric: rejected.
+- Multipart upload with actual size != declared total: rejected.
+- TTL of 0: expires immediately (epoch 0).
+- Concurrent uploads of same blob_id: each gets different UUID.
 ```
 
 ## 15. Future Work
@@ -2102,21 +1434,21 @@ Test: Long-Running Multipart Upload
 
 1. **Chunk size why 1 MiB?**: 1 MiB provides a good balance between: (a) reasonable granularity for deduplication, (b) manageable number of chunks for large files (10K chunks per 10 GB), (c) efficient I/O (sequential reads of 1 MiB are fast on modern SSDs). Smaller chunks (256 KB) would increase dedup ratio but also increase metadata overhead and I/O operations. Larger chunks (4 MiB) would reduce metadata but also reduce dedup opportunities.
 
-2. **Deduplication at chunk level vs blob level**: Chunk-level dedup detects partial content matches (e.g., two ISO files that share most blocks). Blob-level dedup only catches exact duplicates. Chunk-level dedup adds complexity (ref counting, GC). Decision: Chunk-level. The storage savings for content that shares common blocks (container images, database dumps) is substantial.
+2. **Deduplication at chunk level vs blob level**: Chunk-level dedup detects partial content matches (e.g., two ISO files that share most blocks). Blob-level dedup only catches exact duplicates. Chunk-level dedup adds complexity (ref counting, GC). Decision: Chunk-level.
 
-3. **To compress or not to compress**: Compression reduces storage but (a) prevents simple range requests (must decompress to seek), (b) adds CPU cost, (c) reduces dedup effectiveness (same content compressed differently). Decision: No compression in v1. Configurable per namespace in future.
+3. **To compress or not to compress**: Compression reduces storage but (a) prevents simple range requests (must decompress to seek), (b) adds CPU cost, (c) reduces dedup effectiveness (same content compressed differently). Decision: No compression in v1.
 
-4. **Maximum blob size: 10 GB recommended vs 5 TB effective**: 10 GB is the practical limit for single-shot upload (memory and timeout considerations). Multipart upload allows the effective limit of 5 TB (10,000 parts × ~500 MB per part). The 5 TB limit is chosen because the metadata entry would contain ~5.2M chunk hashes at ~170 MB of metadata, which is manageable.
+4. **Maximum blob size: 10 GB default**: The 10 GB limit is chosen as the practical limit for single-shot upload (memory and timeout considerations). Multipart upload allows up to 10 GB as well. The limit is configurable via BlobConfig.
 
-5. **Multipart part size flexibility**: AWS S3 requires all parts except the last to be the same size. Decision: We don't enforce this; parts can be different sizes. On completion, we re-chunk into 1 MiB blocks anyway. This simplifies client implementation.
+5. **Multipart part size flexibility**: AWS S3 requires all parts except the last to be the same size. Decision: We don't enforce this; parts can be different sizes. On completion, we re-chunk into chunk_size blocks anyway.
 
-6. **Garbage collection strategy: reference counting vs mark-sweep**: Reference counting is simpler and immediate but can leak if ref counts are missed. Mark-sweep is comprehensive but requires full index scan. Decision: Reference counting with periodic mark-sweep verification (future). The GC grace period (24h) prevents premature deletion.
+6. **Garbage collection strategy: reference counting vs mark-sweep**: Reference counting is simpler and immediate but can leak if ref counts are missed. Decision: Reference counting with GC grace period (24h) to prevent premature deletion.
 
-7. **Temporary part storage durability**: Multipart upload parts are stored in the Storage Engine but considered "temporary". Should they survive a restart? Decision: Yes, they survive restart. The 24h inactivity timeout prevents indefinite accumulation.
+7. **Dedup state persistence**: On restart, previously tracked chunks are reloaded from dedup_state.json. Without persistence, the dedup ratio resets (chunks are re-stored, but filesystem storage is not duplicated — only in-memory ref counts are lost).
 
-8. **Namespace vs bucket vs collection**: We use "namespace" as the container term. It maps directly to a storage partition in the Storage Engine. This is similar to S3 buckets but doesn't support S3's universal uniqueness requirement.
+8. **Namespace vs bucket vs collection**: We use "namespace" as the container term. It maps directly to a filesystem directory in the backend. Namespaces are validated to prevent path traversal.
 
-9. **Integrity verification frequency**: Should we verify all blob data on every read? Decision: Verify SHA-256 on download by default (configurable). Merkle tree verification is optional (more expensive). Background integrity scanner (future) would run periodically for silent data corruption detection.
+9. **Integrity verification frequency**: SHA-256 is verified on every chunk read and on full blob download. Merkle tree verification is optional and available via the MerkleTree module.
 
 10. **Content addressing with SHA-256 why not BLAKE3?**: SHA-256 is FIPS-compliant, hardware-accelerated (SHA-NI), and widely understood. BLAKE3 is faster but less universally supported. Decision: SHA-256. Future migration to BLAKE3 if performance becomes a bottleneck.
 
@@ -2129,20 +1461,97 @@ Test: Long-Running Multipart Upload
 3. **SHA-256**: NIST. FIPS PUB 180-4: Secure Hash Standard (SHS).
    - https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
 
-4. **Amazon S3 API**: Amazon Simple Storage Service Developer Guide.
-   - https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html
-
-5. **Amazon S3 Multipart Upload**: AWS. Uploading objects using multipart upload.
+4. **Amazon S3 Multipart Upload**: AWS. Uploading objects using multipart upload.
    - https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
 
-6. **Content Range (HTTP)**: Fielding, R. et al. (1999). Hypertext Transfer Protocol -- HTTP/1.1. RFC 2616, Section 14.16.
+5. **UUIDv4**: Leach, P., Mealling, M., & Salz, R. (2005). A Universally Unique IDentifier (UUID) URN Namespace. RFC 4122.
+   - https://tools.ietf.org/html/rfc4122
 
-7. **CAS (Content-Addressable Storage)**: Wikipedia. Content-addressable storage.
-   - https://en.wikipedia.org/wiki/Content-addressable_storage
+## 18. Recent Enhancements
 
-8. **Deduplication**: Meyer, D. T. & Bolosky, W. J. (2008). A Study of Practical Deduplication. USENIX FAST.
+### 18.1 Namespace Validation (namespace.rs:23-37)
 
-9. **Chunking Strategies**: Kraska, T. et al. (2013). A Survey of Deduplication Techniques. University of Warsaw.
+The `validate_namespace()` function provides comprehensive input sanitization for all namespace operations. It rejects:
 
-10. **UUIDv4**: Leach, P., Mealling, M., & Salz, R. (2005). A Universally Unique IDentifier (UUID) URN Namespace. RFC 4122.
-    - https://tools.ietf.org/html/rfc4122
+- Empty strings
+- Names containing `/`, `\\`, `..`, or `\0` (path traversal prevention)
+- Non-alphanumeric characters (only `-`, `_`, `.` allowed in addition to alphanumeric)
+- Names longer than 255 characters
+
+Validation is enforced in `ensure_namespace()`, `delete_namespace()`, `list_blobs_paginated()`, and `initiate_upload()`, covering every entry point that accepts user-supplied namespace values.
+
+### 18.2 Blob Listing with Pagination (manager.rs:185-188, filesystem.rs:147-152)
+
+The `list_blobs_paginated(namespace, offset, limit)` method returns `(Vec<String>, usize)` — a page of blob IDs and the total count across all pages. This allows efficient paginated browsing of namespaces. The backend implements pagination by fetching all blobs, filtering by namespace, then applying offset/limit in memory. Namespace validation is applied before listing.
+
+### 18.3 TTL Enforcement via GC (gc.rs:65-103)
+
+The `cleanup_expired_blobs()` method iterates all namespaces and blobs, checking each blob's `expires_at` field against the current time. Expired blobs are fully cleaned up: chunk ref counts are decremented, chunks with zero refs are deleted from the filesystem, and blob metadata is removed. This is called as part of every `run_once()` GC cycle.
+
+### 18.4 GC Graceful Shutdown (gc.rs:105-126)
+
+The background GC loop was rearchitected from a busy-loop pattern to a proper cooperative shutdown using `tokio::select!` and `tokio_util::sync::CancellationToken`:
+
+- `start_background(self: Arc<Self>, interval: Duration, cancel: CancellationToken) -> JoinHandle<()>` spawns a `tokio::spawn` task
+- Inside the loop, `tokio::select!` races `tokio::time::sleep(interval)` against `cancel.cancelled()`
+- On cancellation, the loop breaks cleanly and the task completes
+- `shutdown()` sets an internal `AtomicBool` flag for state tracking
+
+### 18.5 Upload Part Listing (upload.rs:183-199)
+
+The `list_parts(upload_id)` method returns `Vec<PartInfo>` with each part's `part_number`, `size` (bytes), and `hash` (SHA-256 hex). This enables clients to inspect the current state of a multipart upload, verify which parts have been received, and resume incomplete uploads.
+
+### 18.6 Upload Size Validation (upload.rs:113-129)
+
+`complete_upload()` validates that the sum of all uploaded part sizes exactly matches the `declared_total_size` provided during `initiate_upload()`. If `actual_size != session.total_size`, the completion fails with an error message detailing the mismatch. This prevents silent data truncation and ensures client-server agreement on blob size.
+
+### 18.7 Dedup State Persistence (dedup.rs:88-112, manager.rs:66-89)
+
+The `DeduplicationEngine` now supports `save_state(path)` and `load_state(path)` methods that serialize/deserialize the in-memory chunk hash map to JSON. The `BlobManager`:
+
+- Auto-loads state from `<data_dir>/dedup_state.json` on initialization (`load_dedup_state()`)
+- Explicitly saves state via `save_dedup_state()` and on `shutdown()`
+- Uses `serde_json` for serialization
+
+This ensures dedup ref counts survive process restarts, preventing duplicate storage after a restart.
+
+### 18.8 Configurable Chunk Nesting Depth (config.rs:16, filesystem.rs:40-48)
+
+The `chunk_nesting_depth` configuration parameter (default: 3) controls the directory structure for chunk storage. Instead of a flat directory or hardcoded 2-level nesting, the chunk path is computed as:
+
+```
+<data_dir>/chunks/XX/YY/ZZ/<full_hash>
+```
+
+Where `XX`, `YY`, `ZZ` are successive 2-character prefixes of the SHA-256 hash. A depth of 3 produces 4096^3 = ~68 billion possible leaf directories, preventing any single directory from containing too many entries. The nesting depth is configurable per `BlobConfig` instance.
+
+### 18.9 Filesystem Error Handling (filesystem.rs:108-117)
+
+Directory cleanup after chunk deletion was improved from silent error swallowing:
+
+```
+// Before: let _ = fs::remove_dir(...)
+// After: tracing::warn!("failed to clean up dir {:?}: {}", ancestor, e)
+```
+
+Failed directory removals during chunk deletion ancestor cleanup now produce warning logs instead of being silently ignored. This aids debugging of filesystem permission issues and disk quota problems.
+
+### 18.10 Default data_dir (config.rs:23)
+
+The default data directory was changed from `/var/lib/novad/blobs` to `./novad-blobs`. This makes the system immediately usable without root privileges and aligns with convention-over-configuration for development deployments. Production deployments should explicitly configure the data directory.
+
+### 18.11 Test Coverage Expansion
+
+The test suite grew from 8 integration tests to 19 integration tests (in `blob_integration.rs`) plus 19 unit tests across modules. New test categories include:
+
+- **Namespace Validation** (6 test cases): empty, `/`, `\\`, `..`, null byte, >255 chars, valid names
+- **Blob Listing Pagination**: 25 blobs across 3 pages, disjointness verification, total count correctness
+- **TTL Expiry**: Expired blob cleanup via GC
+- **GC Shutdown**: CancellationToken-based graceful shutdown verification
+- **Dedup Persistence**: State save/load roundtrip across separate `BlobManager` instances
+- **Upload Part Listing**: Correct part_number, size, hash for multipart uploads
+- **Upload Size Validation**: Declared total vs actual part sum mismatch detection
+
+### 18.12 Security: Path Traversal Prevention
+
+Namespace validation (`validate_namespace()`) serves as the primary defense against path traversal attacks. By rejecting `/`, `\\`, `..`, `\0`, and non-alphanumeric characters, the system ensures that namespace values cannot escape the configured `data_dir`. This prevents an attacker from reading or writing arbitrary files outside the blob storage directory by crafting malicious namespace names. Combined with UUIDv4 blob IDs (non-sequential, 122 bits of entropy), the system provides strong isolation between namespaces and resistance to enumeration.

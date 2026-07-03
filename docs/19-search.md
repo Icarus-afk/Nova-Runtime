@@ -2,14 +2,14 @@
 
 ## 1. Purpose
 
-The Search subsystem provides full-text search capabilities over documents stored within Nova Runtime. It enables applications to index structured and unstructured content, execute rich search queries (boolean, phrase, fuzzy, prefix, faceted), and retrieve ranked results. The inverted index is stored natively within the Storage Engine, eliminating the need for an external search service like Elasticsearch or Solr.
+The Search subsystem provides full-text search capabilities over documents stored within Nova Runtime. It enables applications to index structured and unstructured content, execute rich search queries (boolean, phrase, fuzzy, prefix, faceted), and retrieve ranked results. The inverted index is maintained in-memory with a concurrency model that supports concurrent reads during writes. Future versions will integrate with the Storage Engine for persistence.
 
 ## 2. Scope
 
 This document covers the complete search subsystem:
 
 - Full-text search over indexed documents
-- Inverted index structure stored in Storage Engine
+- Inverted index structure (in-memory, with RwLock-guarded writer)
 - Tokenization (language-aware, Unicode normalized)
 - Stemming (Porter stemmer for English)
 - Stop words (configurable per index)
@@ -20,12 +20,15 @@ This document covers the complete search subsystem:
 - Fuzzy search (Levenshtein distance up to 2)
 - Faceted search (aggregation by field values)
 - Result highlighting (snippets with matched terms)
-- Pagination with deep pagination limits (max 10,000 results)
-- Index updates (near-real-time with 1s refresh interval)
-- Index storage mapping in Storage Engine
-- Query parsing and execution flow
+- Cursor-based pagination with search_after
+- Index updates (atomic delete+re-add via update_document())
+- Document updates via update_document()
+- Unicode normalization (NFC) in tokenizer pipeline
+- Index statistics reporting (num_docs, num_terms, field_count)
+- Query parsing and execution flow with proper error propagation
+- Concurrent reads during writes (RwLock split)
 
-Out of scope: Vector search/embeddings (future), semantic search (future), cross-lingual search (future), spell checking/suggestion (future), custom scoring beyond BM25 (future), real-time indexing with sub-second latency (future).
+Out of scope: Vector search/embeddings (future), semantic search (future), cross-lingual search (future), spell checking/suggestion (future), custom scoring beyond BM25 (future), real-time indexing with sub-second latency (future), persistent disk-backed index storage (future — currently in-memory only).
 
 ## 3. Responsibilities
 
@@ -39,11 +42,16 @@ Out of scope: Vector search/embeddings (future), semantic search (future), cross
 - Support prefix queries (prefix*)
 - Support fuzzy queries (term~N, N=1 or 2)
 - Support faceted aggregation
-- Generate highlighted result snippets
-- Enforce pagination limits (max 10,000 results)
-- Manage the inverted index within the Storage Engine
-- Support index refresh with configurable interval (default 1s)
+- Generate highlighted result snippets with configurable snippet length
+- Enforce pagination limits (capped at configurable max_limit, default 1000)
+- Manage the inverted index in-memory with RwLock-guarded writer
+- Support index refresh (reset writer segment)
 - Support field-specific indexing (include/exclude fields)
+- Support configurable BM25 parameters (k1, b) via SearchConfig
+- Support cursor-based pagination via search_after
+- Support atomic document updates (update_document)
+- Expose index statistics via stats()
+- Normalize Unicode to NFC form during tokenization
 
 ## 4. Non Responsibilities
 
@@ -64,7 +72,8 @@ Out of scope: Vector search/embeddings (future), semantic search (future), cross
 ```mermaid
 graph TD
     subgraph "Search Subsystem"
-        IM[Index Manager]
+        SM[SearchManager]
+        IW[IndexWriter<br/><i>behind Arc&lt;RwLock&gt;</i>]
         QP[Query Parser]
         QE[Query Executor]
         TK[Tokenizer]
@@ -73,81 +82,73 @@ graph TD
         SC[BM25 Scorer]
         HL[Highlighter]
         FC[Facet Calculator]
+        AP[AnalyzerPipeline]
         
-        subgraph "Inverted Index"
-            PT[Posting Table]
-            DT[Document Table]
-            FT[Field Table]
-            TX[Term Dictionary]
+        subgraph "InMemorySegment"
+            IX[Inverted Index<br/>HashMap&lt;(field,term), PostingList&gt;]
+            SD[Stored Documents<br/>HashMap&lt;doc_id, IndexedDocument&gt;]
+            FL[Field Lengths]
+        end
+        
+        subgraph "SearchConfig"
+            BM[BM25 k1/b]
+            PG[Pagination Limits]
+            HLC[Highlight Config]
         end
     end
     
-    subgraph "Storage Engine"
-        SE[Storage Engine]
-    end
+    A[Application] --> SM
     
-    subgraph "Execution Engine"
-        EE[Execution Pipeline]
-    end
-    
-    subgraph "Event System"
-        ES[Event Bus]
-    end
-
-    A[Application] --> EE
-    EE --> IM
-    IM --> TK
+    SM --> IW
+    IW --> AP
+    AP --> TK
     TK --> ST
     ST --> SW
-    IM --> PT
-    IM --> DT
-    IM --> FT
-    PT --> SE
-    DT --> SE
-    FT --> SE
-    TX --> SE
+    IW --> IX
+    IW --> SD
+    IW --> FL
     
-    Q[Query] --> EE
-    EE --> QP
-    QP --> TK
-    TK --> ST
+    Q[Query] --> SM
+    SM --> QP
+    QP --> AP
     QP --> QE
-    QE --> PT
-    QE --> DT
+    QE --> IX
+    QE --> SD
     QE --> SC
     QE --> FC
     SC --> HL
     HL --> QE
-    QE --> EE
-    EE --> A
+    
+    SM --> BM
+    SM --> PG
+    SM --> HLC
+    
+    QE --> SM
+    SM --> A
 ```
+
+**Concurrency model:** `SearchManager` holds an `Arc<RwLock<IndexWriter>>`. All public methods take `&self`. The writer lock guards a single `InMemorySegment`. Reads (search, stats) acquire the read lock and clone the segment; writes (index_document, delete_document) acquire the write lock and mutate in place. This allows concurrent reads during writes.
 
 ### 5.2 Index Structure
 
 ```mermaid
 graph LR
-    subgraph "Document Store"
-        D1[Doc 1: title, body, tags]
-        D2[Doc 2: title, body, tags]
-        D3[Doc 3: title, body, tags]
+    subgraph "Stored Documents"
+        D1[Doc 1: title, body]
+        D2[Doc 2: title, body]
+        D3[Doc 3: title, body]
     end
     
     subgraph "Inverted Index"
-        T1[Term: "runtime"] --> P1[Posting: Doc1, pos:[3,17]]
-        T1 --> P2[Posting: Doc2, pos:[5]]
-        T2[Term: "nova"] --> P3[Posting: Doc1, pos:[1]]
-        T2 --> P4[Posting: Doc3, pos:[0,12]]
-        T3[Term: "search"] --> P5[Posting: Doc2, pos:[2,8]]
-        
-        T1 --> DF1[DocFreq: 2]
-        T2 --> DF2[DocFreq: 2]
-        T3 --> DF3[DocFreq: 1]
+        T1[Term: "runtime"] --> P1[PostingEntry: doc_id=1, tf=2, pos:[3,17]]
+        T1 --> P2[PostingEntry: doc_id=2, tf=1, pos:[5]]
+        T2[Term: "nova"] --> P3[PostingEntry: doc_id=1, tf=1, pos:[1]]
+        T2 --> P4[PostingEntry: doc_id=3, tf=2, pos:[0,12]]
+        T3[Term: "search"] --> P5[PostingEntry: doc_id=2, tf=1, pos:[2,8]]
     end
     
-    subgraph "Term Dictionary"
-        TD1["runtime" -> term_id: T1, doc_freq: 2]
-        TD2["nova" -> term_id: T2, doc_freq: 2]
-        TD3["search" -> term_id: T3, doc_freq: 1]
+    subgraph "Key Structure"
+        K1["(field, term) -> PostingList"]
     end
 ```
 
@@ -180,262 +181,141 @@ flowchart TD
 
 ## 6. Data Structures
 
-### 6.1 Index Configuration
+### 6.1 Search Configuration
 
 ```rust
-struct IndexConfig {
-    /// Index ID (UUIDv4)
-    id: [u8; 16],                    // 16 bytes
-    /// Index name (unique within runtime)
-    name: String,                     // variable, max 256 bytes
-    
-    // Field configuration
-    /// Fields to index (with per-field config)
-    fields: Vec<IndexField>,          // variable
-    
-    // Tokenization settings
-    /// Tokenizer type: standard, ngram, whitespace, regex
-    tokenizer: TokenizerType,         // 1 byte enum
-    /// Language for stemming (default: "en")
-    language: String,                 // variable, max 8 bytes
-    /// Whether to apply stemming
-    enable_stemming: bool,            // 1 byte
-    /// Custom stop words list (None = use default for language)
-    stop_words: Option<Vec<String>>,  // variable
-    
-    // Indexing settings
-    /// Refresh interval in nanoseconds (default: 1_000_000_000 = 1s)
-    refresh_interval_ns: i64,        // 8 bytes
-    /// Merge factor for segment merging (default: 10)
-    merge_factor: u32,               // 4 bytes
-    /// Maximum segment size before merge (default: 5_242_880 = 5 MB)
-    max_segment_size: u64,           // 8 bytes
-    
-    // Search settings
-    /// Default field weights for BM25 scoring
-    field_weights: HashMap<String, f64>, // variable
+struct SearchConfig {
+    /// Default number of results to return (default: 10)
+    default_limit: usize,
+    /// Maximum allowed results per query (default: 1000)
+    max_limit: usize,
     /// BM25 k1 parameter (default: 1.2)
-    bm25_k1: f64,                    // 8 bytes
+    bm25_k1: f64,
     /// BM25 b parameter (default: 0.75)
-    bm25_b: f64,                     // 8 bytes
-    /// Max results per query (default: 100, max: 10000)
-    max_results: u32,                // 4 bytes
-    
-    // Facet configuration
-    /// Fields available for faceting
-    facet_fields: Vec<String>,       // variable
-    
-    // Storage
-    /// Storage Engine partition for this index
-    storage_partition: u64,          // 8 bytes
-    
-    // Timestamps
-    created_at: i64,                 // 8 bytes
-    updated_at: i64,                 // 8 bytes
-}
-
-struct IndexField {
-    /// Field name (e.g., "title", "body", "tags")
-    name: String,                    // variable, max 256 bytes
-    /// Field type: text, keyword, integer, float, boolean, date
-    field_type: FieldType,           // 1 byte enum
-    /// Whether this field is indexed (searchable)
-    indexed: bool,                   // 1 byte
-    /// Whether this field is stored (retrievable)
-    stored: bool,                    // 1 byte
-    /// Whether facets can be computed on this field
-    facet: bool,                     // 1 byte
-    /// Weight for BM25 scoring (default: 1.0)
-    weight: f64,                     // 8 bytes
-    /// Analyzer for this field (overrides global)
-    analyzer: Option<String>,        // variable, max 32 bytes
+    bm25_b: f64,
+    /// Maximum Levenshtein distance for fuzzy search (default: 2)
+    fuzzy_max_distance: u8,
+    /// Highlight snippet length in characters (default: 150)
+    highlight_snippet_len: usize,
+    /// Maximum number of highlight snippets (default: 3)
+    highlight_max_snippets: usize,
+    /// Refresh interval for writer reset in milliseconds (default: 1000)
+    refresh_interval_ms: u64,
+    /// Number of segments before merge trigger (default: 5)
+    merge_segment_threshold: usize,
 }
 ```
 
-### 6.2 Document
+### 6.2 Document and Field Types
 
 ```rust
 struct IndexedDocument {
-    /// Document ID (user-provided)
-    doc_id: String,                   // variable, max 1024 bytes
-    /// Index ID
-    index_id: [u8; 16],             // 16 bytes
-    
+    /// Document ID (user-provided, used as storage key)
+    id: String,
     /// Document fields
-    fields: HashMap<String, FieldValue>, // variable
-    
-    /// Document-level boost (default: 1.0)
-    boost: f64,                      // 8 bytes
-    
-    /// Document timestamp (Unix nanoseconds)
-    timestamp: i64,                  // 8 bytes
-    
-    /// Storage Engine record version
-    version: u64,                    // 8 bytes
+    fields: Vec<IndexedField>,
+}
+
+struct IndexedField {
+    /// Field name (e.g., "title", "body")
+    name: String,
+    /// Field value
+    value: FieldValue,
+    /// Field type for indexing behavior
+    field_type: FieldType,
+    /// Per-field boost multiplier (default: 1.0)
+    boost: f64,
 }
 
 enum FieldValue {
     Text(String),
-    Keyword(String),
     Integer(i64),
     Float(f64),
-    Boolean(bool),
-    Date(i64),          // Unix nanoseconds
-    Array(Vec<FieldValue>),
-    Null,
+    Bool(bool),
+}
+
+enum FieldType {
+    Text,
+    Integer,
+    Float,
+    Bool,
 }
 ```
 
-### 6.3 Inverted Index - Term Dictionary
+### 6.3 Inverted Index - Postings
 
 ```rust
-/// Stored as records in Storage Engine.
-/// Key: (index_id, term)
-/// Value: TermEntry
-struct TermEntry {
-    /// The normalized term
-    term: String,                     // variable
-    
-    /// Term frequency across all documents (for IDF)
-    doc_frequency: u64,              // 8 bytes
-    /// Total occurrences across all documents (for collection stats)
-    total_term_frequency: u64,       // 8 bytes
-    
-    /// Pointer to first posting block in Storage Engine
-    posting_block_start: StoragePointer, // 16 bytes
-    /// Number of posting blocks
-    posting_block_count: u64,        // 8 bytes
-    
-    /// Field-level statistics
-    field_stats: HashMap<String, FieldTermStats>, // variable
-}
-
-struct FieldTermStats {
-    doc_frequency: u64,              // 8 bytes
-    total_term_frequency: u64,       // 8 bytes
-}
-
-struct StoragePointer {
-    partition: u64,                  // 8 bytes
-    offset: u64,                     // 8 bytes
-    length: u64,                     // 8 bytes
-}
-// Total: 24 bytes per pointer
-```
-
-### 6.4 Inverted Index - Postings
-
-```rust
-/// Each posting represents one occurrence of a term in a document.
-/// Stored in blocks (compressed) in Storage Engine.
-struct Posting {
-    /// Document ID (internal sequential ID)
-    doc_internal_id: u64,            // 8 bytes (varint encoded)
-    /// Term frequency in this document
-    term_frequency: u32,             // 4 bytes (varint encoded)
+/// A single term occurrence entry in the inverted index.
+struct PostingEntry {
+    /// Internal document ID (sequential, assigned by writer)
+    doc_id: u64,
+    /// Term frequency in this document for this field
+    term_frequency: u32,
     /// Positions within the field (for phrase queries)
-    positions: Vec<u32>,             // variable (each varint encoded)
-    /// Field ID (reference to which field this term appears in)
-    field_id: u16,                   // 2 bytes
+    positions: Vec<u32>,
 }
 
-/// A block of postings, stored contiguously
-struct PostingBlock {
-    /// Block header
-    doc_count: u32,                  // 4 bytes
-    /// Base doc ID (for delta encoding)
-    base_doc_id: u64,               // 8 bytes
-    
-    /// Compressed posting data
-    /// Format: Run of (doc_delta, term_frequency, position_count, positions...)
-    ///   doc_delta: varint (difference from previous doc ID)
-    ///   term_frequency: varint
-    ///   position_count: varint
-    ///   positions: varint array of length position_count
-    compressed_data: Vec<u8>,        // variable
-}
-// Typical block size: 4-16 KB after compression
+/// A posting list is simply a Vec of PostingEntry.
+type PostingList = Vec<PostingEntry>;
 ```
 
-### 6.5 Document Store
+### 6.4 In-Memory Segment
 
 ```rust
-/// Stores original document fields for retrieval.
-/// Key: (index_id, doc_internal_id)
-/// Value: StoredDocument
-struct StoredDocument {
-    /// Internal document ID (sequential, assigned by index)
-    doc_internal_id: u64,            // 8 bytes
-    /// User-provided document ID
-    doc_id: String,                  // variable, max 1024 bytes
-    
-    /// Stored fields (field_id -> value bytes)
-    stored_fields: HashMap<u16, Vec<u8>>, // variable
-    
-    /// Document boost
-    boost: f64,                      // 8 bytes
-    
-    /// Timestamp (Unix nanoseconds)
-    timestamp: i64,                  // 8 bytes
-    
-    /// Total length of all indexed text fields (for BM25 normalization)
-    total_field_length: u64,         // 8 bytes
-}
-```
-
-### 6.6 Segment (for Near-Real-Time Indexing)
-
-```rust
-/// The index is composed of segments. New documents go into
-/// a new in-memory segment, which is periodically flushed to disk.
-/// Segments are merged in the background.
-
-struct IndexSegment {
+/// An InMemorySegment holds the entire index state in memory.
+/// The IndexWriter owns one segment; it is cloned for reads.
+struct InMemorySegment {
     /// Segment ID
-    id: u64,                         // 8 bytes
-    /// Segment state: memory, flushing, disk, merging
-    state: SegmentState,             // 1 byte enum
-    
-    /// In-memory term dictionary (for active segment)
-    term_dict: HashMap<String, InMemoryPostingList>, // variable
-    
-    /// In-memory document store
-    doc_store: HashMap<u64, StoredDocument>, // variable
-    
-    /// Current max internal doc ID
-    max_doc_id: u64,                 // 8 bytes
-    
-    /// Segment size in bytes (approximate)
-    size_bytes: u64,                 // 8 bytes
-    
-    /// Creation timestamp (Unix nanoseconds)
-    created_at: i64,                 // 8 bytes
-    
-    /// Last flush timestamp (Unix nanoseconds)
-    flushed_at: Option<i64>,         // 8 bytes
-    
-    /// Storage Engine references (after flush)
-    storage_refs: SegmentStorageRefs, // variable
+    id: u64,
+    /// Inverted index: (field_name, term) -> PostingList
+    inverted_index: HashMap<(String, String), PostingList>,
+    /// Stored documents keyed by doc_id string
+    stored_documents: HashMap<String, IndexedDocument>,
+    /// Number of documents in this segment
+    doc_count: u64,
+    /// Total tokens across all documents
+    total_tokens: u64,
+    /// Per-field, per-document length (for BM25 normalization)
+    field_lengths: HashMap<String, HashMap<String, u64>>,
+    /// Per-field, per-document raw values (for range queries)
+    field_values: HashMap<String, HashMap<String, String>>,
+}
+```
+
+### 6.5 Analyzer Pipeline
+
+```rust
+/// The analyzer pipeline handles text processing during indexing and querying.
+struct AnalyzerPipeline {
+    tokenizer_kind: TokenizerKind,
+    stemmer: PorterStemmer,
+    stop_words: StopWordsFilter,
 }
 
-struct InMemoryPostingList {
-    /// Term
-    term: String,                    // variable
-    /// Doc frequency (in this segment)
-    doc_freq: u64,                   // 8 bytes
-    /// Total term frequency (in this segment)
-    total_term_freq: u64,            // 8 bytes
-    /// Postings (doc_id -> Posting)
-    postings: Vec<Posting>,          // variable
+/// Methods:
+///   analyze(text) -> Vec<Token>
+///     NFC normalize, tokenize, filter stop words, apply Porter stemming
+///   analyze_query(text) -> Vec<Token>
+///     NFC normalize, tokenize, apply Porter stemming (no stop word filter)
+```
+
+### 6.6 Tokens
+
+```rust
+struct Token {
+    /// The processed term (lowercased, stemmed)
+    term: String,
+    /// Character offset in the original text
+    start_offset: usize,
+    /// End character offset
+    end_offset: usize,
+    /// Word position in the document
+    position: usize,
 }
 
-struct SegmentStorageRefs {
-    /// Pointer to term dictionary storage
-    term_dict_ptr: StoragePointer,   // 24 bytes
-    /// Pointer to postings storage
-    postings_ptr: StoragePointer,    // 24 bytes
-    /// Pointer to document store storage
-    doc_store_ptr: StoragePointer,   // 24 bytes
+enum TokenizerKind {
+    Standard,    // Unicode word segmentation + punctuation stripping
+    Whitespace,  // Split on whitespace only
 }
 ```
 
@@ -449,148 +329,104 @@ enum Query {
     Term {
         field: Option<String>,
         value: String,
-        boost: f64,
     },
     /// Phrase query: "hello world"
     Phrase {
         field: Option<String>,
-        terms: Vec<String>,
-        slop: u32,          // word distance tolerance (default: 0)
+        value: String,
+        slop: u32,
     },
     /// Prefix query: "hel*"
     Prefix {
         field: Option<String>,
-        prefix: String,
+        value: String,
     },
     /// Fuzzy query: "helo~1"
     Fuzzy {
         field: Option<String>,
-        term: String,
-        max_distance: u8,   // 1 or 2
+        value: String,
+        max_distance: u8,
+    },
+    /// Range query: field:[lower TO upper]
+    Range {
+        field: String,
+        lower: String,
+        upper: String,
+        inclusive: bool,
     },
     /// Boolean combination
     Bool {
-        must: Vec<Query>,      // AND
-        should: Vec<Query>,    // OR
-        must_not: Vec<Query>,  // NOT
-    },
-    /// Range query
-    Range {
-        field: String,
-        lower: Option<FieldValue>,
-        upper: Option<FieldValue>,
-        inclusive_lower: bool,
-        inclusive_upper: bool,
-    },
-    /// Facet query (request aggregation)
-    Facet {
-        field: String,
-        size: u32,
+        operator: BoolOperator,
+        clauses: Vec<Query>,
     },
 }
 
-struct SearchRequest {
-    /// Index name
-    index: String,
-    /// Query string (query DSL or simple string)
-    query: Option<String>,
-    /// Structured query (for programmatic use)
-    structured_query: Option<Query>,
-    
-    /// Pagination
-    offset: u32,             // default: 0, max: 9900
-    limit: u32,              // default: 10, max: 100
-    
-    /// Fields to return
-    fields: Option<Vec<String>>,
-    
-    /// Facet requests
-    facets: Option<Vec<String>>,
-    
-    /// Whether to generate highlights
-    highlight: bool,
-    /// Highlight field configuration
-    highlight_fields: Option<Vec<String>>,
-    /// Highlight snippet size in characters
-    highlight_snippet_size: u32,  // default: 150
-    /// Number of snippets per field
-    highlight_snippets: u32,      // default: 3
-    /// Highlight tag (pre)
-    highlight_pre_tag: Option<String>,   // default: "<mark>"
-    /// Highlight tag (post)
-    highlight_post_tag: Option<String>,  // default: "</mark>"
-    
-    /// Minimum score threshold (0.0 = no threshold)
-    min_score: Option<f64>,
-}
-
-struct SearchResponse {
-    /// Total hits (capped at 10000)
-    total_hits: u64,
-    /// Time to execute query in nanoseconds
-    took_ns: i64,
-    /// Maximum score
-    max_score: f64,
-    /// Results
-    hits: Vec<SearchHit>,
-    /// Facet results
-    facets: Option<HashMap<String, FacetResult>>,
-}
-
-struct SearchHit {
-    /// Score
-    score: f64,
-    /// Document ID
-    doc_id: String,
-    /// Document fields (only requested/stored fields)
-    fields: HashMap<String, FieldValue>,
-    /// Highlights (field -> snippets)
-    highlights: Option<HashMap<String, Vec<String>>>,
-}
-
-struct FacetResult {
-    field: String,
-    total: u64,
-    // For text/keyword facets
-    terms: Option<Vec<FacetTerm>>,
-    // For numeric/date facets
-    ranges: Option<Vec<FacetRange>>,
-}
-
-struct FacetTerm {
-    value: String,
-    count: u64,
-}
-
-struct FacetRange {
-    from: Option<FieldValue>,
-    to: Option<FieldValue>,
-    count: u64,
+enum BoolOperator {
+    And,
+    Or,
+    Not,
 }
 ```
 
-### 6.8 BM25 Statistics
+### 6.8 BM25 Scorer
 
 ```rust
-/// Per-index statistics for BM25 scoring.
-/// Stored in Storage Engine and cached in memory.
-struct Bm25Stats {
-    /// Total number of documents in the index
-    total_docs: u64,                 // 8 bytes
-    /// Average field length (across all indexed text fields)
-    avg_field_length: f64,           // 8 bytes
-    
-    /// Per-field statistics
-    field_stats: HashMap<String, FieldBm25Stats>, // variable
+/// BM25 scorer with configurable k1 and b parameters.
+/// Computes scores per (term, document, field) triple.
+
+struct BM25Scorer {
+    k1: f64,       // term saturation factor (default: 1.2)
+    b: f64,        // length normalization factor (default: 0.75)
+    avg_field_lengths: HashMap<String, f64>,
+    total_docs: u64,
+}
+```
+
+### 6.9 Response Types
+
+```rust
+/// Wrapper returned by search_with_pagination.
+struct SearchResponse {
+    /// Scored result documents
+    pub hits: Vec<ScoredDocument>,
+    /// Total number of matching documents (before pagination)
+    pub total_hits: u64,
+    /// Wall-clock time for query execution in milliseconds
+    pub search_time_ms: u64,
+    /// Maximum score across all results
+    pub max_score: f64,
 }
 
-struct FieldBm25Stats {
-    /// Number of documents with this field
-    doc_count: u64,                  // 8 bytes
-    /// Average length of this field
-    avg_field_length: f64,           // 8 bytes
-    /// Sum of total term frequencies for this field
-    total_terms: u64,               // 8 bytes
+/// A single search result.
+struct ScoredDocument {
+    /// Internal document ID
+    pub doc_id: u64,
+    /// BM25 relevance score
+    pub score: f64,
+    /// The stored document (if requested)
+    pub document: Option<IndexedDocument>,
+}
+
+/// Index statistics reported by stats().
+struct IndexStats {
+    pub num_docs: u64,
+    pub num_terms: u64,
+    pub field_count: usize,
+}
+
+/// Result of a faceted query.
+struct FacetResult {
+    pub field: String,
+    pub entries: Vec<(String, usize)>,
+    pub total_docs: usize,
+}
+
+/// Highlighted search result with snippets.
+struct HighlightedDocument {
+    pub doc_id: u64,
+    pub score: f64,
+    pub document: Option<IndexedDocument>,
+    pub snippets: Vec<String>,
 }
 ```
 
@@ -945,121 +781,92 @@ Steps:
 Algorithm: ExecuteQuery
 Input:
   - query: Query
-  - index_id: UUID
-  - offset: u32 (max 9900)
-  - limit: u32 (max 100)
-  - current_time: i64
+  - segment: InMemorySegment
+  - scorer: BM25Scorer
+  - limit: usize
 
 Output:
-  - results: Vec<(doc_id, score, fields, highlights)>
-  - total_hits: u64
-  - facets: HashMap<String, FacetResult>
+  - results: Vec<ScoredDocument> (doc_id, score, Optional<IndexedDocument>)
 
 Steps:
-  1. Load IndexConfig and BM25 stats
-     If index not found, return Err(IndexNotFound)
+  1. Initialize empty scores map: doc_scores: HashMap<u64, f64>
+     Note: all operations propagate errors via Result<()> (no unwrap_or defaults).
   
   2. Evaluate query recursively:
-     fn evaluate(query: Query, index: &Index) -> Vec<(doc_id, score)>:
+     fn collect_scores(query: Query, scores: &mut HashMap<u64, f64>, boost: f64) -> Result<()>:
        Match query:
-         MatchAll -> return all documents with score = 1.0
+         MatchAll ->
+           For each (doc_id_str, _doc) in segment.stored_documents:
+             scores.insert(doc_id, 1.0)
          
-         Term { field, value, boost } ->
-           term = normalize(value)
-           postings = lookup_term(term)
-           For each posting:
-             score = BM25Score(term, doc, field, posting.tf, stats)
-             score *= boost
-             Add (doc_id, score)
-           Return results (sorted)
+         Term { field, value } ->
+           fields = field.map(|f| vec![f]) or segment.all_text_fields()
+           term = NFC normalize(value)
+           stem = PorterStemmer.stem(term)
+           For each field:
+             Look up (field, stem) in inverted_index
+             For each posting entry:
+               idf = BM25Scorer.idf(total_docs, postings.len)
+               tf_score = scorer.tf_score(entry.tf, field_len, avg_field_len)
+               score = idf * tf_score * boost
+               Accumulate into scores
          
-         Phrase { field, terms, slop } ->
-           For each term, get postings with positions
-           Find documents where all terms appear with:
-             positions[i+1] - positions[i] <= 1 + slop
-           Score = sum of individual term BM25 scores
-           Return matching docs
+         Phrase { field, value, slop } ->
+           Normalize and stem each term in the phrase
+           For each field:
+             Find documents where all stemmed terms appear
+             Verify consecutive positions (with slop tolerance)
+             Score = sum of individual term BM25 scores
          
-         Prefix { field, prefix } ->
-           normalized_prefix = normalize(prefix)
-           Search term dictionary for terms starting with prefix
-           For each matching term, get postings and score
-           Deduplicate documents (higher score wins)
-           Return results
+         Prefix { field, value } ->
+           Normalize and stem prefix
+           Scan inverted_index for terms starting with prefix
+           For each match, compute BM25 score and accumulate
          
-         Fuzzy { field, term, max_distance } ->
-           normalized_term = normalize(term)
-           Search term dictionary for terms within Levenshtein distance
-           For each matching term, get postings and score
-           Deduplicate (higher score wins)
-           Return results
-         
-         Bool { must, should, must_not } ->
-           // Must clauses (AND): intersect
-           If must is non-empty:
-             results = evaluate(must[0])
-             For each remaining must clause:
-               other = evaluate(clause)
-               results = intersect(results, other) // AND semantics
-           Else:
-             results = empty
-           
-           // Should clauses (OR): union
-           If should is non-empty:
-             should_results = union(evaluate(should[0]), evaluate(should[1:]))
-             If no must clauses:
-               results = should_results
-             Else:
-               // Boost documents matching should clauses
-               For each doc in results:
-                 If doc in should_results:
-                   results[doc].score += should_results[doc].score * 0.1
-           
-           // Must not clauses (NOT): exclude
-           If must_not is non-empty:
-             exclude_set = union of all must_not clause results
-             results = difference(results, exclude_set)
-           
-           Return results
+         Fuzzy { field, value, max_distance } ->
+           Normalize and stem term
+           Collect all indexed terms as candidates
+           Filter via find_fuzzy_matches (Levenshtein distance)
+           For each match, compute BM25 score and accumulate
          
          Range { field, lower, upper, inclusive } ->
-           Iterate over documents in field range
-           Match documents where field value in range
-           Score = 1.0 (no TF-IDF for range)
-           Return results
+           Look up field_values for the given field
+           For each (doc_id_str, val) pair:
+             Parse value as f64 or string comparison
+             If in range: score += boost
+         
+         Bool { operator: And, clauses } ->
+           Evaluate all positive clauses, collect doc sets
+           Intersect all positive doc sets (AND semantics)
+           Evaluate NOT clauses, subtract from intersection
+           Sum scores for surviving docs
+         
+         Bool { operator: Or, clauses } ->
+           Union all clause results (merge scores)
+         
+         Bool { operator: Not, clauses } ->
+           Evaluate the negated clause and return its doc set
+           (NOT is handled during AND processing)
   
-  3. Collect total_hits:
-     total = results.len()
-     capped_total = min(total, 10000)
+  3. Filter and collect results:
+     For each (doc_id, score) in doc_scores:
+       If score > 0.0 OR doc exists in stored_documents:
+         Load stored document
+         Push ScoredDocument { doc_id, score, document }
   
   4. Sort results by score descending:
-     results.sort_by(|a, b| b.score.cmp(&a.score))
+     results.sort_by(|a, b| b.score.partial_cmp(&a.score)...)
   
-  5. Apply offset and limit:
-     If offset >= results.len() or offset >= 10000:
-       Return empty result set
-     paged = results[offset..min(offset+limit, results.len())]
+  5. Truncate to limit:
+     results.truncate(limit)
   
-  6. Load stored fields for paged results:
-     For each (doc_id, _) in paged:
-       doc = load_stored_document(doc_id)
-       Extract requested fields
-  
-  7. Generate highlights (if requested):
-     For each result:
-       For each highlight field:
-         Find matched terms in original text
-         Extract snippets around matched terms
-         Wrap matched terms in highlight tags
-  
-  8. Calculate facets (if requested):
-     For each facet field:
-       Collect all values across result set
-       Count occurrences
-       Sort by count descending
-       Take top N (default: 10)
-  
-  9. Return (paged_results, capped_total, facets)
+  6. Return results
+
+Note on error propagation: Query parsing and execution use
+Result return types throughout. Parse failures (e.g., malformed
+query strings, unbalanced parentheses, unexpected tokens) are
+propagated as SearchError::InvalidQuery rather than silently
+defaulting to zero results.
 ```
 
 ### 7.7 Levenshtein Distance (for Fuzzy Search)
@@ -1378,94 +1185,47 @@ Steps:
 
 ```rust
 struct SearchManager {
-    storage: Arc<StorageEngine>,
-    event_bus: Arc<EventBus>,
-    indexes: HashMap<[u8; 16], Arc<Index>>,
+    writer: Arc<RwLock<IndexWriter>>,
     config: SearchConfig,
 }
 
 impl SearchManager {
-    fn new(
-        storage: Arc<StorageEngine>,
-        event_bus: Arc<EventBus>,
-        config: SearchConfig,
-    ) -> Self;
+    /// Create a new SearchManager with default config
+    fn new() -> Self;
     
-    // Index management
-    fn create_index(&self, request: CreateIndexRequest) -> Result<IndexConfig, SearchError>;
-    fn get_index(&self, index_id: &[u8; 16]) -> Result<IndexConfig, SearchError>;
-    fn get_index_by_name(&self, name: &str) -> Result<IndexConfig, SearchError>;
-    fn update_index(&self, index_id: &[u8; 16], updates: UpdateIndexRequest) -> Result<IndexConfig, SearchError>;
-    fn delete_index(&self, index_id: &[u8; 16]) -> Result<(), SearchError>;
-    fn list_indexes(&self) -> Result<Vec<IndexConfig>, SearchError>;
+    /// Create a new SearchManager with custom configuration
+    fn with_config(config: SearchConfig) -> Self;
     
     // Document indexing
-    fn index_document(&self, index_name: &str, doc: IndexedDocument) -> Result<(), SearchError>;
-    fn index_documents_batch(&self, index_name: &str, docs: Vec<IndexedDocument>) -> Result<u64, SearchError>;
-    fn delete_document(&self, index_name: &str, doc_id: &str) -> Result<(), SearchError>;
-    fn get_document(&self, index_name: &str, doc_id: &str) -> Result<Option<IndexedDocument>, SearchError>;
+    fn index_document(&self, doc: IndexedDocument) -> Result<()>;
+    fn delete_document(&self, doc_id: &str) -> Result<()>;
+    fn update_document(&self, doc_id: &str, doc: IndexedDocument) -> Result<()>;
     
     // Search
-    fn search(&self, request: SearchRequest) -> Result<SearchResponse, SearchError>;
+    fn search(&self, query_str: &str, limit: usize) -> Result<Vec<ScoredDocument>>;
+    fn search_with_pagination(
+        &self,
+        query_str: &str,
+        limit: usize,
+        search_after: Option<(f64, u64)>,
+    ) -> Result<SearchResponse>;
+    fn search_with_highlight(
+        &self,
+        query_str: &str,
+        limit: usize,
+    ) -> Result<Vec<HighlightedDocument>>;
+    fn search_faceted(
+        &self,
+        query_str: &str,
+        facet_field: &str,
+        limit: usize,
+    ) -> Result<FacetResult>;
     
-    // Index maintenance
-    fn refresh_index(&self, index_name: &str) -> Result<(), SearchError>;
-    fn force_merge(&self, index_name: &str) -> Result<(), SearchError>;
-    fn get_index_stats(&self, index_name: &str) -> Result<IndexStats, SearchError>;
+    // Maintenance
+    fn refresh(&self) -> Result<()>;
     
-    // Analyzer
-    fn analyze(&self, index_name: &str, text: &str) -> Result<AnalysisResult, SearchError>;
-    // Returns the tokens that would be generated for a given text
-}
-
-struct CreateIndexRequest {
-    pub name: String,
-    pub fields: Vec<IndexField>,
-    pub tokenizer: Option<TokenizerType>,
-    pub language: Option<String>,
-    pub enable_stemming: Option<bool>,
-    pub stop_words: Option<Vec<String>>,
-    pub refresh_interval_ms: Option<u64>,
-    pub bm25_k1: Option<f64>,
-    pub bm25_b: Option<f64>,
-    pub field_weights: Option<HashMap<String, f64>>,
-    pub facet_fields: Option<Vec<String>>,
-}
-
-struct UpdateIndexRequest {
-    pub fields: Option<Vec<IndexField>>,
-    pub tokenizer: Option<TokenizerType>,
-    pub language: Option<String>,
-    pub enable_stemming: Option<bool>,
-    pub stop_words: Option<Vec<String>>,
-    pub refresh_interval_ms: Option<u64>,
-    pub bm25_k1: Option<f64>,
-    pub bm25_b: Option<f64>,
-    pub field_weights: Option<HashMap<String, f64>>,
-    pub facet_fields: Option<Vec<String>>,
-}
-
-struct IndexStats {
-    pub index_name: String,
-    pub num_docs: u64,
-    pub num_segments: u32,
-    pub index_size_bytes: u64,
-    pub term_count: u64,
-    pub avg_doc_length: f64,
-    pub last_refresh_at: Option<i64>,
-    pub is_merging: bool,
-}
-
-struct AnalysisResult {
-    pub tokens: Vec<AnalyzedToken>,
-    pub stemmed_terms: Vec<String>,
-    pub filtered_terms: Vec<String>,
-}
-
-struct AnalyzedToken {
-    pub term: String,
-    pub stem: String,
-    pub is_stop_word: bool,
+    // Statistics
+    fn stats(&self) -> IndexStats;
 }
 ```
 
@@ -1497,72 +1257,17 @@ struct IndexDocParams {
 }
 ```
 
-### 8.3 Storage Engine Interface (Internal)
-
-```rust
-impl StorageEngine {
-    // Term dictionary access
-    fn read_term_entry(&self, index_id: &[u8; 16], term: &str) -> Result<Option<TermEntry>, StorageError>;
-    fn write_term_entry(&self, entry: TermEntry) -> Result<(), StorageError>;
-    fn scan_terms_by_prefix(&self, index_id: &[u8; 16], prefix: &str, limit: u64) -> Result<Vec<TermEntry>, StorageError>;
-    fn scan_all_terms(&self, index_id: &[u8; 16]) -> Result<Vec<TermEntry>, StorageError>;
-    
-    // Postings access
-    fn read_posting_block(&self, ptr: &StoragePointer) -> Result<PostingBlock, StorageError>;
-    fn write_posting_block(&self, index_id: &[u8; 16], block: &PostingBlock) -> Result<StoragePointer, StorageError>;
-    fn delete_posting_block(&self, ptr: &StoragePointer) -> Result<(), StorageError>;
-    
-    // Document store access
-    fn read_stored_document(&self, index_id: &[u8; 16], doc_internal_id: u64) -> Result<Option<StoredDocument>, StorageError>;
-    fn write_stored_document(&self, index_id: &[u8; 16], doc: &StoredDocument) -> Result<(), StorageError>;
-    fn delete_stored_document(&self, index_id: &[u8; 16], doc_internal_id: u64) -> Result<(), StorageError>;
-    
-    // BM25 stats
-    fn read_bm25_stats(&self, index_id: &[u8; 16]) -> Result<Option<Bm25Stats>, StorageError>;
-    fn write_bm25_stats(&self, index_id: &[u8; 16], stats: &Bm25Stats) -> Result<(), StorageError>;
-    
-    // Segment metadata
-    fn read_segment_metadata(&self, index_id: &[u8; 16]) -> Result<Vec<IndexSegment>, StorageError>;
-    fn write_segment_metadata(&self, index_id: &[u8; 16], segments: &[IndexSegment]) -> Result<(), StorageError>;
-}
-```
-
-### 8.4 Error Types
+### 8.3 Error Types
 
 ```rust
 enum SearchError {
-    // Index errors
+    /// Requested index was not found
     IndexNotFound(String),
-    IndexAlreadyExists(String),
-    InvalidFieldConfiguration(String),
-    
-    // Document errors
-    DocumentNotFound,
-    DocumentAlreadyExists,
-    DocumentTooLarge(u64),
-    InvalidFieldValue(String),
-    
-    // Query errors
-    InvalidQuery(String),       // Parse error with details
-    UnsupportedQuery(String),   // Query type not supported
-    TooManyClauses(u32),        // Max clause limit exceeded
-    
-    // Pagination errors
-    DeepPaginationExceeded,     // offset > 9900
-    ResultWindowTooLarge,       // offset + limit > 10000
-    
-    // Search errors
-    TooManyTerms(u32),          // Too many terms in query
-    TooManyFacets(u32),         // Too many facet requests
-    
-    // Capacity errors
-    IndexFull(u64),             // Max documents reached
-    SegmentMergeInProgress,
-    
-    // Storage errors
-    StorageError(String),
-    
-    // Internal errors
+    /// Requested field was not found in document
+    FieldNotFound(String),
+    /// Query string could not be parsed (includes parse error details)
+    InvalidQuery(String),
+    /// Internal error (e.g., data corruption, unexpected state)
     Internal(String),
 }
 ```
@@ -1574,196 +1279,172 @@ enum SearchError {
 ```mermaid
 sequenceDiagram
     participant A as Application
-    participant EE as ExecutionEngine
     participant SM as SearchManager
+    participant IW as IndexWriter
+    participant AP as AnalyzerPipeline
     participant TK as Tokenizer
     participant ST as Stemmer
     participant SW as StopWordsFilter
-    participant IMD as InMemorySegment
-    participant DSK as DiskSegment
-    participant SE as StorageEngine
+    participant IX as InvertedIndex
+    participant SD as StoredDocuments
 
-    A->>EE: search.index("articles", {id: "doc1", fields: {title: "Nova Runtime", body: "..."}})
-    EE->>SM: index_document("articles", doc)
+    A->>SM: index_document(doc)
     
-    SM->>SM: Load index config
-    SM->>SM: Check document existence
+    Note over SM: Acquires write lock<br/>writer.write()
     
-    SM->>TK: Tokenize("Nova Runtime")
-    TK-->>SM: [{term: "nova", pos:0}, {term: "runtime", pos:1}]
+    SM->>IW: add_document(doc)
+    IW->>IW: NFC normalize text fields
     
-    SM->>ST: Stem("runtime")
-    ST-->>SM: "runtim"
-    SM->>ST: Stem("nova")
-    ST-->>SM: "nova"
+    IW->>AP: analyze("Nova Runtime")
+    AP->>TK: Tokenize
+    TK-->>AP: [{term: "nova", pos:0}, {term: "runtime", pos:1}]
+    AP->>ST: Stem each token
+    ST-->>AP: "runtim"
+    AP->>SW: Filter stop words
+    SW-->>AP: ["nova", "runtim"]
+    AP-->>IW: [Token("nova", pos=0), Token("runtim", pos=1)]
     
-    SM->>SW: FilterStopWords(["nova", "runtim"])
-    SW-->>SM: ["nova", "runtim"] (none removed)
+    IW->>IX: Insert posting(("title","nova"), PostingEntry{doc_id=1, tf=1, pos=[0]})
+    IW->>IX: Insert posting(("title","runtim"), PostingEntry{doc_id=1, tf=1, pos=[1]})
+    IW->>SD: Store document doc_id=1
+    IW->>IW: Update field_lengths, doc_count, total_tokens
     
-    SM->>IMD: Add posting(term="nova", doc_id=1, field=title, pos=0)
-    SM->>IMD: Add posting(term="runtim", doc_id=1, field=title, pos=1)
-    SM->>IMD: Store document fields
-    IMD-->>SM: OK
-    
-    SM-->>EE: Ok
-    EE-->>A: 200 OK
-    
-    Note over SM,IMD: Index refresh runs every 1s
-    
-    SM->>IMD: Flush to disk
-    IMD->>SE: Write term dictionary
-    IMD->>SE: Write postings (compressed)
-    IMD->>SE: Write document store
-    SE-->>IMD: StoragePointers
-    
-    SM->>SM: Create new in-memory segment
-    SM->>SM: Update BM25 stats
+    IW-->>SM: Ok
+    SM-->>A: Ok
 ```
 
-### 9.2 Search Query Execution
+### 9.2 Document Update Flow
 
 ```mermaid
 sequenceDiagram
     participant A as Application
-    participant EE as ExecutionEngine
+    participant SM as SearchManager
+    participant IW as IndexWriter
+
+    A->>SM: update_document("1", new_doc)
+    
+    Note over SM: Acquires write lock
+    
+    SM->>IW: Check if doc_id "1" exists
+    IW-->>SM: Yes (in stored_documents)
+    
+    SM->>IW: delete_document("1")
+    IW->>IW: Remove from inverted_index
+    IW->>IW: Remove from stored_documents
+    IW->>IW: Remove from field_lengths
+    IW-->>SM: Ok
+    
+    SM->>IW: add_document(new_doc with id="1")
+    IW->>IW: Assign new internal doc_id
+    IW->>IW: Tokenize, stem, index
+    IW-->>SM: Ok
+    
+    SM-->>A: Ok
+```
+
+### 9.3 Search Query Execution
+
+```mermaid
+sequenceDiagram
+    participant A as Application
     participant SM as SearchManager
     participant QP as QueryParser
     participant QE as QueryExecutor
-    participant TD as TermDictionary
-    participant PT as Postings
+    participant IX as InvertedIndex
     participant SC as BM25Scorer
-    participant DS as DocStore
+    participant DS as StoredDocuments
     participant HL as Highlighter
 
-    A->>EE: search.search("articles", {query: "nova runtime", limit: 10})
-    EE->>SM: search(request)
+    A->>SM: search("nova runtime", 10)
+    
+    Note over SM: Acquires read lock<br/>writer.read().segment().clone()
     
     SM->>QP: ParseQuery("nova runtime")
-    QP->>QP: Lex, parse (recursive descent)
-    QP-->>SM: Bool(must: [Term("nova"), Term("runtime")])
+    QP->>QP: Tokenize, recursive descent parse
+    QP-->>SM: Bool(And, [Term("nova"), Term("runtime")])
     
-    SM->>QE: evaluate(Bool(must: [Term("nova"), Term("runtime")]))
+    SM->>QE: execute(query, limit)
     
-    QE->>TD: Lookup("nova")
-    TD-->>QE: TermEntry { doc_freq: 50, postings_ptr }
+    QE->>QE: collect_scores(Bool And, ...)
     
-    QE->>PT: ReadPostingBlock(ptr)
-    PT-->>QE: [{doc_id:1, tf:2, positions:[0,5]}, {doc_id:3, tf:1, positions:[2]}]
+    QE->>IX: Lookup (title, "nova") -> PostingList
+    IX-->>QE: [{doc_id:1, tf:2, pos:[0,5]}]
     
-    QE->>TD: Lookup("runtim") // stemmed
-    TD-->>QE: TermEntry { doc_freq: 30, postings_ptr }
+    QE->>IX: Lookup (title, "runtim") -> PostingList
+    IX-->>QE: [{doc_id:1, tf:1, pos:[1]}, {doc_id:2, tf:1, pos:[3]}]
     
-    QE->>PT: ReadPostingBlock(ptr)
-    PT-->>QE: [{doc_id:1, tf:1, positions:[1]}, {doc_id:2, tf:1, positions:[3]}]
+    QE->>QE: Intersect doc sets
+    Note over QE: Doc 1 has both "nova" and "runtim"
     
-    QE->>QE: Intersect postings (AND)
-    Note over QE: Doc 1 matches both terms
+    QE->>SC: BM25 scorers for each term
+    SC-->>QE: nova: 1.45, runtim: 1.12
     
-    QE->>SC: BM25Score("nova", doc1, "title", tf=2)
-    SC-->>QE: 1.45
+    QE->>DS: Load stored document for doc_id=1
+    DS-->>QE: IndexedDocument { id: "1", fields: [...] }
     
-    QE->>SC: BM25Score("runtim", doc1, "title", tf=1)
-    SC-->>QE: 1.12
+    Note over QE: Sort by score desc, truncate to limit
     
-    QE->>SC: Total score: 2.57
-    
-    QE->>DS: Load stored fields for doc1
-    DS-->>QE: {title: "Nova Runtime", body: "...", tags: ["backend"]}
-    
-    SM->>HL: GenerateHighlights(doc1.body, ["nova", "runtim"])
-    HL->>HL: Find term positions, extract snippets
-    HL-->>SM: ["...<mark>Nova</mark> <mark>Runtime</mark> is a..."]
-    
-    SM-->>EE: SearchResponse { hits: [{score:2.57, doc_id:"doc1", fields, highlights}], total_hits:1 }
-    EE-->>A: 200 OK { results: [...] }
+    QE-->>SM: [ScoredDocument { doc_id:1, score:2.57, document }]
+    SM-->>A: [ScoredDocument { ... }]
 ```
 
-### 9.3 Fuzzy Search Flow
+### 9.4 Cursor-Based Pagination Flow
+
+```mermaid
+sequenceDiagram
+    participant A as Application
+    participant SM as SearchManager
+    participant QE as QueryExecutor
+
+    A->>SM: search_with_pagination("document", 5, None)
+    SM->>QE: execute(MatchAll, max_results)
+    QE-->>SM: All 20 docs scored and sorted
+    
+    Note over SM: Sort by score desc, doc_id asc
+    Note over SM: Take first 5 results
+    
+    SM-->>A: SearchResponse { hits: [5 docs], total_hits: 20, max_score: 1.0 }
+    
+    Note over A: Client extracts cursor from last hit
+    
+    A->>SM: search_with_pagination("document", 5, Some((0.5, 14)))
+    SM->>QE: execute(MatchAll, max_results)
+    QE-->>SM: All 20 docs
+    
+    Note over SM: Filter: score < 0.5 OR (score == 0.5 AND doc_id > 14)
+    Note over SM: Take next 5 results
+    
+    SM-->>A: SearchResponse { hits: [next 5 docs], total_hits: 20, max_score: 1.0 }
+```
+
+### 9.5 Fuzzy Search Flow
 
 ```mermaid
 sequenceDiagram
     participant A as Application
     participant QE as QueryExecutor
-    participant TD as TermDictionary
+    participant IX as InvertedIndex
     participant LA as LevenshteinAutomaton
-    participant PT as Postings
     participant SC as BM25Scorer
 
-    A->>QE: Fuzzy("runtme~1")
+    A->>QE: collect_scores(Fuzzy("runtme~1"), ...)
     
-    QE->>QE: Normalize "runtme" -> "runtme"
+    QE->>QE: Normalize + stem "runtme"
     
-    QE->>TD: Scan all terms
-    Note over TD,QE: Or use prefix scan for efficiency
+    QE->>IX: Collect all indexed term keys
+    IX-->>QE: ["running", "runtim", "runtime", ...]
     
-    TD->>LA: Check "runtim" (distance 1)
-    LA-->>TD: Accept (distance 1, <= 1)
+    QE->>LA: find_fuzzy_matches("runtim", candidates, 1)
+    LA->>LA: Levenshtein distance check
+    LA-->>QE: ["runtim"]
     
-    TD->>LA: Check "runtime" (distance 2)
-    LA-->>TD: Reject (distance 2 > 1)
+    QE->>IX: Lookup postings for "runtim"
+    IX-->>QE: PostingList
     
-    TD->>LA: Check "runt" (distance 1)
-    LA-->>TD: Accept (distance 1, <= 1)
-    
-    TD-->>QE: Matching terms: ["runtim", "runt"]
-    
-    QE->>PT: Get postings for "runtim"
-    PT-->>QE: Posting list
-    
-    QE->>PT: Get postings for "runt"
-    PT-->>QE: Posting list
-    
-    QE->>QE: Merge and deduplicate
     QE->>SC: BM25Score for each match
-    SC-->>QE: Scored results
+    SC-->>QE: Scored docs
     
-    QE-->>A: Results including documents with "runtime" and "runt"
-```
-
-### 9.4 Index Refresh and Segment Merge
-
-```mermaid
-sequenceDiagram
-    participant SM as SearchManager
-    participant IM as InMemorySegment
-    participant DSK as DiskSegment
-    participant SE as StorageEngine
-    participant MER as MergeWorker
-
-    Note over SM: Every 1 second (refresh_interval)
-    
-    SM->>IM: Flush to disk
-    IM->>SE: Write term dictionary sorted
-    IM->>SE: Write posting blocks (compressed)
-    IM->>SE: Write stored documents
-    SE-->>IM: Pointers
-    
-    SM->>SM: Create new empty in-memory segment
-    SM->>SM: Update BM25 stats
-    
-    Note over SM: Check merge condition
-    
-    SM->>MER: Check if merge needed (10+ segments)
-    MER->>MER: Select 10 smallest segments
-    
-    MER->>DSK: Read term dictionary from segment 1
-    MER->>DSK: Read term dictionary from segment 2
-    MER->>DSK: Read term dictionary from segment 10
-    
-    MER->>MER: Merge posting lists for each term
-    MER->>MER: Sort by doc_id
-    MER->>MER: Compress merged postings
-    
-    MER->>SE: Write merged term dictionary
-    MER->>SE: Write merged postings
-    MER->>SE: Write merged document store
-    
-    MER->>DSK: Mark segments 1-10 as deleted
-    DSK-->>MER: OK
-    
-    MER->>SM: Add merged segment
-    MER->>SM: Update BM25 stats
-    MER->>SE: Schedule cleanup of old segments
+    QE-->>A: Results including "runtime" matches
 ```
 
 ## 10. Failure Modes
@@ -1772,68 +1453,30 @@ sequenceDiagram
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Document too large | Field exceeds max size (16 MB) | IndexDocument returns DocumentTooLarge |
-| Invalid field value | Type mismatch with index config | IndexDocument returns InvalidFieldValue |
-| Index not found | Index deleted between create and index | IndexDocument returns IndexNotFound |
-| In-memory segment full | Memory limit reached (512 MB) | Automatic flush to disk; indexing briefly delayed |
-| Duplicate document ID | Document with same ID indexed twice | Previous document replaced (upsert semantics) |
+| Invalid field value | Type mismatch with expected field type | index_document returns Internal error |
+| Document not found for deletion | doc_id does not exist | delete_document returns IndexNotFound |
+| Duplicate document ID | Document with same ID indexed again | Previous document remains (no upsert — use update_document) |
+| Write lock contention | Long-running search during index | Writer blocks briefly until read lock released |
 
 ### 10.2 Search Failures
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Query parse error | Malformed query string | Search returns InvalidQuery error with details |
-| Deep pagination exceeded | offset > 9900 | Search returns DeepPaginationExceeded |
-| Too many terms | Query has > 1024 terms | Search returns TooManyTerms |
-| Index not found | Search on non-existent index | Search returns IndexNotFound |
-| Term dictionary corruption | Storage Engine bit rot | Term lookup returns empty; results missing |
-| Segment not found | Orphaned storage pointer | Search skips missing segment; partial results |
+| Query parse error | Malformed query string | search returns InvalidQuery error with details |
+| Empty query | Missing or blank query | Treated as MatchAll; returns all documents |
+| Invalid range syntax | Malformed [lower TO upper] | search returns InvalidQuery error |
+| Index empty | No documents indexed | Search returns empty results |
 
-### 10.3 Refresh/Merge Failures
+### 10.3 Consistency
 
 | Failure | Cause | Effect |
 |---------|-------|--------|
-| Refresh fails | Storage Engine write error | In-memory segment retained; data not lost but not searchable |
-| Merge fails | Storage Engine error during merge | Old segments retained; merge retried on next cycle |
-| Merge takes too long | Very large segments (>1 GB) | Search performance degraded during merge (extra segments) |
-| Merge filles up disk | Too many segments before merge consolidation | Write operations fail; searches succeed with degraded performance |
+| Concurrent read during write | Read lock acquired before write completes | Reader sees stale segment snapshot (acceptable for read-your-writes semantics) |
+| Writer crash mid-index | Panic during add_document | Segment left in partial state; unrecoverable in current in-memory design |
 
-### 10.4 Consistency Failures
+## 11. Performance Considerations
 
-| Failure | Cause | Effect |
-|---------|-------|--------|
-| Document indexed but not yet searchable | Within refresh interval (1s) | Eventual consistency: document appears within 1s |
-| Document deleted but still searchable | Within refresh interval | Document appears in results for up to 1s after deletion |
-| Segment partially written | Crash during flush | Segment discarded on recovery; documents not indexed |
-| BM25 stats stale | Stats not updated after merge | Scoring slightly inaccurate until stats refresh |
-
-## 11. Recovery Strategy
-
-### 11.1 Index Recovery
-
-| Failure | Recovery |
-|---------|---------|
-| In-memory segment lost on restart | 1. All committed segments (on disk) are reloaded from Storage Engine. 2. In-memory segment is rebuilt from scratch (empty). 3. Documents indexed but not flushed before crash are lost. Applications should re-index if needed. |
-| Partial segment write | 1. Segment writes are atomic (single Storage Engine write). 2. If write failed, the segment doesn't exist in the committed list. 3. No partial segment is loaded. |
-| Segment metadata corruption | 1. Rebuild segment list from Storage Engine by scanning for segment markers. 2. Reconstruct BM25 stats from all found segments. 3. Report missing segments for admin investigation. |
-
-### 11.2 Search Recovery
-
-| Failure | Recovery |
-|---------|---------|
-| Term dictionary corruption | 1. Rebuild term dictionary from posting blocks (full scan). 2. Note: expensive but preserves index. 3. Admin API for index rebuild. |
-| Posting block corruption | 1. Skip corrupted block, process remaining. 2. Log warning for admin. 3. Rebuild affected segment from source documents. |
-
-### 11.3 Merge Recovery
-
-| Failure | Recovery |
-|---------|---------|
-| Merge interrupted (crash) | 1. Merging segment is discarded (no committed segments reference it). 2. Source segments remain intact. 3. Merge retried on next cycle. |
-| Merge disk full | 1. Merge operation fails gracefully. 2. Source segments preserved. 3. Admin alerted to free disk space. 4. Merge retried after space is available. |
-
-## 12. Performance Considerations
-
-### 12.1 Computational Complexity
+### 11.1 Computational Complexity
 
 | Operation | Complexity | Notes |
 |-----------|------------|-------|
@@ -1849,7 +1492,7 @@ sequenceDiagram
 | Segment merge | O(T_merged) | Full merge of all terms |
 | Highlight | O(S) where S = snippet size | Per-result processing |
 
-### 12.2 Memory Usage
+### 11.2 Memory Usage
 
 | Component | Memory | Notes |
 |-----------|--------|-------|
@@ -1861,19 +1504,19 @@ sequenceDiagram
 | BM25 stats | ~64 bytes per field | Negligible |
 | Query parse tree | O(Q) where Q = query complexity | Freed after query execution |
 
-### 12.3 I/O Characteristics
+### 11.3 I/O Characteristics
+
+*Note: The current implementation is entirely in-memory. I/O characteristics apply to the future disk-backed design.*
 
 | Operation | I/O Pattern | Frequency |
 |-----------|-------------|-----------|
-| Document indexing | Write to in-memory (no I/O until flush) | Per document |
-| Index refresh | Sequential write: term dict + postings + docs | Every 1s |
-| Search query | Random read: term dict + postings + doc store | Per search |
-| Term dictionary lookup | 1 Storage Engine read | Per unique term in query |
-| Posting list read | 1-n Storage Engine reads | Per term (variable blocks) |
-| Document retrieval | 1 Storage Engine read | Per result in page |
-| Segment merge | Sequential read + sequential write | Background, infrequent |
+| Document indexing | Write to in-memory HashMap | Per document |
+| Search query | HashMap lookup + iteration | Per search |
+| Term dictionary lookup | O(1) HashMap get | Per unique term in query |
+| Posting list read | Memory iteration | Per term |
+| Document retrieval | O(1) HashMap get | Per result in page |
 
-### 12.4 Index Size Overhead
+### 11.4 Index Size Overhead
 
 | Component | Overhead | Example |
 |-----------|----------|---------|
@@ -1886,7 +1529,7 @@ sequenceDiagram
 Total estimated index size: 30-50% of original document text size for typical content.
 For 1 GB of documents: ~300-500 MB index.
 
-### 12.5 Query Performance Targets
+### 11.5 Query Performance Targets
 
 | Query Type | Target Latency (p99) | Notes |
 |------------|---------------------|-------|
@@ -1900,17 +1543,16 @@ For 1 GB of documents: ~300-500 MB index.
 | Highlight | + < 5ms per result | Text extraction + term marking |
 | MatchAll | < 100ms | Full scan or max 10K results |
 
-### 12.6 Bottlenecks
+### 11.6 Bottlenecks
 
 - **Tokenization**: CPU-bound for large documents. Mitigation: Tokenize during indexing (background), not during search.
-- **Posting list intersection**: I/O-bound for non-cached terms. Mitigation: Posting list cache (LRU, 64 MB).
-- **Fuzzy search**: Term dictionary scan for distance 2. Mitigation: Pre-filter by length prefix; use Levenshtein automaton.
-- **Phrase search**: Position list comparison for common terms. Mitigation: Skip-position encoding; early termination on long lists.
-- **Segment merge**: I/O and CPU bound. Mitigation: Rate-limit merge to background I/O budget.
+- **Posting list intersection**: CPU-bound for large posting lists. Mitigation: Early termination and limit on results.
+- **Fuzzy search**: Scans all indexed terms for distance 2. Mitigation: Pre-filter by length prefix; use Levenshtein automaton.
+- **Phrase search**: Position list comparison for common terms. Mitigation: Early termination on position mismatch.
 
-## 13. Security
+## 12. Security
 
-### 13.1 Threat Model
+### 12.1 Threat Model
 
 | Threat | Vector | Impact | Severity |
 |--------|--------|--------|----------|
@@ -1923,7 +1565,7 @@ For 1 GB of documents: ~300-500 MB index.
 | Term dictionary enumeration | Systematic queries to enumerate all terms | Information disclosure about indexed content | Low |
 | Index configuration theft | List indexes without auth | Knowledge of indexed fields and structure | Low |
 
-### 13.2 Mitigations
+### 12.2 Mitigations
 
 | Threat | Mitigation |
 |--------|------------|
@@ -1935,253 +1577,113 @@ For 1 GB of documents: ~300-500 MB index.
 | Expensive query prevention | 1. Fuzzy search only up to distance 2. 2. No regex queries. 3. Prefix queries limited to 10,000 expansions. |
 | Term enumeration | 1. Index stats not exposed to non-admin users. 2. Query results don't expose term frequency. 3. Error messages don't reveal index structure. |
 
-### 13.3 Document-Level Security
+### 12.3 Document-Level Security
 
 In v1, access control is at the index level (can you search this index at all). Future versions will support:
 - Per-document access control lists (ACLs)
 - Field-level security (hide sensitive fields from certain roles)
 - Document-level filtering based on principal attributes
 
-## 14. Testing
+## 13. Testing
 
-### 14.1 Unit Tests
+### 13.1 Unit Tests (Inline)
 
 ```
-Test Suite: Tokenizer
-  - test_standard_tokenizer_basic
-  - test_standard_tokenizer_unicode
-  - test_standard_tokenizer_punctuation
-  - test_standard_tokenizer_numbers
-  - test_standard_tokenizer_urls
-  - test_standard_tokenizer_email
-  - test_standard_tokenizer_contractions
-  - test_standard_tokenizer_possessive
-  - test_ngram_tokenizer_bigrams
-  - test_ngram_tokenizer_trigrams
-  - test_whitespace_tokenizer
-  - test_empty_input
-  - test_unicode_normalization_nfc
-  - test_case_folding
-
-Test Suite: Stemmer (Porter)
-  - test_stem_basic_regular_plurals
-  - test_stem_irregular_plurals
-  - test_stem_verb_forms
-  - test_stem_adjective_forms
-  - test_stem_adverb_forms
-  - test_stem_measure_two
-  - test_stem_short_words
-  - test_stem_non_english
-  - test_stem_empty_string
-  - test_stem_no_change_words
-
-Test Suite: StopWordsFilter
-  - test_filter_removes_stop_words
-  - test_filter_preserves_content_words
-  - test_filter_custom_stop_words
-  - test_filter_empty_input
-  - test_filter_all_stop_words
-
-Test Suite: BM25Scorer
-  - test_score_increases_with_tf
-  - test_score_decreases_with_doc_length
-  - test_score_higher_for_rare_terms
-  - test_score_zero_for_missing_term
-  - test_field_weight_affects_score
-  - test_k1_parameter_effect
-  - test_b_parameter_effect
-  - test_score_consistency
-
-Test Suite: QueryParser
-  - test_parse_single_term
-  - test_parse_multiple_terms
+Test Suite: QueryParser (in query/parser.rs — 13 tests)
+  - test_parse_simple_term
   - test_parse_phrase
+  - test_parse_field_term
   - test_parse_prefix
   - test_parse_fuzzy
-  - test_parse_field_specific
-  - test_parse_bool_and
-  - test_parse_bool_or
-  - test_parse_bool_not
-  - test_parse_nested_groups
+  - test_parse_fuzzy_distance
+  - test_parse_and
+  - test_parse_or
+  - test_parse_not
+  - test_parse_parens
   - test_parse_range
-  - test_parse_complex_expressions
   - test_parse_empty
   - test_parse_wildcard
-  - test_parse_invalid_syntax
-  - test_parse_implicit_and
 
-Test Suite: QueryExecutor
-  - test_term_query_returns_matching_docs
-  - test_phrase_query_requires_adjacent_positions
-  - test_phrase_query_with_slop
-  - test_prefix_query_matches_expansions
-  - test_fuzzy_query_matches_similar_terms
-  - test_bool_and_intersects_results
-  - test_bool_or_unions_results
-  - test_bool_not_excludes_results
-  - test_range_query_inclusive
-  - test_range_query_exclusive
-  - test_match_all
-  - test_score_ordering_descending
-  - test_pagination_offset
-  - test_pagination_deep_limit
-  - test_empty_index_returns_nothing
+Test Suite: Stemmer (in analysis/stemmer.rs — 3 tests)
+  - test_basic_stems
+  - test_plural
+  - test_measure
 
-Test Suite: PostingsList
-  - test_write_and_read_posting_block
-  - test_delta_encode_decode
-  - test_skip_list_iteration
-  - test_intersect_two_postings_lists
-  - test_union_two_postings_lists
-  - test_difference_postings_lists
-  - test_advance_to_doc
-  - test_next_doc_sequential
-  - test_empty_posting_list
-
-Test Suite: FuzzySearch
-  - test_levenshtein_distance_identical
-  - test_levenshtein_distance_substitution
+Test Suite: Fuzzy/Levenshtein (in fuzzy/levenshtein.rs — 8 tests)
+  - test_levenshtein_distance_zero
   - test_levenshtein_distance_insertion
   - test_levenshtein_distance_deletion
-  - test_levenshtein_distance_transposition_not_handled
-  - test_levenshtein_automaton_accepts
-  - test_levenshtein_automaton_rejects
-  - test_fuzzy_search_distance_1
-  - test_fuzzy_search_distance_2
+  - test_levenshtein_distance_substitution
+  - test_levenshtein_distance_two_edits
+  - test_levenshtein_distance_empty
+  - test_find_fuzzy_matches
+  - test_automaton
 
-Test Suite: HighlightGenerator
-  - test_highlight_single_term
-  - test_highlight_multiple_terms
-  - test_highlight_snippet_boundaries
-  - test_highlight_max_snippets
-  - test_highlight_empty_text
-  - test_highlight_no_matches
-  - test_highlight_case_insensitive
+Test Suite: FacetCalculator (in facet.rs — 1 test)
+  - test_facet_calculation
 
-Test Suite: FacetCalculator
-  - test_facet_terms_count
-  - test_facet_terms_sorted_by_count
-  - test_facet_term_limit
-  - test_facet_missing_field
-  - test_facet_empty_results
+Test Suite: HighlightGenerator (in highlight.rs — 3 tests)
+  - test_highlight_basic
+  - test_highlight_empty_tokens
+  - test_unicode_highlighting
 ```
 
-### 14.2 Integration Tests
+### 13.2 Integration Tests (tests/search_integration.rs — 24 tests)
 
 ```
-Test Suite: Index End-to-End
-  - test_index_document_and_search
-  - test_index_batch_and_search
-  - test_update_document_and_search
-  - test_delete_document_and_search
-  - test_refresh_makes_documents_searchable
-  - test_search_across_multiple_segments
-  - test_index_survives_restart
-
-Test Suite: Search Scenarios
-  - test_boolean_search_blog_posts
-  - test_phrase_search_exact_title
-  - test_faceted_search_by_category
-  - test_fuzzy_search_typo_tolerance
-  - test_prefix_search_autocomplete
-  - test_highlighted_results
-  - test_pagination_through_results
-  - test_deep_pagination_limit
-
-Test Suite: Execution Engine Integration
-  - test_search_via_execution_engine
-  - test_index_via_execution_engine
-  - test_auth_middleware_on_search
-  - test_permission_checking_on_index
+Test Suite: Search Integration Tests
+  - test_index_and_search
+  - test_phrase_search
+  - test_prefix_search
+  - test_fuzzy_search
+  - test_boolean_search
+  - test_range_search
+  - test_faceted_search
+  - test_delete_document
+  - test_highlighting
+  - test_multiple_fields
+  - test_empty_index
+  - test_large_document
+  - test_index_many_documents
+  - test_bm25_scoring
+  - test_match_all
+  - test_field_specific_phrase
+  - test_delete_nonexistent
+  - test_fuzzy_with_distance
+  - test_bm25_configurable
+  - test_pagination
+  - test_index_stats
+  - test_unicode_normalization
+  - test_document_update
+  - test_concurrent_index_search
 ```
 
-### 14.3 Property-Based Tests
+Total: **52 tests** (was 18 in earlier version).
 
-```
-Property: Search Consistency
-  - After indexing document D, searching for a term in D returns D
-  - After deleting document D, searching for a term unique to D does not return D
-  - Searching with the same query twice returns the same results (within refresh boundaries)
-  - Pagination: results[offset:offset+limit] == results[0:limit] advanced by offset
+### 13.3 Key Test Coverage Areas
 
-Property: Tokenization
-  - Tokenization is idempotent: tokenize(tokenize(text)) == tokenize(text)
-  - Unicode normalization ensures equivalent strings produce the same tokens
-  - Stemming is consistent: stem(stem(word)) == stem(word)
+1. **Basic indexing and retrieval**: Index documents, search by term, verify results
+2. **Phrase search**: Exact phrase matching with position filtering
+3. **Prefix search**: Wildcard prefix matching ("run*")
+4. **Fuzzy search**: Levenshtein-based approximate matching with configurable distance
+5. **Boolean search**: AND (implicit), OR (explicit), NOT (prefix `-`)
+6. **Range search**: Numeric range queries on integer fields
+7. **Faceted search**: Aggregation by field values
+8. **Document deletion**: Delete and verify removal from search results
+9. **Highlighting**: Snippet generation with matched term markup
+10. **Field-specific search**: "title:rust" scoping to specific fields
+11. **Empty index**: Search on empty index returns no results
+12. **Large documents**: Documents with thousands of tokens
+13. **Bulk indexing**: 50 documents in sequence
+14. **BM25 scoring**: Score verification and configurable k1/b parameters
+15. **MatchAll**: Wildcard query returns all documents
+16. **Pagination**: Cursor-based search_after with score+doc_id tuple
+17. **Index stats**: num_docs, num_terms, field_count reporting
+18. **Unicode normalization**: NFD query matches NFC indexed text ("café" via "cafe\u{301}")
+19. **Document update**: Atomic delete+re-add of existing document
+20. **Concurrent access**: 10 threads indexing 10 documents each with concurrent searching
 
-Property: BM25 Scoring
-  - Score is always non-negative
-  - For the same term, higher TF gives higher or equal score
-  - For the same TF, shorter doc gives higher score
-  - IDF(rare term) > IDF(common term)
-
-Property: Boolean Logic
-  - (A AND B) ⊆ A and (A AND B) ⊆ B
-  - (A OR B) ⊇ A and (A OR B) ⊇ B
-  - NOT(NOT(A)) = A (within the document universe)
-
-Property: Fuzzy Distance
-  - Levenshtein distance is a metric: d(a,b) = 0 iff a=b, d(a,b) = d(b,a), d(a,c) <= d(a,b) + d(b,c)
-  - If |len(a) - len(b)| > max_distance, then d(a,b) > max_distance
-```
-
-### 14.4 Chaos Tests
-
-```
-Test: Crash During Index Refresh
-  - Index documents, trigger refresh, crash mid-flush
-  - On restart, verify no data corruption
-  - Verify in-memory changes are lost (acceptable)
-  - Verify previously committed data is intact
-
-Test: Search During Merge
-  - Start background merge of large segments
-  - Execute concurrent search queries
-  - Verify all queries complete correctly
-  - Verify merge does not block searches
-
-Test: Large Document Indexing
-  - Index 1000 documents of 10 MB each
-  - Verify tokenization completes within timeout
-  - Verify index size growth is bounded
-  - Verify search still works on large index
-
-Test: Concurrent Indexing and Searching
-  - 10 concurrent indexers, 10 concurrent searchers
-  - Verify no deadlocks
-  - Verify search results eventually consistent (within refresh)
-  - Verify no crashes or hangs
-```
-
-### 14.5 Edge Cases
-
-```
-- Empty string query: returns MatchAll (all documents)
-- Single character term: indexed and searchable (unless it's a stop word like "a")
-- Very long term (> 512 chars): truncated to 512
-- Term with special characters: Unicode characters preserved, punctuation stripped
-- Document with all stop words: indexed but fields are empty after filtering
-- Duplicate terms in query: deduplicated
-- Missing field in document: field treated as empty
-- All boolean operators uppercase: "AND", "OR", "NOT" recognized; lowercase treated as terms
-- Field name with special characters: quoted field names supported
-- Very large offset (9900) + limit (100) = exactly 10000, allowed
-- offset 9901: rejected (DeepPaginationExceeded)
-- Negative offset: treated as 0
-- Negative limit: treated as default (10)
-- limit > 100: capped to 100
-- Fuzzy query with distance 0: treated as exact match
-- Fuzzy query with distance > 2: capped to 2
-- Phrase query with empty terms: returns nothing
-- Prefix query with empty prefix: treated as MatchAll (expensive, warn)
-- Colon in field value: escaped with backslash
-- Nested boolean depth > 10: rejected
-- Multiple facets on same field: last wins
-- Index with 0 fields: created but cannot index documents
-- Document with empty body (0 bytes): indexed but has no terms
-```
-
-## 15. Future Work
+## 14. Future Work
 
 1. **Vector Search**: Approximate nearest neighbor (ANN) search using HNSW or IVF indexes for semantic search capabilities. Requires embedding model integration.
 
@@ -2213,27 +1715,55 @@ Test: Concurrent Indexing and Searching
 
 15. **Binary Vector Compression**: PQ (Product Quantization) for reducing vector search memory footprint.
 
-## 16. Open Questions
+## 15. Open Questions
 
-1. **Refresh interval vs search freshness**: 1s refresh means documents are visible within 1s. For some use cases (real-time dashboards), this is too slow. Trade-off: shorter interval means more I/O overhead. Decision: Configurable per index (100ms - 60s). Default 1s balances freshness and write amplification.
+1. **Refresh strategy**: The current `refresh()` method replaces the entire `IndexWriter` with a new empty one. This is a hard reset — in-flight documents are lost. A future design should implement proper segment flushing and merging.
 
-2. **Segment merge strategy**: Tiered merge (like Lucene's LogByteSizeMergePolicy) vs log merge (merge equal-sized segments). Decision: Tiered merge with merge_factor=10. This reduces write amplification for large indexes.
+2. **Persistence**: The index is entirely in-memory. A Storage Engine integration is needed for durability and recovery across restarts.
 
-3. **Posting list compression**: Variable byte encoding vs Simple8b vs BFLOAT. Decision: Variable byte encoding for simplicity and good compression ratio. Future: Simple8b for ~30% better compression.
+3. **Posting list compression**: Currently stored as uncompressed `Vec<PostingEntry>` in memory. Variable byte encoding or Simple8b would reduce memory usage for large indexes.
 
-4. **Positions storage**: Store positions for all fields or only fields with phrase queries enabled? Decision: Store positions for all text fields. Cost: ~2 extra bytes per occurrence. Benefit: phrase queries work on all fields without re-indexing.
+4. **Positions storage**: Positions are stored for all text fields. This enables phrase queries on any field but doubles per-occurrence memory.
 
-5. **Fuzzy search performance**: Scanning the entire term dictionary for fuzzy search is expensive. Decision: Use Levenshtein automaton with prefix filtering (first 3 chars must match within distance). This reduces the scan space by ~80%.
+5. **Fuzzy search performance**: Currently scans all indexed terms. A Levenshtein automaton with prefix filtering would reduce the scan space by ~80%.
 
-6. **Deep pagination hard limit**: Why 10,000? Beyond this, query performance degrades significantly (must compute and sort all results). Users should use cursor-based pagination or filtered queries for deep navigation. If necessary, this limit can be increased with performance implications.
+6. **Deep pagination**: The cursor-based `search_after` avoids offset drift but still requires computing all results. For very large result sets (>10K), this becomes expensive.
 
-7. **Index memory threshold**: When to flush in-memory segment? Decision: 512 MB or 1 minute, whichever comes first. This provides batching for write efficiency while bounding memory usage.
+7. **BM25 field length normalization**: Computed per field. Each field has its own `avg_field_length`, preventing bias from long "body" fields in mixed-field queries.
 
-8. **BM25 field length normalization**: Should field length be computed per document or per field? Decision: Per field. Each field has its own avg_field_length for normalization. This prevents bias from long fields like "body" in mixed-field queries.
+8. **Case sensitivity**: Text is lowercased during both indexing and querying (case-insensitive by default). No keyword field type preservation exists yet.
 
-9. **Case sensitivity**: Are searches case-insensitive? Decision: Yes. All text is lowercased during indexing and querying. Exception: keyword fields preserve case.
+9. **Stop words**: English-only stop word list (107 words). Non-English text is indexed without stop word filtering or stemming support.
 
-10. **Stop words for non-English**: Which languages to support initially? Decision: English only in v1. Language detection and per-language stop word sets for future versions. Non-English indexing still works but without stemming or stop word filtering.
+## 16. Recent Enhancements
+
+The following features have been added since the original design document:
+
+1. **Concurrency model (RwLock split)**: `SearchManager` uses `Arc<RwLock<IndexWriter>>` with all public methods taking `&self`. Writer mutates in-place under write lock; readers clone the segment under read lock. Concurrent reads during writes are supported.
+
+2. **Configurable BM25**: `SearchConfig.bm25_k1` and `SearchConfig.bm25_b` are no longer hardcoded. `SearchManager::with_config(config)` accepts a custom config. The `BM25Scorer` supports both `new()` (1.2/0.75 defaults) and `with_config(segment, k1, b)` constructors.
+
+3. **SearchResponse wrapper**: `search_with_pagination()` returns a `SearchResponse` struct containing `hits: Vec<ScoredDocument>`, `total_hits: u64`, `search_time_ms: u64`, and `max_score: f64`.
+
+4. **Cursor-based pagination**: `search_with_pagination(query, limit, search_after)` accepts `Option<(f64, u64)>` representing `(score, doc_id)`. Results are filtered to those strictly after the cursor, enabling stable deep pagination without offset drift.
+
+5. **IndexStats reporting**: `stats()` returns `IndexStats { num_docs, num_terms, field_count }` computed from the current in-memory segment.
+
+6. **Document update**: `update_document(doc_id, doc)` performs an atomic delete of the existing document (if found) followed by a re-index of the new document within a single write lock acquisition.
+
+7. **Unicode normalization in analyzer pipeline**: Both `AnalyzerPipeline::analyze()` and `IndexWriter::add_document()` NFC-normalize text (`unicode_normalization::UnicodeNormalization`). This ensures "café" (NFC) matches "café" typed as "cafe\\u{301}" (NFD) regardless of encoding.
+
+8. **Proper query error propagation**: `QueryParser::parse()` returns `Result<Query, SearchError>`. Parse failures (malformed queries, unbalanced parentheses, unexpected tokens) propagate as `SearchError::InvalidQuery` rather than silently defaulting (`unwrap_or(0)` pattern removed).
+
+9. **Expanded test suite**: 52 tests total (up from 18), covering:
+   - Unicode normalization (NFD query vs NFC stored text)
+   - Configurable BM25 parameters
+   - Cursor-based pagination with score+doc_id ordering
+   - Concurrent indexing with 10 threads (100 documents)
+   - Index stats verification
+   - Document update atomicity
+   - Fuzzy search with explicit distance
+   - Large documents, bulk indexing, deletion of nonexistent docs
 
 ## 17. References
 

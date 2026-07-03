@@ -95,12 +95,12 @@ block-beta
 
   block:subsystems:10
     columns 5
-    DB("Database Engine")
+    SQL("SQL Engine")
     Cache("Cache Engine")
+    Blob("Blob Storage")
+    Search("Search Engine")
     Queue("Queue Engine")
     Scheduler("Scheduler Engine")
-    Search("Search Engine")
-    Blob("Blob Storage")
     AuthN("AuthN/AuthZ")
     Events("Event System")
     ObjectModel("Object Model")
@@ -140,7 +140,7 @@ Nova Runtime is organized into five strict layers. Each layer may only depend on
 | 1 | Client Interface | HTTP Listener, WebSocket Listener, TLS | Layer 2 |
 | 2 | API Protocol | REST, GraphQL, SQL Protocol, Admin, Health | Layer 3 |
 | 3 | Execution | Pipeline, Middleware, Auth, Rate Limit, Audit | Layer 4 |
-| 4 | Subsystems | DB, Cache, Queue, Scheduler, Search, Blob, AuthN, Events, Object Model, Schema | Layer 5 |
+| 4 | Subsystems | SQL, Cache, Blob, Search, Queue, Scheduler, AuthN, Events, Object Model, Schema | Layer 5 |
 | 5 | Core Infrastructure | Storage Engine, Memory Manager, Config, Observability, Lifecycle | None |
 
 **Dependency rule:** A component in layer N may import and call components from layer N or higher-numbered layers (deeper in the stack). It may NEVER import from a lower-numbered layer. This prevents cycles and ensures the execution pipeline is always the entry point.
@@ -149,7 +149,7 @@ Nova Runtime is organized into five strict layers. Each layer may only depend on
 
 #### 5.3.1 One Storage Engine
 
-There is exactly one storage engine in Nova Runtime. Every subsystem that persists data (Database, Cache, Queue, Scheduler, Search, Blob Storage, Authentication, Schema Registry) uses the same storage engine. There is no direct filesystem access, no embedded SQLite, no separate key-value store. The storage engine exposes:
+There is exactly one storage engine in Nova Runtime. Every subsystem that persists data (SQL, Cache, Blob, Search, Queue, Scheduler, Authentication, Schema Registry) uses the same storage engine. There is no direct filesystem access, no embedded SQLite, no separate key-value store. The storage engine exposes:
 
 - A key-value API (Get, Set, Delete, Scan, Batch)
 - Transaction support (snapshot isolation)
@@ -177,7 +177,7 @@ All data in Nova Runtime is represented as NovaObjects. A NovaObject has:
 - Metadata (created_at, updated_at, expires_at, owner)
 - An ACL governing access
 
-The object model is the universal representation that subsystems use. The Database engine returns NovaObjects. The Cache engine caches NovaObjects. The Queue engine enqueues NovaObject references. The Search engine indexes NovaObjects.
+The object model is the universal representation that subsystems use. The SQL engine returns NovaObjects. The Cache engine caches NovaObjects. The Queue engine enqueues NovaObject references. The Search engine indexes NovaObjects.
 
 **Rationale:** A universal data representation eliminates N mapping layers between subsystems. Any subsystem can operate on any object without conversion.
 
@@ -237,12 +237,12 @@ graph TD
     end
 
     subgraph Layer4["Layer 4 - Subsystems"]
-        DB[Database Engine]
+        SQL[SQL Engine]
         Cache[Cache Engine]
+        Blob[Blob Storage]
+        Search[Search Engine]
         Queue[Queue Engine]
         Sched[Scheduler]
-        Search[Search Engine]
-        Blob[Blob Storage]
         IAM[AuthN/AuthZ Service]
         Events[Event System]
         OModel[Object Model]
@@ -277,28 +277,28 @@ graph TD
     MW --> Audit
 
     Auth --> IAM
-    Pipeline --> DB
+    Pipeline --> SQL
     Pipeline --> Cache
+    Pipeline --> Blob
+    Pipeline --> Search
     Pipeline --> Queue
     Pipeline --> Sched
-    Pipeline --> Search
-    Pipeline --> Blob
     Pipeline --> Events
 
-    DB --> OModel
+    SQL --> OModel
     Cache --> OModel
+    Blob --> OModel
+    Search --> OModel
     Queue --> OModel
     Sched --> OModel
-    Search --> OModel
-    Blob --> OModel
     IAM --> OModel
 
-    DB --> SE
+    SQL --> SE
     Cache --> SE
+    Blob --> SE
+    Search --> SE
     Queue --> SE
     Sched --> SE
-    Search --> SE
-    Blob --> SE
     IAM --> SE
     OModel --> SE
     Schema --> SE
@@ -306,12 +306,12 @@ graph TD
 
     SE --> MM
     SE --> Config
-    DB --> Obs
+    SQL --> Obs
     Cache --> Obs
+    Blob --> Obs
+    Search --> Obs
     Queue --> Obs
     Sched --> Obs
-    Search --> Obs
-    Blob --> Obs
     IAM --> Obs
     Events --> Obs
     Pipeline --> Obs
@@ -993,7 +993,7 @@ Total target: <10ms P50, <50ms P95, <200ms P99 for simple operations.
 |-----------|--------|------------|
 | Storage Engine Block Cache | 256 MB | 25% |
 | Memory Manager Internal | 64 MB | 6.25% |
-| Database Engine | 128 MB | 12.5% |
+| SQL Engine | 128 MB | 12.5% |
 | Cache Engine | 128 MB | 12.5% |
 | Queue Engine | 64 MB | 6.25% |
 | Search Engine | 64 MB | 6.25% |

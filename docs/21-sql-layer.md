@@ -2,23 +2,20 @@
 
 ## 1. Purpose
 
-The SQL Layer provides a SQL interface over Nova Runtime's Object Model and Storage Engine. It allows users to interact with stored data using standard SQL syntax, translating relational query semantics into operations on the unified Document type system. This enables drop-in compatibility for applications that expect a SQL database backend, while preserving Nova's core principle that every operation passes through the Execution Engine.
+The SQL Layer provides a SQL interface over Nova Runtime's in-memory data structures. It allows users to interact with stored data using standard SQL syntax, translating relational query semantics into operations on a table-oriented data model. This enables drop-in compatibility for applications that expect a SQL database backend.
 
 ## 2. Scope
 
 The SQL Layer encompasses the full query processing pipeline from SQL text ingestion to result production:
 
 - SQL tokenization and parsing into an Abstract Syntax Tree (AST)
-- Semantic analysis and name resolution against the Object Model schema
+- Semantic analysis and name resolution against table schemas
 - Logical plan construction from validated AST
-- Physical plan selection using heuristic (non-cost-based) rules
 - Query execution via a pull-based iterator model
-- Type mapping between SQL column types and Object Model Document fields
-- Parameterized query support with prepared statement caching
-- Connection management and pooling for SQL protocol listeners
-- DDL operations (CREATE, ALTER, DROP) mapped to Object Model schema mutations
-- DML operations (SELECT, INSERT, UPDATE, DELETE) mapped to Storage Engine operations
-- Transaction semantics mapped to Execution Engine transaction boundaries
+- Type mapping between SQL column types and runtime value types
+- Constraint enforcement (NOT NULL, DEFAULT, UNIQUE, PRIMARY KEY)
+- DDL operations (CREATE TABLE, DROP TABLE)
+- DML operations (SELECT, INSERT, UPDATE, DELETE)
 
 The SQL Layer does NOT implement:
 - A full SQL:2023 standard (it implements a carefully chosen subset)
@@ -26,37 +23,44 @@ The SQL Layer does NOT implement:
 - Parallel query execution within a single query
 - Distributed query execution
 - Full-text search (delegated to Search subsystem)
-- Stored procedures or triggers beyond simple execution pipeline hooks
-- Foreign key constraint enforcement (application-level concern per Object Model design)
+- Stored procedures or triggers
+- Foreign key constraint enforcement
+- PostgreSQL wire protocol
+- Prepared statements
+- Transactions
+- Joins
+- Subqueries
+- Common Table Expressions (CTEs)
+- Window functions
 
 ## 3. Responsibilities
 
-1. **SQL Parsing**: Convert SQL text into a validated AST using a recursive descent parser
-2. **Name Resolution**: Resolve table names, column names, and aliases against the current schema
-3. **Type Checking**: Validate SQL types against Object Model field types and perform implicit coercions where safe
-4. **Query Planning**: Convert AST into a logical plan then select a physical plan using heuristic rules
-5. **Query Execution**: Execute the physical plan, pulling results from Storage Engine via iterators
-6. **Result Formatting**: Convert Storage Engine Documents into row-oriented result sets with proper SQL types
-7. **Prepared Statement Management**: Cache parsed and planned statements keyed by (connection_id, statement_id)
-8. **Parameter Binding**: Substitute positional ($1, $2) or named ($name) parameters into parameterized queries
-9. **Connection Management**: Accept SQL protocol connections (PostgreSQL wire protocol compatible), manage connection lifecycle
-10. **Schema Reflection**: Expose system tables (pg_catalog equivalent) for tooling compatibility
-11. **Error Reporting**: Return structured SQL error codes with message text, detail, and hint fields
-12. **Transaction Management**: Map BEGIN/COMMIT/ROLLBACK to Execution Engine transaction boundaries
+1. **SQL Parsing**: Convert SQL text into a validated AST using a recursive descent parser with one-token lookahead
+2. **Name Resolution**: Resolve table names and column names against the current schema
+3. **Type Checking**: Validate SQL types against table field types and perform implicit coercions where safe
+4. **Query Planning**: Convert AST into a logical plan tree
+5. **Query Execution**: Execute the logical plan, pulling results from the in-memory TableStore via iterators
+6. **Result Formatting**: Convert Row values into column-oriented result sets with proper SQL types
+7. **Constraint Enforcement**: Validate NOT NULL, DEFAULT, UNIQUE, and PRIMARY KEY constraints during INSERT
+8. **Error Reporting**: Return structured SQL error codes with message text and position information
+9. **Error Position Tracking**: Syntax errors include (start, end) position from the lexer
 
 ## 4. Non Responsibilities
 
 - **Full SQL Compliance**: Not all SQL features are supported; deviations are documented with error codes
 - **Cost-Based Optimization**: Statistics collection, histogram building, cost model tuning are excluded
 - **Parallel Execution**: Single-threaded per-query execution only; no intra-query parallelism
-- **Foreign Keys**: Referential integrity is enforced at the application layer through the Execution Engine
+- **Foreign Keys**: Referential integrity is enforced at the application layer
 - **Stored Procedures**: Pl/pgSQL or similar procedural languages are not implemented
 - **Triggers**: Event-driven hooks exist in the Event System, not as SQL triggers
-- **Views**: Materialized or virtual views are not supported initially (future work)
+- **Views**: Materialized or virtual views are not supported
 - **Full-Text Indexes**: Text search capabilities are provided by the Search subsystem
-- **Window Functions**: ROW_NUMBER, RANK, etc. are not supported initially
-- **Recursive CTEs**: Common Table Expressions are non-recursive only
-- **Spatial Types**: No GIS or spatial index support
+- **Window Functions**: ROW_NUMBER, RANK, etc. are not supported
+- **Recursive CTEs**: Common Table Expressions are not supported
+- **Joins**: Cross-table joins are not implemented (single-table queries only)
+- **Subqueries**: Subqueries in FROM, WHERE, or SELECT are not implemented
+- **Prepared Statements**: Parameterized query caching is not implemented
+- **Transactions**: BEGIN/COMMIT/ROLLBACK are not implemented
 
 ## 5. Architecture
 
@@ -65,28 +69,23 @@ The SQL Layer does NOT implement:
 ```mermaid
 graph TB
     SQL[SQL Text] --> Lexer[Lexer]
-    Lexer --> TokenStream[Token Stream]
+    Lexer --> TokenStream[Token Stream + Positions]
     TokenStream --> Parser[Parser / Recursive Descent]
     Parser --> AST[Abstract Syntax Tree / AST]
     AST --> Binder[Binder / Name Resolver]
-    Binder --> BoundAST[Bound AST / with schema references]
-    BoundAST --> TypeChecker[Type Checker]
-    TypeChecker --> ValidatedAST[Validated AST]
+    Binder --> ValidatedAST[Validated AST]
     ValidatedAST --> LogicalPlanner[Logical Planner]
     LogicalPlanner --> LogicalPlan[Logical Plan / relational algebra]
-    LogicalPlan --> PhysicalPlanner[Physical Planner / Heuristic]
-    PhysicalPlanner --> PhysicalPlan[Physical Plan / executable operators]
-    PhysicalPlan --> Executor[Executor / Pull-based Iterator]
+    LogicalPlan --> Executor[Executor / Pull-based Iterator]
     Executor --> ResultRows[Result Rows]
     ResultRows --> ResultFormatter[Result Formatter]
-    ResultFormatter --> Response[Wire Protocol Response]
+    ResultFormatter --> Response[RecordBatch]
 ```
 
 ```mermaid
 flowchart TB
     subgraph Input
         SQL[SQL Text]
-        Params[Parameters]
     end
 
     subgraph Parsing
@@ -101,7 +100,6 @@ flowchart TB
 
     subgraph Planning
         LogicalPlanner[Logical Planner]
-        PhysicalPlanner[Heuristic Physical Planner]
     end
 
     subgraph Execution
@@ -110,14 +108,11 @@ flowchart TB
     end
 
     subgraph Storage
-        ExecEngine[Execution Engine]
-        ObjectModel[Object Model]
-        StorageEngine[Storage Engine]
+        TableStore[In-Memory TableStore]
     end
 
     subgraph Output
         ResultFormatter[Result Formatter]
-        Response[Wire Protocol Response]
     end
 
     SQL --> Lexer
@@ -126,18 +121,12 @@ flowchart TB
     Binder --> TypeChecker
     
     TypeChecker --> LogicalPlanner
-    LogicalPlanner --> PhysicalPlanner
-    
-    PhysicalPlanner --> Executor
+    LogicalPlanner --> Executor
     Executor --> Iterators
-    Params --> Executor
     
-    Iterators --> ExecEngine
-    ExecEngine --> ObjectModel
-    ObjectModel --> StorageEngine
+    Iterators --> TableStore
     
     Executor --> ResultFormatter
-    ResultFormatter --> Response
 ```
 
 ### 5.2 Module Layout
@@ -152,28 +141,20 @@ flowchart LR
         TypeCheckerMod[type_checker.rs]
         
         subgraph "Plan"
-            LogicalMod[logical_plan.rs]
-            PhysicalMod[physical_plan.rs]
-            OptimizerMod[optimizer.rs]
+            LogicalMod[logical.rs]
+            PlannerMod[planner.rs]
         end
         
         subgraph "Execute"
             ExecutorMod[executor.rs]
             IteratorsMod[iterators.rs]
-            AggregationMod[aggregation.rs]
-            JoinMod[join.rs]
-        end
-        
-        subgraph "Protocol"
-            PGWireMod[pg_wire.rs]
-            ConnectionMod[connection.rs]
-            PreparedMod[prepared.rs]
+            EvalMod[mod.rs - expression eval]
+            TableStoreMod[table_store.rs]
         end
         
         subgraph "Schema"
             SchemaMod[schema.rs]
             TypeMapMod[type_mapping.rs]
-            SystemTablesMod[system_tables.rs]
         end
     end
     
@@ -181,54 +162,30 @@ flowchart LR
     BinderMod --> ASTMod
     LexerMod --> ParserMod
     TypeCheckerMod --> BinderMod
-    LogicalMod --> TypeCheckerMod
-    PhysicalMod --> LogicalMod
-    ExecutorMod --> PhysicalMod
+    PlannerMod --> TypeCheckerMod
+    ExecutorMod --> PlannerMod
     ExecutorMod --> IteratorsMod
-    IteratorsMod --> AggregationMod
-    IteratorsMod --> JoinMod
-    PGWireMod --> ExecutorMod
-    PreparedMod --> PGWireMod
-    ConnectionMod --> PGWireMod
-    SchemaMod --> BinderMod
-    TypeMapMod --> SchemaMod
-    SystemTablesMod --> SchemaMod
+    IteratorsMod --> EvalMod
+    TableStoreMod --> SchemaMod
 ```
 
-### 5.3 Integration with Execution Engine
+### 5.3 Integration with In-Memory Store
 
 ```mermaid
 flowchart TB
     subgraph "SQL Layer"
-        Plan[Physical Plan Node]
+        Plan[Logical Plan Node]
+        Exec[Executor]
     end
     
-    subgraph "Execution Engine"
-        ExecCtx[ExecutionContext]
-        Pipeline[Execution Pipeline]
-        HookChain[Hook Chain]
+    subgraph "TableStore"
+        Tables[DashMap: table_name -> TableData]
+        TableDataObj[TableData: Schema + RwLock<Rows>]
     end
     
-    subgraph "Object Model"
-        DocAPI[Document API]
-        QueryAPI[Query API]
-    end
-    
-    subgraph "Storage Engine"
-        ReadTx[Read Transaction]
-        WriteTx[Write Transaction]
-        Iterator[Page Iterator]
-    end
-    
-    Plan --> ExecCtx
-    ExecCtx --> Pipeline
-    Pipeline --> HookChain
-    Pipeline --> DocAPI
-    Pipeline --> QueryAPI
-    QueryAPI --> ReadTx
-    DocAPI --> WriteTx
-    ReadTx --> Iterator
-    WriteTx --> Iterator
+    Plan --> Exec
+    Exec --> Tables
+    Tables --> TableDataObj
 ```
 
 ## 6. Data Structures
@@ -239,61 +196,32 @@ flowchart TB
 enum Token {
     // Keywords
     Select, From, Where, Insert, Into, Values, Update, Set, Delete,
-    Create, Table, Drop, Alter, Add, Column, Primary, Key, Not, Null,
-    Default, And, Or, In, Between, Like, Is, Distinct, As, On, Join,
-    Inner, Left, Right, Full, Outer, Cross, Using, Group, By, Order,
-    Asc, Desc, Having, Limit, Offset, Union, All, Except, Intersect,
-    Exists, Case, When, Then, Else, End, Cast, True, False, NullLit,
+    Create, Table, Drop, And, Or, Not, Null, Is, In, Between, Like,
+    ILike, True, False, As, On, Group, By, Having, Order, Asc, Desc,
+    Limit, Offset, Distinct, All, Exists, Default,
+    Count, Sum, Avg, Min, Max, Case, When, Then, Else, End, Cast,
+    Primary, Key, Unique, Nulls, First, Last,
     
-    // Identifiers
+    // Identifiers & literals
     Identifier(String),
-    QuotedIdentifier(String),
-    
-    // Literals
     Number(String),       // Parsed as string to preserve precision
     String(String),       // Single-quoted string
-    Boolean(bool),
-    Null,
     
     // Operators
-    Plus, Minus, Star, Slash, Percent, Eq, Neq, Lt, Gt, Lte, Gte,
-    Assignment,           // = in SET clauses
-    Concat,               // ||
+    Plus, Minus, Star, Slash, Percent,
+    Eq, NotEq, Lt, LtEq, Gt, GtEq, Concat, ColonColon,
     
-    // Delimiters
-    OpenParen, CloseParen, Comma, Semicolon, Dot,
-    
-    // Parameters
-    PositionalParam(u32), // $1, $2
-    NamedParam(String),   // $name
+    // Punctuation
+    LParen, RParen, Comma, Semicolon, Dot,
     
     // Special
     EOF,
-    Comment(String),
 }
 ```
 
 ### 6.2 Abstract Syntax Tree
 
 ```rust
-struct ASTNode {
-    location: SourceLocation, // line:col pairs for error reporting
-    node_type: ASTNodeType,
-}
-
-struct SourceLocation {
-    line: u32,
-    column: u32,
-    offset: u64,
-}
-
-enum ASTNodeType {
-    // Top-level statements
-    Statement(Statement),
-    // Expression nodes
-    Expression(Expr),
-}
-
 enum Statement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -301,75 +229,38 @@ enum Statement {
     Delete(DeleteStatement),
     CreateTable(CreateTableStatement),
     DropTable(DropTableStatement),
-    AlterTable(AlterTableStatement),
-    BeginTransaction,
-    CommitTransaction,
-    RollbackTransaction,
-    Prepare(PrepareStatement),
-    Execute(ExecuteStatement),
-    Deallocate(DeallocateStatement),
-    Explain(ExplainStatement),
 }
 
 struct SelectStatement {
-    with: Option<Vec<CommonTableExpr>>,
+    distinct: bool,
     select_list: Vec<SelectItem>,
-    from: Vec<TableRef>,
+    from: TableRef,
     where_clause: Option<Expr>,
     group_by: Vec<Expr>,
     having: Option<Expr>,
     order_by: Vec<OrderByExpr>,
-    limit: Option<Expr>,
-    offset: Option<Expr>,
-    distinct: bool,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 enum SelectItem {
-    Wildcard,                    // *
-    QualifiedWildcard(String),   // table.*
     Expr { expr: Expr, alias: Option<String> },
+    Wildcard,
 }
 
-enum TableRef {
-    Table { 
-        name: String, 
-        alias: Option<String>,
-        schema: Option<String>,
-    },
-    Subquery {
-        query: Box<SelectStatement>,
-        alias: String,
-    },
-    Join {
-        left: Box<TableRef>,
-        right: Box<TableRef>,
-        join_type: JoinType,
-        condition: JoinCondition,
-    },
-}
-
-enum JoinType {
-    Inner,
-    LeftOuter,
-    RightOuter,   // Rewritten to LeftOuter during planning
-    Cross,
-}
-
-enum JoinCondition {
-    On(Expr),
-    Using(Vec<String>),
-    Natural,
+struct TableRef {
+    name: String,
+    alias: Option<String>,
 }
 
 struct InsertStatement {
-    table_name: String,
+    table: TableRef,
     columns: Vec<String>,
-    values: Vec<Vec<Expr>>,       // Multiple row values
-    or_replace: bool,             // For upsert behavior
+    values: Vec<Vec<Expr>>,
 }
 
 struct UpdateStatement {
-    table_name: String,
+    table: TableRef,
     assignments: Vec<Assignment>,
     where_clause: Option<Expr>,
 }
@@ -380,86 +271,81 @@ struct Assignment {
 }
 
 struct DeleteStatement {
-    table_name: String,
-    using: Vec<TableRef>,
+    table: TableRef,
     where_clause: Option<Expr>,
 }
 
 struct CreateTableStatement {
-    name: String,
+    table: TableRef,
     columns: Vec<ColumnDef>,
-    if_not_exists: bool,
+}
+
+struct DropTableStatement {
+    table: TableRef,
 }
 
 struct ColumnDef {
     name: String,
-    data_type: SQLType,
-    not_null: bool,
-    default: Option<Expr>,
-    primary_key: bool,
+    sql_type: SQLType,
+    nullable: bool,
+    default: Option<LiteralValue>,
     unique: bool,
-    comment: Option<String>,
+    is_primary_key: bool,
 }
 
 struct OrderByExpr {
     expr: Expr,
-    direction: OrderDirection,
-    nulls_first: bool,
+    asc: bool,
+    nulls_first: Option<bool>,
 }
+```
 
-enum OrderDirection {
-    Asc,
-    Desc,
-}
+### 6.3 Expressions
 
-struct CommonTableExpr {
-    alias: String,
-    columns: Vec<String>,
-    query: Box<SelectStatement>,
-    recursive: bool,
-}
-
-// --- Expressions ---
-
+```rust
 enum Expr {
-    // Literals
+    Column(String),
     Literal(LiteralValue),
-    
-    // Identifiers
-    Identifier(String),                  // column
-    QualifiedIdentifier(Vec<String>),     // schema.table.column
-    
-    // Column reference resolved during binding
-    ColumnRef { table: String, column: String },
-    
-    // Unary operators
-    UnaryOp { op: UnaryOp, expr: Box<Expr> },
-    
-    // Binary operators
-    BinaryOp { op: BinaryOp, left: Box<Expr>, right: Box<Expr> },
-    
-    // Functions
-    Function { name: String, args: Vec<Expr>, distinct: bool },
-    Aggregate { name: String, args: Vec<Expr>, distinct: bool },
-    
-    // Special constructs
-    Cast { expr: Box<Expr>, target_type: SQLType },
-    Case { operand: Option<Box<Expr>>, when_then: Vec<WhenThen>, else_expr: Option<Box<Expr>> },
-    Exists { subquery: Box<SelectStatement> },
-    Subquery { query: Box<SelectStatement> },
-    InList { expr: Box<Expr>, list: Vec<Expr> },
-    InSubquery { expr: Box<Expr>, subquery: Box<SelectStatement> },
-    Between { expr: Box<Expr>, low: Box<Expr>, high: Box<Expr> },
-    Like { expr: Box<Expr>, pattern: Box<Expr>, negated: bool },
-    IsNull { expr: Box<Expr> },
-    IsNotNull { expr: Box<Expr> },
-    Parameter { position: u32 },         // Positional $1, $2
-    NamedParameter { name: String },     // $name
-}
-
-struct WhenThen {
-    when: Expr,
-    then: Expr,
+    BinaryOp {
+        left: Box<Expr>,
+        op: BinaryOperator,
+        right: Box<Expr>,
+    },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
+    Function {
+        name: String,
+        args: Vec<Expr>,
+    },
+    IsNull(Box<Expr>),
+    IsNotNull(Box<Expr>),
+    In {
+        expr: Box<Expr>,
+        list: Vec<Expr>,
+    },
+    Between {
+        expr: Box<Expr>,
+        low: Box<Expr>,
+        high: Box<Expr>,
+    },
+    Like {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+    },
+    ILike {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+    },
+    Case {
+        whens: Vec<(Expr, Expr)>,
+        else_val: Option<Box<Expr>>,
+    },
+    Cast {
+        expr: Box<Expr>,
+        target_type: SQLType,
+    },
 }
 
 enum LiteralValue {
@@ -468,132 +354,28 @@ enum LiteralValue {
     Integer(i64),
     Float(f64),
     String(String),
-    Blob(Vec<u8>),
-    Date(String),           // ISO 8601 date
-    Timestamp(String),      // ISO 8601 timestamp
-    Time(String),           // ISO 8601 time
-    Interval(String),       // ISO 8601 duration
 }
 
-enum UnaryOp {
-    Not,
-    Plus,
-    Minus,
+enum BinaryOperator {
+    Plus, Minus, Multiply, Divide, Modulo,
+    Eq, NotEq, Lt, LtEq, Gt, GtEq,
+    And, Or, Concat,
 }
 
-enum BinaryOp {
-    // Arithmetic
-    Add, Subtract, Multiply, Divide, Modulo,
-    // Comparison
-    Eq, Neq, Lt, Gt, Lte, Gte,
-    // Logical
-    And, Or,
-    // String
-    Concat,
+enum UnaryOperator {
+    Neg, Not,
 }
 ```
 
-### 6.3 SQL Type System
+### 6.4 SQL Type System
 
 ```rust
 enum SQLType {
-    // Numeric types
-    TinyInt,           // i8, 1 byte
-    SmallInt,          // i16, 2 bytes
-    Integer,           // i32, 4 bytes
-    BigInt,            // i64, 8 bytes
-    Float,             // f32, 4 bytes
-    Double,            // f64, 8 bytes
-    Decimal(u8, u8),   // precision, scale, up to 38 digits
-    
-    // String types
-    Char(u32),         // Fixed-length, padded with spaces
-    VarChar(u32),      // Variable-length, 1-65535
-    Text,              // Unlimited length (up to 2^31-1)
-    
-    // Binary types
-    Binary(u32),       // Fixed-length binary
-    VarBinary(u32),    // Variable-length binary
-    Blob,              // Unlimited binary (up to 2^31-1)
-    
-    // Date/Time types
-    Date,              // Date only, 4 bytes
-    Time(u8),          // Time with precision, 4 bytes
-    Timestamp(u8),     // Timestamp with precision, 8 bytes
-    TimestampTz(u8),   // Timestamp with timezone, 8 bytes
-    Interval,          // Time interval, 16 bytes
-    
-    // Other
-    Boolean,           // 1 byte
-    Uuid,              // 16 bytes
-    Json,              // JSON text storage
-    JsonB,             // JSON binary storage (parsed)
-    
-    // Object Model bridge
-    Document,          // Full Object Model document reference
-    Array(SQLType),    // Array of element type
-    Map(SQLType),      // Map with string keys and value type
-}
-
-// Size in bytes for fixed-width types
-impl SQLType {
-    fn fixed_width(&self) -> Option<u32> {
-        match self {
-            SQLType::TinyInt => Some(1),
-            SQLType::SmallInt => Some(2),
-            SQLType::Integer => Some(4),
-            SQLType::BigInt => Some(8),
-            SQLType::Float => Some(4),
-            SQLType::Double => Some(8),
-            SQLType::Boolean => Some(1),
-            SQLType::Uuid => Some(16),
-            SQLType::Date => Some(4),
-            SQLType::Time(_) => Some(4),
-            SQLType::Timestamp(_) => Some(8),
-            SQLType::TimestampTz(_) => Some(8),
-            SQLType::Interval => Some(16),
-            _ => None,
-        }
-    }
-}
-```
-
-### 6.4 Type Mapping: SQL → Object Model
-
-```rust
-enum ObjectModelType {
     Null,
-    Bool,
-    Int64,
-    Float64,
-    String,
-    Bytes,
-    Timestamp,       // Unix nanos, i64
-    Array(Box<ObjectModelType>),
-    Map(Box<ObjectModelType>),     // String-keyed
-    Document,        // Nested document
-}
-
-// SQLType -> ObjectModelType mapping
-fn map_sql_to_om(sql_type: &SQLType) -> ObjectModelType {
-    match sql_type {
-        SQLType::TinyInt | SQLType::SmallInt | SQLType::Integer | SQLType::BigInt 
-            => ObjectModelType::Int64,
-        SQLType::Float | SQLType::Double | SQLType::Decimal(_, _) 
-            => ObjectModelType::Float64,
-        SQLType::Char(_) | SQLType::VarChar(_) | SQLType::Text 
-            => ObjectModelType::String,
-        SQLType::Binary(_) | SQLType::VarBinary(_) | SQLType::Blob 
-            => ObjectModelType::Bytes,
-        SQLType::Boolean => ObjectModelType::Bool,
-        SQLType::Date | SQLType::Time(_) | SQLType::Timestamp(_) | SQLType::TimestampTz(_)
-            => ObjectModelType::Timestamp,
-        SQLType::Uuid => ObjectModelType::String,     // Stored as string
-        SQLType::Json | SQLType::JsonB => ObjectModelType::String,
-        SQLType::Array(t) => ObjectModelType::Array(Box::new(map_sql_to_om(t))),
-        SQLType::Map(t) => ObjectModelType::Map(Box::new(map_sql_to_om(t))),
-        SQLType::Document => ObjectModelType::Document,
-    }
+    Boolean,
+    Integer,
+    Float,
+    Text,
 }
 ```
 
@@ -602,280 +384,171 @@ fn map_sql_to_om(sql_type: &SQLType) -> ObjectModelType {
 ```rust
 enum LogicalNode {
     Scan {
-        table: String,
+        table_name: String,
         alias: Option<String>,
-        schema: Schema,
     },
     Projection {
         input: Box<LogicalNode>,
-        exprs: Vec<LogicalExpr>,
-        aliases: Vec<Option<String>>,
+        exprs: Vec<(Expr, Option<String>)>,
     },
     Selection {
         input: Box<LogicalNode>,
-        predicate: LogicalExpr,
-    },
-    Join {
-        left: Box<LogicalNode>,
-        right: Box<LogicalNode>,
-        join_type: JoinType,
-        condition: LogicalExpr,
-    },
-    Aggregate {
-        input: Box<LogicalNode>,
-        group_exprs: Vec<LogicalExpr>,
-        aggregate_exprs: Vec<AggregateExpr>,
+        predicate: Expr,
     },
     Sort {
         input: Box<LogicalNode>,
-        order_by: Vec<LogicalSortExpr>,
+        order_by: Vec<OrderByExpr>,
     },
     Limit {
         input: Box<LogicalNode>,
         limit: usize,
         offset: usize,
     },
-    CrossJoin {
-        left: Box<LogicalNode>,
-        right: Box<LogicalNode>,
-    },
-    Distinct {
+    Aggregate {
         input: Box<LogicalNode>,
+        exprs: Vec<(Expr, Option<String>)>,
     },
-    Values {
-        values: Vec<Vec<LogicalExpr>>,
-    },
-    Insert {
-        table: String,
-        columns: Vec<String>,
-        input: Box<LogicalNode>,
-        or_replace: bool,
-    },
-    Update {
-        table: String,
-        assignments: Vec<(String, LogicalExpr)>,
-        input: Box<LogicalNode>,
-    },
-    Delete {
-        table: String,
+    Dedup {
         input: Box<LogicalNode>,
     },
 }
+```
 
+### 6.6 Schema
+
+```rust
 struct Schema {
     columns: Vec<ColumnInfo>,
 }
 
 struct ColumnInfo {
     name: String,
-    data_type: SQLType,
+    sql_type: SQLType,
     nullable: bool,
+    default: Option<LiteralValue>,
+    ordinal: usize,
+    unique: bool,
+    is_primary_key: bool,
 }
 
-struct LogicalSortExpr {
-    expr: LogicalExpr,
-    direction: OrderDirection,
-    nulls_first: bool,
-}
-
-struct AggregateExpr {
-    name: String,       // COUNT, SUM, AVG, MIN, MAX
-    arg: LogicalExpr,
-    distinct: bool,
-    return_type: SQLType,
-}
-
-enum LogicalExpr {
-    ColumnRef { index: usize, name: String },
-    Literal(LiteralValue),
-    BinaryOp { op: BinaryOp, left: Box<LogicalExpr>, right: Box<LogicalExpr> },
-    UnaryOp { op: UnaryOp, expr: Box<LogicalExpr> },
-    Function { name: String, args: Vec<LogicalExpr> },
-    Cast { expr: Box<LogicalExpr>, target_type: SQLType },
-    ScalarSubquery { plan: Box<LogicalNode> },
-    InSubquery { expr: Box<LogicalExpr>, plan: Box<LogicalNode> },
-    Exists { plan: Box<LogicalNode> },
-    Case { when_then: Vec<(LogicalExpr, LogicalExpr)>, else_expr: Option<Box<LogicalExpr>> },
-    Parameter(u32),
-}
-```
-
-### 6.6 Physical Plan
-
-```rust
-enum PhysicalNode {
-    TableScan {
-        table: String,
-        columns: Vec<usize>,          // Column indices to read
-        filter: Option<PhysicalExpr>,  // Pushdown predicate
-        limit: Option<usize>,          // Pushdown limit
-    },
-    Projection {
-        input: Box<PhysicalNode>,
-        exprs: Vec<PhysicalExpr>,
-        schema: Schema,
-    },
-    Filter {
-        input: Box<PhysicalNode>,
-        predicate: PhysicalExpr,
-    },
-    HashJoin {
-        left: Box<PhysicalNode>,
-        right: Box<PhysicalNode>,
-        join_type: JoinType,
-        left_keys: Vec<PhysicalExpr>,
-        right_keys: Vec<PhysicalExpr>,
-    },
-    NestedLoopJoin {
-        left: Box<PhysicalNode>,
-        right: Box<PhysicalNode>,
-        join_type: JoinType,
-        condition: PhysicalExpr,
-    },
-    HashAggregate {
-        input: Box<PhysicalNode>,
-        group_keys: Vec<PhysicalExpr>,
-        aggregates: Vec<PhysicalAggregate>,
-    },
-    Sort {
-        input: Box<PhysicalNode>,
-        order_by: Vec<PhysicalSortExpr>,
-    },
-    TopN {
-        input: Box<PhysicalNode>,
-        order_by: Vec<PhysicalSortExpr>,
-        limit: usize,
-    },
-    Limit {
-        input: Box<PhysicalNode>,
-        limit: usize,
-        offset: usize,
-    },
-    ValuesScan {
-        values: Vec<Vec<LiteralValue>>,
-        schema: Schema,
-    },
-    Insert {
-        table: String,
-        columns: Vec<String>,
-        input: Box<PhysicalNode>,
-        or_replace: bool,
-    },
-    Update {
-        table: String,
-        assignments: Vec<(String, PhysicalExpr)>,
-        input: Box<PhysicalNode>,
-    },
-    Delete {
-        table: String,
-        input: Box<PhysicalNode>,
-    },
-}
-
-enum PhysicalExpr {
-    ColumnRef { index: usize },
-    Literal(LiteralValue),
-    BinaryOp { op: BinaryOp, left: Box<PhysicalExpr>, right: Box<PhysicalExpr> },
-    UnaryOp { op: UnaryOp, expr: Box<PhysicalExpr> },
-    Function { name: String, args: Vec<PhysicalExpr> },
-    Cast { expr: Box<PhysicalExpr>, target_type: SQLType },
-    Parameter(u32),
-}
-
-struct PhysicalSortExpr {
-    expr: PhysicalExpr,
-    direction: OrderDirection,
-}
-
-struct PhysicalAggregate {
+struct TableSchema {
     name: String,
-    arg: PhysicalExpr,
-    distinct: bool,
-    return_type: SQLType,
+    schema: Schema,
 }
 ```
 
-### 6.7 Execution State
+### 6.7 Row and TableStore
 
 ```rust
-struct ExecutionContext {
-    transaction: TransactionHandle,
-    parameters: Vec<Option<LiteralValue>>,
-    batch_size: usize,           // Rows per page, default 100
-    max_rows: usize,             // Max rows returned, default 10000
-    deadline: Instant,           // Query deadline
-    memory_limit: usize,         // Memory limit in bytes, default 64MB
+struct Row {
+    values: Vec<Option<LiteralValue>>,
 }
 
-struct TransactionHandle {
-    tx_id: u64,
-    read_ts: u64,                // MVCC read timestamp
-    state: TransactionState,
+struct TableData {
+    schema: Schema,
+    rows: RwLock<Vec<Row>>,
+    next_row_id: RwLock<u64>,
 }
 
-enum TransactionState {
-    Active,
-    Committed,
-    RolledBack,
-    Error(String),
+struct TableStore {
+    tables: DashMap<String, Arc<TableData>>,
 }
+
+type TableStoreRef = Arc<TableStore>;
 ```
 
-### 6.8 Prepared Statement Cache
+### 6.8 RecordBatch (Result)
 
 ```rust
-struct PreparedStatementCache {
-    max_size: usize,              // Maximum entries, default 1000
-    statements: HashMap<PreparedStatementKey, CachedStatement>,
-    lru: LruList<PreparedStatementKey>,
+struct RecordBatch {
+    columns: Vec<Column>,
+    num_rows: usize,
 }
 
-struct PreparedStatementKey {
-    connection_id: u64,
-    statement_name: String,       // Named or auto-generated
+enum Column {
+    Integer(Vec<Option<i64>>),
+    Float(Vec<Option<f64>>),
+    Boolean(Vec<Option<bool>>),
+    String(Vec<Option<String>>),
+    Null(usize),
 }
 
-struct CachedStatement {
-    ast: Box<Statement>,
-    logical_plan: LogicalNode,
-    physical_plan: PhysicalNode,
-    parameter_types: Vec<SQLType>,
-    result_schema: Schema,
-    created_at: Instant,
-    access_count: u64,
-    last_accessed: Instant,
+enum SQLResult {
+    Query {
+        batches: Vec<RecordBatch>,
+        stats: ExecutionStats,
+    },
+    Exec {
+        rows_affected: u64,
+        stats: ExecutionStats,
+    },
+}
+
+struct ExecutionStats {
+    rows_scanned: u64,
+    rows_returned: u64,
+    execution_time_ms: u64,
 }
 ```
 
 ## 7. Algorithms
 
-### 7.1 Recursive Descent Parser
-
-The parser is hand-written recursive descent with one token lookahead. It follows the grammar structure:
+### 7.1 Lexer
 
 ```
+ALGORITHM: tokenize
+INPUT:  SQL text string
+OUTPUT: Vec<Token>, Vec<(start: usize, end: usize)>
+
+1. Iterate over characters by position:
+   a. Skip whitespace
+   b. Record current position as start
+   c. Match character:
+      - Single quote (') -> read_string(): consume until closing quote,
+        handle doubled quotes ('') as literal quote
+      - Digit (0-9) -> read_number(): consume digits, optional decimal point,
+        optional exponent (e/E [+/-] digits)
+      - Alpha or underscore -> read_identifier_or_keyword():
+        consume alphanumeric + underscore, lowercase match against keyword list,
+        return Identifier(word) if no keyword match
+      - Operator or punctuation -> read_operator_or_punct():
+        match single/multi-character operators, return Result<Token>
+        (never panics, returns proper syntax errors)
+   d. Record end position, emit (token, (start, end))
+2. Return token vector and position vector
+
+Keyword list: SELECT, FROM, WHERE, INSERT, INTO, VALUES, UPDATE, SET, DELETE,
+CREATE, TABLE, DROP, AND, OR, NOT, NULL, IS, IN, BETWEEN, LIKE, ILIKE, TRUE,
+FALSE, AS, ON, GROUP, BY, HAVING, ORDER, ASC, DESC, LIMIT, OFFSET, DISTINCT,
+ALL, EXISTS, DEFAULT, COUNT, SUM, AVG, MIN, MAX, CASE, WHEN, THEN, ELSE, END,
+CAST, PRIMARY, KEY, UNIQUE, NULLS, FIRST, LAST
+
+Line comments (-- ...) are skipped entirely (no token emitted).
+```
+
+### 7.2 Recursive Descent Parser
+
+```
+ALGORITHM: parse_program
+INPUT:  token stream with positions
+OUTPUT: Vec<Statement> or Error
+
+Parse statements separated by semicolons.
+Continue until EOF token is reached.
+
 ALGORITHM: parse_statement
 INPUT:  token stream
-OUTPUT: Statement AST
+OUTPUT: Statement
 
-1. Peek at current token
-2. Match first token to determine statement type:
-   - SELECT/KSELECT  -> parse_select()
-   - INSERT          -> parse_insert()
-   - UPDATE          -> parse_update()
-   - DELETE          -> parse_delete()
-   - CREATE          -> parse_create()
-   - DROP            -> parse_drop()
-   - ALTER           -> parse_alter()
-   - BEGIN           -> parse_begin()
-   - COMMIT          -> parse_commit()
-   - ROLLBACK        -> parse_rollback()
-   - PREPARE         -> parse_prepare()
-   - EXECUTE         -> parse_execute()
-   - DEALLOCATE      -> parse_deallocate()
-   - EXPLAIN         -> parse_explain()
-3. Consume terminating semicolon (if present)
-4. Return Statement AST
+Match first token to determine statement type:
+   SELECT -> parse_select()
+   INSERT -> parse_insert()
+   UPDATE -> parse_update()
+   DELETE -> parse_delete()
+   CREATE -> parse_create_table()
+   DROP   -> parse_drop_table()
+   other  -> SyntaxError
+
 
 ALGORITHM: parse_select
 INPUT:  token stream (current token is SELECT)
@@ -884,1528 +557,901 @@ OUTPUT: SelectStatement
 1. Consume SELECT
 2. Check for DISTINCT, set flag
 3. Parse select_list (one or more select_item separated by commas)
-4. If FROM present, parse table_refs (one or more comma-separated or joined)
-5. If WHERE present, parse_expr() as predicate
+4. Expect FROM, parse table_ref (single table, no joins)
+5. If WHERE present, parse_expression() as predicate
 6. If GROUP BY present, parse one or more expr
-7. If HAVING present, parse_expr() as predicate
+7. If HAVING present, parse_expression() as predicate
 8. If ORDER BY present, parse one or more order_by_expr
-9. If LIMIT present, parse_expr() (must be integer literal or param)
-10. If OFFSET present, parse_expr() (must be integer literal or param)
+9. If LIMIT present, parse usize literal
+10. If OFFSET present, parse usize literal
 11. Return SelectStatement
 
 
-ALGORITHM: parse_expr (precedence climbing)
+ALGORITHM: parse_expression (precedence climbing)
 INPUT:  token stream, min_precedence
 OUTPUT: Expr
 
-Precedence table (higher = binds tighter):
-  15: Unary + - NOT
-  14: CAST, EXISTS, subquery
-  13: * / %
-  12: + - ||
-  11: BETWEEN, IN, LIKE, IS
-  10: < <= > >=
-  9:  = != <>
-  8:  AND
-  7:  OR
-  6:  Assignment (= in SET)
-  1:  DEFAULT
+MAX_NESTING_DEPTH = 64 recursion guard at entry.
+
+Precedence (high to low):
+   1. PRIMARY: literals, identifiers, functions, CASE, CAST, parenthesized
+   2. UNARY: - (negation), NOT
+   3. FACTOR: * / %
+   4. TERM: + - ||
+   5. COMPARISON: < <= > >=
+   6. EQUALITY: = != <>
+   7. AND
+   8. OR
 
 Parsing logic:
-1. Parse atomic expression (literal, identifier, function call, subquery, parameter, parenthesized expr)
-2. While next token is a binary operator with precedence >= min_precedence:
-   a. Consume operator
-   b. Parse right operand with precedence = operator_precedence + 1
-   c. Combine left and right into new left node
-3. Return result
+1. Parse unary expression (handles -expr, NOT expr)
+2. Parse primary expression:
+   a. Literal: NULL, TRUE, FALSE, Number, String
+   b. Column reference: Identifier (may be followed by ::type cast)
+   c. Function call: name(args...)
+   d. Aggregate function: COUNT/SUM/AVG/MIN/MAX(args...)
+   e. CASE expression: CASE WHEN cond THEN val [ELSE val] END
+   f. CAST expression: CAST(expr AS type)
+   g. Parenthesized expression: (expr)
+3. After primary, check for postfix operators:
+   a. IS NULL / IS NOT NULL
+   b. IN (list)
+   c. BETWEEN expr AND expr
+   d. LIKE pattern / ILIKE pattern
+   e. NOT IN / NOT BETWEEN / NOT LIKE / NOT ILIKE
 
 
-ALGORITHM: parse_atomic
+ALGORITHM: parse_column_def
 INPUT:  token stream
-OUTPUT: Expr
+OUTPUT: ColumnDef
 
-1. Match current token:
-   a. NUMBER(str) -> parse numeric literal (try i64 first, fall back to f64)
-   b. STRING(s) -> Expr::Literal(String(s))
-   c. TRUE/FALSE -> Expr::Literal(Boolean(val))
-   d. NULL -> Expr::Literal(Null)
-   e. IDENTIFIER(name) followed by OPENPAREN -> parse_function_call(name)
-   f. IDENTIFIER(name) -> Expr::Identifier(name)
-   g. QUOTEDIDENTIFIER(name) -> Expr::Identifier(name)
-   h. POSITIONALPARAM(n) -> Expr::Parameter(n)
-   i. NAMEDPARAM(name) -> Expr::NamedParameter(name)
-   j. OPENPAREN -> parse_grouped_expr()
-   k. SELECT -> parse_scalar_subquery() or parse_exists()
-   l. CASE -> parse_case_expr()
-   m. CAST -> parse_cast_expr()
-   n. EXISTS -> parse_exists()
-2. Return Expr
+1. Parse identifier (column name)
+2. Parse type keyword (INTEGER, FLOAT, TEXT, BOOLEAN)
+3. Parse constraint keywords in any order:
+   a. NOT NULL -> nullable = false
+   b. NULL -> nullable = true
+   c. DEFAULT literal -> default = Some(value)
+   d. PRIMARY KEY -> is_primary_key = true, nullable = false
+   e. UNIQUE -> unique = true
+
+
+ALGORITHM: parse_order_by_expr
+INPUT:  token stream
+OUTPUT: OrderByExpr
+
+1. Parse expression
+2. If ASC present -> asc = true (also default)
+3. If DESC present -> asc = false
+4. If NULLS FIRST -> nulls_first = Some(true)
+5. If NULLS LAST -> nulls_first = Some(false)
+
+
+Error positions:
+All syntax errors include (start, end) position from the lexer position vector,
+indexed by the current parser token position.
 ```
 
-### 7.2 Binder / Name Resolution
+### 7.3 Binder / Name Resolution
 
 ```
-ALGORITHM: bind_select
-INPUT:  SelectStatement, schema context (available tables/columns)
-OUTPUT: BoundSelectStatement or Error
+ALGORITHM: bind
+INPUT:  SelectStatement, Schema
+OUTPUT: BoundSelect or Error
 
-1. FROM phase: resolve all table references
-   a. For each TableRef::Table(name, alias, schema):
-      - Look up table in current schema/context
-      - If not found, return error "table not found: {name}"
-      - Resolve column list from schema definition
-      - Register table alias (or table name if no alias) in scope
-   b. For each Join:
-      - Bind left and right table refs
-      - Resolve join condition columns
-      - If USING, verify columns exist in both sides
-   c. For Subquery:
-      - Bind inner SelectStatement in new scope
-      - Register subquery columns using alias
+1. For each SelectItem:
+   a. Wildcard -> expand to all schema columns
+   b. Expr { expr, alias } -> resolve_expr(expr, schema)
+      - Column(name): verify column exists in schema, error if not
+      - Recursively resolve nested expressions: BinaryOp, UnaryOp,
+        Function, IsNull, IsNotNull, In, Between, Like, ILike, Case, Cast
 
-2. SELECT phase: resolve select list expressions
-   a. For Wildcard (*): expand to all columns from all FROM tables
-   b. For QualifiedWildcard(t.*): expand to all columns from table t
-   c. For expr with alias: resolve expression, attach alias
-   d. Verify all column references exist in current scope
-   e. If GROUP BY present, verify select list contains only:
-      - GROUP BY expressions
-      - Aggregate functions
+2. Return BoundSelect with resolved column references
 
-3. WHERE phase: bind and type-check predicate expression
-   a. Resolve all column references
-   b. Verify predicate returns boolean type
-   c. Mark subqueries in WHERE for execution
-
-4. GROUP BY phase:
-   a. Verify each GROUP BY expr is valid (column ref or literal)
-   b. If aggregation present, verify HAVING is valid
-
-5. ORDER BY phase:
-   a. Resolve column references (may refer to select_list aliases)
-   b. Verify sort expressions are valid types
-
-6. Return bound SelectStatement with resolved schema references
+All Expr variants are traversed for column resolution:
+  Column, Literal, BinaryOp, UnaryOp, Function,
+  IsNull, IsNotNull, In, Between, Like, ILike, Case, Cast
 ```
 
-### 7.3 Logical Plan Construction
+### 7.4 Type Checking
 
 ```
-ALGORITHM: build_logical_plan
-INPUT:  BoundSelectStatement
+ALGORITHM: check_types
+INPUT:  Expr, Schema
+OUTPUT: SQLType or Error
+
+1. Column(name) -> lookup schema, return column type
+2. Literal(val) -> literal_type(val): Null->Null, Boolean->Boolean, Integer->Integer, Float->Float, String->Text
+3. BinaryOp(left, op, right):
+   - AND/OR: both sides must be Boolean
+   - Eq/NotEq: unify types of both sides
+   - Lt/LtEq/Gt/GtEq: unify types, result is Boolean
+   - Concat: unify types, result is Text
+   - Arithmetic: unify types, result is the unified type
+4. UnaryOp:
+   - Neg: inner must be Integer or Float
+   - Not: inner must be Boolean
+5. Function: dispatch by name (COUNT->Integer, SUM/AVG->numeric, MIN/MAX->same as arg)
+6. IsNull/IsNotNull -> Boolean
+7. In: unify expr type with all list item types, result is Boolean
+8. Between: unify expr type with low and high types, result is Boolean
+9. Like/ILike: result is Boolean
+10. Case: unify all WHEN result types with ELSE type
+11. Cast: target type is returned (coercion checked at evaluation)
+
+
+ALGORITHM: unify_types
+INPUT:  type A, type B
+OUTPUT: unified type or error
+
+1. Null + anything = anything
+2. Same types = that type
+3. Integer + Float = Float
+4. Integer + Text = Integer
+5. Float + Text = Float
+6. Otherwise = TypeMismatch error
+
+
+ALGORITHM: coerce_value
+INPUT:  LiteralValue, target SQLType
+OUTPUT: coerced LiteralValue or error
+
+Supported coercions:
+  Null -> any type (returns Null)
+  Integer -> Float, Text
+  Float -> Integer, Text
+  String -> Integer (parse), Float (parse), Text, Boolean
+  Boolean -> Text
+  Integer -> Boolean (0=false, non-zero=true)
+```
+
+### 7.5 Logical Plan Construction
+
+```
+ALGORITHM: plan_select
+INPUT:  SelectStatement
 OUTPUT: LogicalNode (tree)
 
-1. Start with base LogicalNode from FROM clause:
-   a. Single table -> LogicalNode::Scan(table, schema)
-   b. Join -> LogicalNode::Join(left, right, type, condition)
-   c. Subquery -> build_logical_plan(sub_select)
-   d. Multiple tables (comma) -> chain of CrossJoin or Joined
+1. Start with LogicalNode::Scan(table_name, alias)
 
-2. Apply WHERE clause as LogicalNode::Selection(input, predicate)
-   - Predicate decomposition: split AND conditions
-   - Pushdown: extract predicates that can be evaluated at Scan level
+2. If WHERE present:
+   node = LogicalNode::Selection(input, predicate)
 
-3. Apply GROUP BY as LogicalNode::Aggregate(input, group_exprs, aggr_exprs)
-   - If no GROUP BY but aggregates present, single-group aggregation
+3. If ORDER BY present:
+   node = LogicalNode::Sort(input, order_by)
 
-4. Apply HAVING as LogicalNode::Selection(aggregate, predicate)
+4. Build projection/aggregate expressions from select_list:
+   - If any expression contains an aggregate function (COUNT, SUM, AVG, MIN, MAX):
+     node = LogicalNode::Aggregate(input, exprs)
+   - Else:
+     node = LogicalNode::Projection(input, exprs)
 
-5. Apply SELECT list as LogicalNode::Projection(input, exprs, aliases)
-   - Compute final output expressions
+5. If DISTINCT:
+   node = LogicalNode::Dedup(input)
 
-6. Apply DISTINCT as LogicalNode::Distinct(input)
-   - If no ORDER BY, sort by all columns; else sort by ORDER BY columns
-
-7. Apply ORDER BY as LogicalNode::Sort(input, order_by)
-   - If LIMIT is present, combine into LogicalNode::TopN
-
-8. Apply LIMIT/OFFSET as LogicalNode::Limit(input, limit, offset)
-   - If combined with ORDER BY that can use TopN, rewrite
+6. Apply LIMIT/OFFSET (default limit = usize::MAX, offset = 0):
+   node = LogicalNode::Limit(input, limit, offset)
 ```
 
-### 7.4 Heuristic Physical Planning
+### 7.6 Pull-based Execution (Iterator Model)
 
 ```
-ALGORITHM: build_physical_plan
-INPUT:  LogicalNode tree
-OUTPUT: PhysicalNode tree
+ALGORITHM: build_executor
+INPUT:  LogicalNode, TableStoreRef
+OUTPUT: Box<dyn Executor>
 
-Rules applied in order:
+Recursively build executor tree from logical plan:
+  Scan      -> ScanExecutor
+  Selection -> FilterExecutor
+  Projection -> ProjectionExecutor
+  Aggregate -> AggregateExecutor
+  Sort      -> SortExecutor
+  Limit     -> LimitExecutor
+  Dedup     -> DedupExecutor
 
-RULE 1: Scan -> TableScan
-  - Extract column indices needed from projection or selection
-  - Pushdown filter predicates that reference only this table's columns
-  - Pushdown limit if no filter/expression on top
-  - SELECT * without WHERE -> TableScan with all columns, no filter
+Each executor implements the trait:
+  fn open(&mut self) -> Result<()>
+  fn next(&mut self) -> Result<Option<Row>>
+  fn close(&mut self) -> Result<()>
 
-RULE 2: Selection -> Filter or pushdown
-  - If input is TableScan: merge predicate into TableScan.filter
-  - If input is Join: attempt to push predicate to left/right side
-  - Otherwise: PhysicalNode::Filter(input, predicate)
 
-RULE 3: Join selection
-  - If join condition has equality predicates:
-    - Check if build side (right for hash join) fits in memory budget
-    - If yes: PhysicalNode::HashJoin
-    - If no: PhysicalNode::NestedLoopJoin
-  - If no equality predicates: PhysicalNode::NestedLoopJoin
-  - Right outer joins rewritten as left outer joins
+ALGORITHM: ScanExecutor::next
+1. On open(): scan all rows from TableStore for the given table name
+2. On next(): return rows one at a time from the in-memory buffer
+3. On close(): clear buffer
 
-RULE 4: Aggregate -> HashAggregate
-  - Always use hash-based aggregation
-  - Memory estimate: group_keys * 64 bytes + aggregates * 16 bytes
-  - If estimate exceeds memory limit, fall back to sort-based
 
-RULE 5: Sort + Limit -> TopN
-  - Use binary heap for TopN if input is small (< 10,000 rows)
-  - Otherwise full sort then take
+ALGORITHM: FilterExecutor::next
+1. Pull rows from input child
+2. For each row, evaluate predicate expression
+3. Return first row where predicate evaluates to Boolean(true)
+4. Return None when input is exhausted
 
-RULE 6: Distinct -> Sort + projection
-  - Distinct implemented as Sort all columns + emit unique
 
-RULE 7: Insert/Update/Delete
-  - Insert: ValuesScan input -> Insert executor
-  - Update: TableScan + Filter -> Update executor
-  - Delete: TableScan + Filter -> Delete executor
+ALGORITHM: ProjectionExecutor::next
+1. Pull row from input child
+2. For each expression, evaluate against the row's column values
+3. Return new Row with projected values
+
+
+ALGORITHM: DedupExecutor::next
+1. Pull rows from input child
+2. Compute hash of each row (Row::row_hash)
+3. If hash already seen, skip row (continue)
+4. Record hash and return first unique row
+5. Return None when input is exhausted
+
+Hash computation: hash each value variant using DefaultHasher.
+  Null -> 0u64, None -> 1u64, Boolean, Integer, Float (to_bits), String
+
+
+ALGORITHM: AggregateExecutor
+1. On open(): consume ALL rows from input child
+2. For each expression in the select list:
+   a. If it is a Function (COUNT/SUM/AVG/MIN/MAX):
+      - Evaluate the aggregate across all input rows
+      - COUNT: count rows (or non-null values per column)
+      - SUM: sum all numeric values as f64
+      - AVG: average of numeric values as f64
+      - MIN/MAX: compare all values using the appropriate comparison operator
+   b. If it is a non-aggregate expression:
+      - Evaluate on all rows, return the last value
+3. Return a single result row
+
+
+ALGORITHM: SortExecutor
+1. On open(): consume ALL rows from input child
+2. Sort rows using a custom comparator:
+   a. For each OrderByExpr, evaluate the expression on both rows
+   b. Compare values using compare_values() which handles NULL ordering
+   c. NULLS FIRST: nulls sort before non-nulls
+   d. NULLS LAST: nulls sort after non-nulls
+   e. ASC/DESC: reverse comparison for DESC
+3. Return sorted rows one by one on next()
+
+compare_values() logic:
+  Null vs Null     -> Equal
+  Null vs non-Null -> Less if nulls_first, Greater otherwise
+  non-Null vs Null -> Greater if nulls_first, Less otherwise
+  Integer vs Integer -> numeric comparison
+  Float vs Float     -> total_cmp
+  Integer vs Float   -> promote to Float
+  Boolean vs Boolean -> bool cmp
+  String vs String   -> lexicographic cmp
+
+
+ALGORITHM: LimitExecutor
+1. On open(): skip `offset` rows from input, set remaining limit
+2. On next(): return up to `limit` rows from input, then None
 ```
 
-### 7.5 Pull-based Execution (Iterator Model)
+### 7.7 Expression Evaluation
 
 ```
-ALGORITHM: execute_physical_plan
-INPUT:  PhysicalNode, ExecutionContext
-OUTPUT: Stream of RecordBatch
-
-Each physical node implements:
-  fn open(&mut self, ctx: &ExecutionContext) -> Result<()>
-  fn next(&mut self) -> Result<Option<RecordBatch>>
-  fn close(&mut self)
-
-ALGORITHM: TableScan::next
-1. If first call, open Storage Engine iterator on table's primary index
-2. Retrieve next page from Storage Engine
-3. Deserialize Documents from page
-4. If filter present, evaluate filter on each Document
-5. Extract requested columns into RecordBatch columns
-6. Return RecordBatch or None if exhausted
-
-ALGORITHM: Filter::next
-1. Pull next batch from input child
-2. Evaluate predicate expression on each row
-3. Collect matching rows into new batch
-4. If resulting batch is empty, pull next batch from input
-5. Return non-empty batch or None if exhausted
-
-ALGORITHM: HashJoin::next
-1. open(): build hash table from right input
-   a. Pull all rows from right child
-   b. For each row, compute hash of join key
-   c. Insert into HashMap<HashKey, Vec<Row>>
-2. next(): probe hash table with left input rows
-   a. Pull batch from left child
-   b. For each left row, compute join key hash
-   c. Look up matching right rows in hash table
-   d. For each match, produce joined row
-   e. Accumulate into output batch
-   f. Return batch or continue until left input exhausted
-3. close(): clear hash table
-
-Memory budget for hash table: up to 64MB
-If right input exceeds 64MB, emit warning and use nested loop fallback
-
-ALGORITHM: HashAggregate::next
-1. open(): consume all input, build group map
-   a. Initialize HashMap<GroupKey, Accumulators>
-   b. Pull all batches from input child
-   c. For each row, compute group key from group expressions
-   d. If group not in map, create new accumulators
-   e. Update accumulators (COUNT, SUM, AVG, MIN, MAX)
-2. next(): return accumulated results
-   a. If first call, iterate group map and emit batch
-   b. Return None on subsequent calls
-3. close(): clear group map
-
-Accumulator types:
-- CountAccumulator: i64 count
-- SumAccumulator: f64 sum for floats, i64 sum for integers
-- AvgAccumulator: (sum: f64, count: i64)
-- MinAccumulator: current min value
-- MaxAccumulator: current max value
-
-ALGORITHM: TopN::next
-1. open(): consume all input, maintain binary heap of N largest/smallest
-   a. Create BinaryHeap with custom comparator (ASC/DESC)
-   b. Pull all batches from input child
-   c. For each row, push into heap
-   d. If heap size > limit, pop extreme element
-2. next(): drain heap in sorted order
-   a. Pop all elements from heap (reverse sorted)
-   b. Emit in correct order
-3. close(): clear heap
-
-ALGORITHM: Insert::next
-1. For each batch from input child:
-   a. Convert row values to Object Model Document fields
-   b. Call ExecutionEngine::insert(table, document, or_replace)
-   c. Accumulate count
-2. Return single batch with count
-
-ALGORITHM: Update::next
-1. For each batch from input child:
-   a. Read primary key from existing row
-   b. Apply assignment expressions to compute new values
-   c. Call ExecutionEngine::update(table, pk, updated_document)
-   d. Accumulate count
-2. Return single batch with count
-
-ALGORITHM: Delete::next
-1. For each batch from input child:
-   a. Read primary key from row
-   b. Call ExecutionEngine::delete(table, pk)
-   c. Accumulate count
-2. Return single batch with count
-```
-
-### 7.6 Expression Evaluation
-
-```
-ALGORITHM: evaluate_expression
-INPUT:  PhysicalExpr, Row (column values), Parameters
+ALGORITHM: evaluate_expr
+INPUT:  Expr, Row (column values), Schema
 OUTPUT: LiteralValue or Error
 
-1. Match expression type:
-   a. ColumnRef(index) -> return row[index]
-   b. Literal(val) -> return val
-   c. Parameter(n) -> return parameters[n] or error if null and not nullable
-   d. BinaryOp(op, left, right):
-      - Evaluate left, evaluate right
-      - If either is Null and op is comparison, return Null (three-valued logic)
-      - Apply operation based on types:
-        * Numeric + Numeric: arithmetic operation
-        * String + String: concatenation
-        * Boolean + Boolean: AND/OR
-        * Comparison: returns Boolean or Null
-      - Type coercion: promote i64 -> f64, f64 -> Decimal as needed
-   e. UnaryOp(Not, expr):
-      - Evaluate expr
-      - If Null, return Null
-      - Return !bool_val
-   f. Function(name, args):
-      - Evaluate all arguments
-      - Dispatch to function implementation by name
-   g. Cast(expr, type):
-      - Evaluate expr
-      - Convert to target type (may error on overflow/format)
+1. Column(name) -> lookup index in schema, return row[index] or Null
+2. Literal(val) -> return clone of val
+3. BinaryOp { left, op, right }:
+   - Evaluate left and right
+   - And/Or: coerce to bool, apply logic
+   - Eq/NotEq: if either operand is Null, return Null (three-valued logic)
+   - Comparisons (Lt/LtEq/Gt/GtEq): coerce pair, compare
+   - Arithmetic: coerce numeric pair, compute
+   - Concat: convert both to string, concatenate
+4. UnaryOp:
+   - Neg: negate Integer or Float, Null->Null
+   - Not: negate Boolean, Null->Null
+5. Function(name, args): evaluate args, dispatch by name
+6. IsNull(expr): evaluate, return Boolean(true) if Null
+7. IsNotNull(expr): evaluate, return Boolean(true) if not Null
+8. In { expr, list }: evaluate expr, compare against each list item
+9. Between { expr, low, high }: evaluate all, return (val >= low AND val <= high)
+10. Like { expr, pattern }: evaluate both, convert LIKE pattern to regex,
+    test match. Pattern conversion: % -> .*, _ -> ., escape regex metachars
+11. ILike { expr, pattern }: same as Like but case-insensitive
+    (lowercase both string and pattern before matching)
+12. Case { whens, else_val }: evaluate WHEN conditions sequentially,
+    return first THEN where condition is true; if none match, return ELSE or Null
+13. Cast { expr, target_type }: evaluate expr, apply type_coercion
 
 Three-valued logic for NULLs:
-  - NULL AND TRUE = NULL
-  - NULL AND FALSE = FALSE
-  - NULL OR TRUE = TRUE
-  - NULL OR FALSE = NULL
-  - NULL = NULL = NULL (not TRUE)
-  - NULL IS NULL = TRUE
-  - NULL IS NOT NULL = FALSE
+  NULL AND TRUE = NULL      NULL OR TRUE = TRUE
+  NULL AND FALSE = FALSE    NULL OR FALSE = NULL
+  NULL = NULL = NULL        NULL IS NULL = TRUE
+  NULL != NULL = NULL       NULL IS NOT NULL = FALSE
+
+LIKE pattern to regex conversion:
+  %  -> .*    (any sequence)
+  _  -> .     (single character)
+  \% -> %     (escaped percent)
+  \_ -> _     (escaped underscore)
+  \\ -> \\    (escaped backslash)
+  regex special chars (. + * ? ^ $ ( ) [ ] { } |) -> escaped with backslash
 ```
 
-### 7.7 Join Algorithm Selection
+### 7.8 INSERT with Constraint Enforcement
 
 ```
-ALGORITHM: select_join_strategy
-INPUT:  JoinCondition, left_cardinality_est, right_cardinality_est, memory_budget
-OUTPUT: JoinStrategy
+ALGORITHM: execute_insert
+INPUT:  InsertStatement, TableStore
+OUTPUT: SQLResult
 
-1. If condition contains at least one equi-join predicate:
-   a. Estimate right side size: right_cardinality_est * avg_row_size_est
-   b. If within memory_budget (64MB default):
-      - Use HashJoin strategy
-      - Build hash table on right side (smaller side if known)
-   c. If exceeds memory budget:
-      - Use NestedLoopJoin strategy
-      - Log warning about inefficient join
+1. Look up table schema from TableStore
+2. Determine column indices (explicit columns or all columns in order)
+3. Validate value count matches column count
+4. For each value row:
+   a. Evaluate each expression against an empty context
+   b. Coerce each value to the target column type
+   c. Apply DEFAULT values for missing (unspecified) columns
+   d. Enforce NOT NULL: if column is NOT NULL and value is NULL -> ConstraintViolation
+   e. Enforce UNIQUE: if column is UNIQUE or PRIMARY KEY, scan existing rows
+      for duplicate values -> ConstraintViolation
+   f. Insert the row into TableStore
+5. Return Exec result with row count
 
-2. If condition has no equi-join predicates:
-   a. Use NestedLoopJoin strategy
-   b. Estimate cost: O(left_cardinality * right_cardinality)
 
-3. If no condition (CROSS JOIN):
-   a. Use NestedLoopJoin with trivial condition
+ALGORITHM: execute_update
+INPUT:  UpdateStatement, TableStore
+OUTPUT: SQLResult
 
-Cardinality estimates (heuristic, no statistics):
-  - Base table: storage engine row count approximation
-  - With filter: assume 50% selectivity (no stats available)
-  - After join: assume 25% selectivity
-  - After GROUP BY: assume number of distinct values in group keys
+1. Look up table schema
+2. Scan all rows from TableStore
+3. For each row:
+   a. If WHERE present, evaluate predicate; skip if not true
+   b. For each SET assignment:
+      - Evaluate expression against current row values
+      - Coerce to column type
+      - Update row value
+4. Re-create the table (drop + create) and insert all rows
+
+
+ALGORITHM: execute_delete
+INPUT:  DeleteStatement, TableStore
+OUTPUT: SQLResult
+
+1. Look up table schema
+2. Scan all rows from TableStore
+3. Filter rows:
+   a. If WHERE present: keep rows where predicate is NOT true
+   b. If no WHERE: delete all rows
+4. Re-create the table (drop + create) and insert kept rows
 ```
 
-### 7.8 Subquery Execution
+## 8. Implemented Features
+
+### 8.1 Constraint Enforcement
+
+| Constraint | Implementation |
+|------------|----------------|
+| NOT NULL   | Rejects NULL values on INSERT. Checked after expression evaluation and DEFAULT application. Returns `ConstraintViolation("column 'X' cannot be null")`. |
+| DEFAULT    | Substitutes a literal default value for missing columns on INSERT. Only applied when the column is not specified in the INSERT column list. Explicit NULL overrides DEFAULT. |
+| UNIQUE     | Checks on INSERT by scanning existing rows for duplicate values. Returns `ConstraintViolation("duplicate value for unique column 'X'")`. |
+| PRIMARY KEY | Implies NOT NULL + UNIQUE. Sets nullable=false and unique=true in schema, both constraints are enforced independently. |
+
+### 8.2 DISTINCT
 
 ```
-ALGORITHM: execute_subquery
-INPUT:  PhysicalPlan (subquery), OuterRow, ExecutionContext
-OUTPUT: SubqueryResult
+SELECT DISTINCT * FROM table
 
-Subquery types:
-1. Scalar subquery (returns single value):
-   - Execute subquery plan
-   - Pull exactly one row
-   - Return single value
-   - Error if more than one row returned (if unqualified)
-   - Return NULL if no rows
+Parser token: Token::Distinct
+AST: SelectStatement.distinct = bool
+Plan: LogicalNode::Dedup { input }
+Executor: DedupExecutor
 
-2. EXISTS subquery:
-   - Execute subquery plan
-   - Pull one row
-   - Return TRUE if row exists, FALSE otherwise
-
-3. IN subquery:
-   - Execute subquery plan once (uncorrelated)
-   - Materialize results into HashSet
-   - Test membership
-   - If correlated, execute for each outer row
-
-4. Correlated subquery:
-   - For each outer row, bind outer column values as parameters
-   - Execute subquery with bound parameters
-   - Cache results per unique parameter combination (memoization)
-
-Correlated subquery memoization:
-  - Key: hash of outer column values used in correlation
-  - Value: subquery result
-  - Cache size limit: 1024 entries, LRU eviction
+Implementation: Hash-based dedup. For each row, compute a hash of all column
+values using DefaultHasher. Track seen hashes in a Vec<u64>. Skip rows whose
+hash has already been seen. Note: hash collisions are possible but not handled
+(current implementation uses simple linear scan of seen hashes).
 ```
 
-### 7.9 Prepared Statement Flow
+### 8.3 BETWEEN
 
 ```
-ALGORITHM: prepare_statement
-INPUT:  SQL text, connection_id, statement_name
-OUTPUT: PreparedStatementHandle
+x BETWEEN a AND b
 
-1. Lex and parse SQL text into AST
-2. Bind and type-check AST
-3. Build logical and physical plan
-4. Determine parameter types from AST (parameter placeholders)
-5. Store in PreparedStatementCache with key (connection_id, statement_name)
-6. Return handle with statement metadata (parameter count, result schema)
-
-ALGORITHM: execute_prepared
-INPUT:  PreparedStatementHandle, parameter_values
-OUTPUT: ResultStream
-
-1. Look up cached plan in PreparedStatementCache
-2. Bind parameter values to physical plan
-3. Execute physical plan with bound parameters
-4. Return result stream
-
-Parameter binding:
-- Positional ($1, $2, ...): indexed into parameter values array
-- Named ($name): looked up by name
-- Type coercion: convert string/JSON parameters to expected types
-- Missing parameters: error (all parameters must be provided)
+AST: Expr::Between { expr, low, high }
+Parser: parsed as postfix operator after primary expression
+Evaluation: val >= low AND val <= high (using GtEq and LtEq binary operators)
+Also supports NOT BETWEEN via Expr::UnaryOp(Not, Between(...))
 ```
 
-### 7.10 PostgreSQL Wire Protocol
+### 8.4 IN Operator
 
 ```
-ALGORITHM: pg_wire_handler
-INPUT:  TCP connection
-OUTPUT: none (loop until connection close)
+x IN (a, b, c)
 
-Message flow:
-1. StartupMessage:
-   - Read protocol version (196608 = 3.0)
-   - Read parameters (user, database, application_name)
-   - Authenticate (AuthenticationOK or AuthenticationMD5Password)
-   - Send ReadyForQuery
-
-2. Main loop:
-   - Read message type byte + length + payload
-   - Dispatch by type:
-     'Q' SimpleQuery:
-       - Parse SQL text
-       - Execute
-       - Send RowDescription + DataRows + CommandComplete + ReadyForQuery
-     'P' Parse:
-       - Parse and prepare statement
-       - Send ParseComplete
-     'B' Bind:
-       - Bind parameters to prepared statement
-       - Send BindComplete
-     'E' Execute:
-       - Execute bound statement
-       - Send results
-     'D' Describe:
-       - Return statement or portal info
-       - Send ParameterDescription or RowDescription or NoData
-     'H' Flush:
-       - Force send pending output
-     'S' Sync:
-       - Send ReadyForQuery
-     'X' Terminate:
-       - Close connection
-     'C' Close:
-       - Deallocate prepared statement / portal
-       - Send CloseComplete
-
-3. Error handling:
-   - Send ErrorResponse with fields: Severity, Code, Message, Detail, Hint
-   - Rollback transaction if in error state
-   - Return to ReadyForQuery
-
-Message format:
-Header:
-  byte: type
-  int32: length (including self)
-Payload: type-specific
-
-ErrorResponse fields:
-  byte: 'S' severity string (ERROR, FATAL, PANIC)
-  byte: 'C' SQLSTATE code (5 chars)
-  byte: 'M' message text
-  byte: 'D' detail (optional)
-  byte: 'H' hint (optional)
-  byte: 'P' position (optional)
-  byte: '\0' terminator
+AST: Expr::In { expr, list }
+Parser: parsed as postfix operator after primary expression
+Evaluation: compare expr against each list item using equality (==).
+Returns Boolean(true) on first match, Boolean(false) if no match.
+Also supports NOT IN via Expr::UnaryOp(Not, In(...)).
+List is evaluated as expressions (currently only literals in practice).
 ```
 
-## 8. Interfaces
+### 8.5 CASE/WHEN
 
-### 8.1 SQL Layer Public API
+```
+CASE WHEN cond1 THEN val1 WHEN cond2 THEN val2 ELSE default END
+
+AST: Expr::Case { whens: Vec<(Expr, Expr)>, else_val: Option<Box<Expr>> }
+Parser: sequential parsing of WHEN/THEN/ELSE/END clauses
+Evaluation: evaluate each WHEN condition in order; return first THEN value
+where condition is Boolean(true); if no match, evaluate and return ELSE
+value; if no ELSE, return Null.
+
+CASE without ELSE returns NULL when no condition matches.
+At least one WHEN is required (parse error otherwise).
+```
+
+### 8.6 CAST
+
+```
+CAST(x AS type)   -- function syntax
+x :: type         -- PostgreSQL-style syntax
+
+AST: Expr::Cast { expr: Box<Expr>, target_type: SQLType }
+Parser: two forms - CAST(expr AS type) and identifier::type
+Evaluation: evaluate expr, then delegate to TypeChecker::coerce_value()
+for type conversion. Errors on invalid conversion (e.g., non-numeric string
+to Integer).
+```
+
+### 8.7 LIKE / ILIKE
+
+```
+x LIKE pattern      -- case-sensitive pattern matching
+x ILIKE pattern     -- case-insensitive pattern matching
+x NOT LIKE pattern  -- negated
+
+AST: Expr::Like { expr, pattern } / Expr::ILike { expr, pattern }
+Parser: postfix operator after primary expression. NOT LIKE wraps in UnaryOp(Not, Like(...)).
+
+Evaluation:
+1. Convert SQL LIKE pattern to regex:
+   %  -> .*    (match any sequence of characters)
+   _  -> .     (match any single character)
+   \% -> %    (literal percent, escaped)
+   \_ -> _    (literal underscore, escaped)
+   \\ -> \\   (literal backslash)
+   All regex metacharacters (.+*?^$()[]{}|) are escaped with backslash
+2. For ILIKE, lowercase both the input string and the pattern before matching
+3. Use the regex crate to test the match
+
+Supports escape character (backslash) for literal % and _.
+```
+
+### 8.8 GROUP BY and HAVING
+
+```
+SELECT category, SUM(value) FROM t GROUP BY category HAVING SUM(value) > 100
+
+Parser: GROUP BY parses comma-separated expressions; HAVING parses an expression
+AST: SelectStatement.group_by: Vec<Expr>, having: Option<Expr>
+Plan: Aggregate node is created when expressions contain aggregate functions
+Execution: AggregateExecutor consumes all rows and produces a single result row
+          (multi-group aggregation is not yet fully implemented)
+```
+
+### 8.9 ORDER BY NULLS FIRST/LAST
+
+```
+SELECT * FROM t ORDER BY a NULLS FIRST
+SELECT * FROM t ORDER BY a NULLS LAST
+
+AST: OrderByExpr { expr, asc, nulls_first: Option<bool> }
+Parser: parses NULLS { FIRST | LAST } after ASC/DESC
+Plan: passes through to SortExecutor
+Execution: compare_values() uses nulls_first flag for NULL ordering:
+  - nulls_first = Some(true): NULLs sort before non-NULLs
+  - nulls_first = Some(false): NULLs sort after non-NULLs
+  - nulls_first = None: defaults to false (NULLs last)
+```
+
+### 8.10 Error Position Tracking
+
+All lexer and parser errors carry (start, end) byte positions from the
+original SQL input. The lexer records character offsets for each token,
+and the parser propagates these positions into SQLError::Syntax variants.
+
+```
+SQLError::Syntax { message: String, start: usize, end: usize }
+```
+
+The lexer never panics. Invalid characters (bare `|`, bare `:`, etc.) return
+proper `Result::Err(SQLError::Syntax { ... })` with position information.
+All `panic!()` and `unreachable!()` calls in the lexer and parser have been
+replaced with proper `Result` returns.
+
+### 8.11 Query Complexity Limits
+
+```
+MAX_NESTING_DEPTH = 64
+
+Applied in parse_expression(). If exceeded, returns:
+  SQLError::QueryTooComplex("max nesting depth exceeded")
+
+Prevents stack overflow from deeply nested expressions.
+```
+
+### 8.12 TableStore Concurrency
 
 ```rust
-// --- SQL Engine ---
+struct TableStore {
+    tables: DashMap<String, Arc<TableData>>,
+}
 
+struct TableData {
+    schema: Schema,
+    rows: RwLock<Vec<Row>>,
+    next_row_id: RwLock<u64>,
+}
+```
+
+- DashMap provides fine-grained per-table locking (lock striping)
+- Each table's rows have an independent RwLock for concurrent reads
+- read/write lock scopes are minimized (lock, perform operation, release)
+- Arc shared ownership for safe concurrent access
+
+### 8.13 execute_query() Error Propagation
+
+`SQLEngine::execute_query()` returns the actual error from the SQL engine
+rather than wrapping it in a generic error type. All error variants from
+`SQLError` are propagated directly to the caller:
+
+```rust
+pub fn execute_query(&self, sql: &str) -> Result<Vec<RecordBatch>> {
+    match self.execute(sql)? {
+        SQLResult::Query { batches, .. } => Ok(batches),
+        SQLResult::Exec { .. } => Err(SQLError::syntax("query did not return results")),
+    }
+}
+```
+
+## 9. Interfaces
+
+### 9.1 SQL Engine Public API
+
+```rust
 struct SQLEngine {
-    execution_engine: Arc<ExecutionEngine>,
-    object_model: Arc<ObjectModel>,
     config: SQLConfig,
-    prepared_cache: PreparedStatementCache,
+    tables: Arc<TableStore>,
 }
 
 impl SQLEngine {
-    /// Create new SQL engine
-    fn new(execution_engine: Arc<ExecutionEngine>, object_model: Arc<ObjectModel>, config: SQLConfig) -> Self;
+    fn new(config: SQLConfig) -> Self;
 
-    /// Execute SQL text with optional parameters
-    /// Returns a result stream
-    fn execute(
-        &self,
-        sql: &str,
-        params: &[LiteralValue],
-        tx: Option<TransactionHandle>,
-    ) -> Result<Box<dyn ResultStream>>;
+    /// Execute SQL text. Returns SQLResult (Query or Exec).
+    fn execute(&self, sql: &str) -> Result<SQLResult>;
 
-    /// Prepare a statement for later execution
-    fn prepare(
-        &self,
-        connection_id: u64,
-        statement_name: &str,
-        sql: &str,
-    ) -> Result<PreparedStatementHandle>;
-
-    /// Execute a prepared statement with bound parameters
-    fn execute_prepared(
-        &self,
-        handle: &PreparedStatementHandle,
-        params: &[LiteralValue],
-        tx: Option<TransactionHandle>,
-    ) -> Result<Box<dyn ResultStream>>;
-
-    /// Deallocate a prepared statement
-    fn deallocate(&self, connection_id: u64, statement_name: &str) -> Result<()>;
-
-    /// Begin a transaction
-    fn begin_transaction(&self) -> Result<TransactionHandle>;
-
-    /// Commit a transaction
-    fn commit(&self, tx: TransactionHandle) -> Result<()>;
-
-    /// Rollback a transaction
-    fn rollback(&self, tx: TransactionHandle) -> Result<()>;
-
-    /// Returns the result schema for a prepared statement
-    fn describe_statement(&self, handle: &PreparedStatementHandle) -> Result<Schema>;
-
-    /// Validate SQL syntax without executing
-    fn validate_sql(&self, sql: &str) -> Result<ValidationResult>;
+    /// Execute SQL text, expecting a Query result.
+    /// Returns Vec<RecordBatch> or error.
+    fn execute_query(&self, sql: &str) -> Result<Vec<RecordBatch>>;
 }
+```
 
-// --- Configuration ---
+### 9.2 Configuration
 
+```rust
 struct SQLConfig {
-    max_statement_cache_size: usize,          // default: 1000
-    max_batch_size: usize,                    // default: 100 rows
-    max_result_rows: usize,                   // default: 10000
-    default_memory_limit: usize,              // default: 64 * 1024 * 1024 (64MB)
-    max_query_timeout_ms: u64,                // default: 30000 (30s)
-    max_connections: u32,                     // default: 100
-    max_parameters_per_query: u32,            // default: 65535
-    pg_wire_port: u16,                        // default: 5432
-    pg_wire_enabled: bool,                    // default: true
-    max_ast_depth: u32,                       // default: 64
-    max_join_tables: u32,                     // default: 32
-    max_subquery_depth: u32,                  // default: 8
-    max_in_list_size: u32,                    // default: 1000
+    max_batch_size: usize,   // default: 1024
+    max_columns: usize,      // default: 256
+    default_limit: usize,    // default: 1000
 }
-
-// --- Result Stream ---
-
-trait ResultStream {
-    /// Get the schema of the result
-    fn schema(&self) -> &Schema;
-
-    /// Pull next batch of rows
-    fn next_batch(&mut self) -> Result<Option<RecordBatch>>;
-
-    /// Get number of rows affected (for DML)
-    fn rows_affected(&self) -> u64;
-
-    /// Get execution stats
-    fn stats(&self) -> ExecutionStats;
-}
-
-struct RecordBatch {
-    columns: Vec<Column>,
-    row_count: usize,
-}
-
-enum Column {
-    Nulls(usize),
-    Booleans(Vec<Option<bool>>),
-    Integers(Vec<Option<i64>>),
-    Floats(Vec<Option<f64>>),
-    Strings(Vec<Option<String>>),
-    Bytes(Vec<Option<Vec<u8>>>),
-    Timestamps(Vec<Option<i64>>),          // Unix nanos
-}
-
-struct ExecutionStats {
-    rows_scanned: u64,
-    pages_read: u64,
-    duration_us: u64,
-    memory_used: usize,
-}
-
-struct ValidationResult {
-    valid: bool,
-    errors: Vec<SQLError>,
-    warnings: Vec<String>,
-    statement_type: StatementType,
-}
-
-enum StatementType {
-    Select,
-    Insert,
-    Update,
-    Delete,
-    DDL,
-    TCL,
-}
-
-// --- Prepared Statement Handle ---
-
-struct PreparedStatementHandle {
-    statement_id: u64,
-    parameter_count: u32,
-    parameter_types: Vec<SQLType>,
-    result_schema: Schema,
-}
-
-// --- SQL Errors ---
-
-struct SQLError {
-    severity: ErrorSeverity,
-    code: SQLStateCode,         // Standard SQLSTATE (5 chars)
-    message: String,
-    detail: Option<String>,
-    hint: Option<String>,
-    position: Option<SourceLocation>,
-}
-
-enum ErrorSeverity {
-    Error,
-    Fatal,
-    Panic,
-}
-
-struct SQLStateCode([u8; 5]);     // e.g., "42P01" for undefined_table
-
-const SQLSTATE_SYNTAX_ERROR: SQLStateCode = SQLStateCode(*b"42601");
-const SQLSTATE_UNDEFINED_TABLE: SQLStateCode = SQLStateCode(*b"42P01");
-const SQLSTATE_UNDEFINED_COLUMN: SQLStateCode = SQLStateCode(*b"42703");
-const SQLSTATE_TYPE_MISMATCH: SQLStateCode = SQLStateCode(*b"42804");
-const SQLSTATE_NOT_NULL_VIOLATION: SQLStateCode = SQLStateCode(*b"23502");
-const SQLSTATE_UNIQUE_VIOLATION: SQLStateCode = SQLStateCode(*b"23505");
-const SQLSTATE_PARAMETER_MISSING: SQLStateCode = SQLStateCode(*b"42P02");
-const SQLSTATE_DEADLOCK: SQLStateCode = SQLStateCode(*b"40P01");
-const SQLSTATE_SERIALIZATION: SQLStateCode = SQLStateCode(*b"40001");
-const SQLSTATE_INTERNAL: SQLStateCode = SQLStateCode(*b"XX000");
 ```
 
-### 8.2 Internal Planner Interfaces
+### 9.3 Executor Trait
 
 ```rust
-trait LogicalPlanner {
-    fn plan_select(&self, stmt: &BoundSelectStatement) -> Result<LogicalNode>;
-    fn plan_insert(&self, stmt: &BoundInsertStatement) -> Result<LogicalNode>;
-    fn plan_update(&self, stmt: &BoundUpdateStatement) -> Result<LogicalNode>;
-    fn plan_delete(&self, stmt: &BoundDeleteStatement) -> Result<LogicalNode>;
-}
-
-trait PhysicalPlanner {
-    fn plan(&self, logical: LogicalNode, ctx: &PlanningContext) -> Result<PhysicalNode>;
-}
-
-struct PlanningContext {
-    memory_limit: usize,
-    enable_hash_join: bool,
-    enable_topn: bool,
-    default_batch_size: usize,
+trait Executor {
+    fn open(&mut self) -> Result<()>;
+    fn next(&mut self) -> Result<Option<Row>>;
+    fn close(&mut self) -> Result<()>;
 }
 ```
 
-### 8.3 Storage Engine Bridge
+### 9.4 SQL Errors
 
 ```rust
-/// Interface between SQL layer and Execution Engine
-trait StorageBridge {
-    /// Scan a table, returning an iterator over Documents
-    fn scan_table(&self, table: &str, tx: &TransactionHandle) -> Result<Box<dyn DocumentIterator>>;
-
-    /// Scan a table with primary key prefix
-    fn scan_range(
-        &self,
-        table: &str,
-        range: &KeyRange,
-        tx: &TransactionHandle,
-    ) -> Result<Box<dyn DocumentIterator>>;
-
-    /// Insert a document
-    fn insert_document(&self, table: &str, doc: Document, or_replace: bool, tx: &TransactionHandle) -> Result<()>;
-
-    /// Update a document by primary key
-    fn update_document(&self, table: &str, key: &DocumentKey, doc: Document, tx: &TransactionHandle) -> Result<()>;
-
-    /// Delete a document by primary key
-    fn delete_document(&self, table: &str, key: &DocumentKey, tx: &TransactionHandle) -> Result<()>;
-
-    /// Count documents in a table
-    fn count_documents(&self, table: &str, tx: &TransactionHandle) -> Result<u64>;
-
-    /// Get approximate table size
-    fn table_size(&self, table: &str) -> Result<(u64, u64)>; // (rows, bytes)
-}
-
-trait DocumentIterator {
-    fn next(&mut self) -> Result<Option<Document>>;
-}
-
-struct Document {
-    fields: Vec<(String, Value)>,
-    primary_key: DocumentKey,
-    version: u64,
-}
-
-struct DocumentKey {
-    parts: Vec<Value>,
-}
-
-enum Value {
-    Null,
-    Bool(bool),
-    Int64(i64),
-    Float64(f64),
-    String(String),
-    Bytes(Vec<u8>),
-    Timestamp(i64),
-    Array(Vec<Value>),
-    Map(Vec<(String, Value)>),
-    Document(Vec<(String, Value)>),
+enum SQLError {
+    Syntax { message: String, start: usize, end: usize },
+    TableNotFound(String),
+    ColumnNotFound(String),
+    TypeMismatch { expected: String, actual: String },
+    Internal(String),
+    ConstraintViolation(String),
+    QueryTooComplex(String),
 }
 ```
 
-## 9. Sequence Diagrams
+## 10. Sequence Diagrams
 
-### 9.1 Simple SELECT Execution
+### 10.1 Simple SELECT Execution
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant P as PG Wire Protocol
+    participant C as Caller
     participant S as SQLEngine
-    participant L as Lexer/Parser
+    participant L as Lexer
+    participant P as Parser
     participant B as Binder
-    participant LP as LogicalPlanner
-    participant PP as PhysicalPlanner
+    participant TC as TypeChecker
+    participant PL as LogicalPlanner
     participant E as Executor
-    participant T as TableScan Iterator
-    participant SE as Storage Engine
+    participant T as TableStore
 
-    C->>P: 'Q' SELECT * FROM users WHERE id = 1;
-    P->>S: execute(sql, params)
+    C->>S: execute(sql)
     S->>L: tokenize(sql)
-    L->>L: produce Token Stream
-    L->>L: parse_select() → AST
-    L-->>S: SelectStatement AST
-    S->>B: bind_select(ast, schema)
-    B->>B: resolve table 'users'
+    L->>L: produce Token Stream + Positions
+    L-->>S: (tokens, positions)
+    S->>P: parse_program()
+    P->>P: parse_statement() -> parse_select()
+    P-->>S: SelectStatement AST
+    S->>B: bind(stmt, schema)
     B->>B: resolve column refs
-    B-->>S: BoundSelectStatement
-    S->>LP: build_logical_plan(bound)
-    LP-->>S: LogicalNode::Projection(Selection(Scan))
-    S->>PP: build_physical_plan(logical)
-    PP-->>S: PhysicalNode::Projection(Filter(TableScan))
-    S->>E: execute(physical_plan, ctx)
-    E->>T: open()
-    T->>SE: scan_table("users", tx)
-    SE-->>T: DocumentIterator
-    T->>T: read next page
-    T->>T: deserialize Document
-    T->>T: evaluate filter (id = 1)
-    T-->>E: RecordBatch (1 row)
-    E->>E: apply projection
-    E-->>S: RecordBatch (id, name, email)
-    S->>P: format RowDescription
-    S->>P: format DataRow
-    S->>P: format CommandComplete
-    P->>C: RowDescription + DataRow + CommandComplete + ReadyForQuery
+    B-->>S: BoundSelect
+    S->>TC: check_types(expr, schema)
+    TC-->>S: validated
+    S->>PL: plan_select(stmt)
+    PL-->>S: LogicalNode tree
+    S->>E: build_executor(plan, tables)
+    E->>E: open() -> next() loop -> close()
+    E->>T: scan_rows(table)
+    T-->>E: Vec<Row>
+    E-->>S: Vec<Row>
+    S->>S: rows_to_record_batch()
+    S-->>C: SQLResult::Query { batches }
 ```
 
-### 9.2 Hash Join Execution
+### 10.2 INSERT with Constraint Enforcement
 
 ```mermaid
 sequenceDiagram
-    participant E as Executor
-    participant HJ as HashJoin
-    participant L as Left TableScan
-    participant R as Right TableScan
-    participant SE as Storage Engine
-
-    E->>HJ: open()
-    HJ->>R: open()
-    R->>SE: scan_table("orders", tx)
-    SE-->>R: Iterator
-    loop Build Phase
-        R->>R: next() → RecordBatch
-        HJ->>HJ: compute hash on join key
-        HJ->>HJ: insert into hash table
-    end
-    R-->>HJ: None (exhausted)
-    HJ->>L: open()
-    L->>SE: scan_table("users", tx)
-    SE-->>L: Iterator
-
-    loop Probe Phase
-        E->>HJ: next()
-        HJ->>L: next() → RecordBatch
-        L-->>HJ: RecordBatch (100 rows)
-        loop For each row
-            HJ->>HJ: compute hash on join key
-            HJ->>HJ: probe hash table
-            HJ->>HJ: produce joined row
-        end
-        HJ-->>E: RecordBatch (joined rows)
-    end
-    L-->>HJ: None (exhausted)
-    HJ-->>E: None
-    E->>HJ: close()
-    HJ->>L: close()
-    HJ->>R: close()
-    HJ->>HJ: clear hash table
-```
-
-### 9.3 Prepared Statement Flow
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant P as PG Wire
+    participant C as Caller
     participant S as SQLEngine
-    participant Cache as PreparedCache
+    participant T as TableStore
 
-    Note over C,S: Parse phase
-    C->>P: 'P' Parse: "SELECT * FROM users WHERE id = $1"
-    P->>S: prepare("users_query", sql)
-    S->>S: parse → AST
-    S->>S: bind → logical plan → physical plan
-    S->>Cache: store(conn_id, "users_query", plan)
-    Cache-->>S: ok
-    S-->>P: ParseComplete
-    P->>C: ParseComplete
-
-    Note over C,S: Describe phase
-    C->>P: 'D' Describe
-    P->>S: describe_statement(handle)
-    S-->>P: ParameterDescription (int4), RowDescription
-    P->>C: ParameterDescription + RowDescription
-
-    Note over C,S: Bind phase
-    C->>P: 'B' Bind: $1 = 42
-    P->>S: No-op (bind stored in portal)
-    P->>C: BindComplete
-
-    Note over C,S: Execute phase
-    C->>P: 'E' Execute
-    P->>S: execute_prepared(handle, [42])
-    S->>Cache: lookup(conn_id, "users_query")
-    Cache-->>S: cached plan
-    S->>S: substitute parameter $1 = 42
-    S->>S: execute physical plan
-    S-->>P: results
-    P->>C: DataRow + CommandComplete
-
-    Note over C,S: Sync
-    C->>P: 'S' Sync
-    P->>C: ReadyForQuery
+    C->>S: execute("INSERT INTO t VALUES (1, 'x')")
+    S->>T: get_schema("t")
+    T-->>S: Schema
+    S->>S: evaluate expressions, coerce types
+    S->>S: apply DEFAULT for missing columns
+    S->>S: enforce NOT NULL (reject if null)
+    S->>S: enforce UNIQUE (scan existing rows)
+    S->>S: enforce PRIMARY KEY (not null + unique)
+    S->>T: insert_row("t", row)
+    T-->>S: ok
+    S-->>C: SQLResult::Exec { rows_affected: 1 }
 ```
 
-### 9.4 Insert with Transaction
+## 11. Failure Modes
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant P as PG Wire
-    participant S as SQLEngine
-    participant E as Executor
-    participant EE as Execution Engine
-    participant WAL as Write-Ahead Log
-
-    C->>P: 'Q' BEGIN
-    P->>S: execute("BEGIN")
-    S->>S: begin_transaction()
-    S-->>P: BEGIN
-    P->>C: CommandComplete + ReadyForQuery
-
-    C->>P: 'Q' INSERT INTO users (id, name) VALUES (1, 'Alice')
-    P->>S: execute("INSERT...")
-    S->>S: parse → plan
-    S->>E: execute(insert_plan, tx)
-    E->>EE: insert("users", {id:1, name:"Alice"}, tx)
-    EE->>EE: validate document schema
-    EE->>EE: apply hooks
-    EE->>WAL: write INSERT record
-    WAL-->>EE: committed
-    EE-->>E: ok
-    E-->>S: 1 row affected
-    P->>C: CommandComplete + ReadyForQuery
-
-    C->>P: 'Q' COMMIT
-    P->>S: execute("COMMIT")
-    S->>S: commit(tx)
-    S->>EE: commit_transaction
-    EE->>WAL: write COMMIT record
-    WAL-->>EE: ok
-    EE-->>S: ok
-    P->>C: CommandComplete + ReadyForQuery
-```
-
-### 9.5 Error Handling
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant P as PG Wire
-    participant S as SQLEngine
-    participant L as Parser
-    participant B as Binder
-
-    C->>P: 'Q' SELECT * FROM nonexistent WHERE x = 1
-    P->>S: execute(sql)
-    S->>L: parse(sql)
-    L-->>S: AST OK
-    S->>B: bind_select(ast)
-    B->>B: resolve table "nonexistent"
-    B-->>S: Error("relation 'nonexistent' does not exist")
-    S->>S: format SQLError
-    S->>P: ErrorResponse
-    P->>C: ErrorResponse(Severity=ERROR, Code=42P01, Message="relation 'nonexistent' does not exist")
-    P->>C: ReadyForQuery
-```
-
-## 10. Failure Modes
-
-### 10.1 Parse Errors
+### 11.1 Parse Errors
 
 | Cause | Effect | Detection |
 |-------|--------|-----------|
-| Invalid SQL syntax | ParseError returned to client | Parser returns ParseError variant |
-| Unclosed string literal | ParseError, position reported | Lexer fails to find closing quote |
-| Unknown keyword | ParseError at unexpected token | Parser match failure |
-| Exceeded max AST depth (64) | ParseError: query too complex | Recursive descent depth counter |
-| Exceeded max join tables (32) | ParseError: too many tables | FROM clause parser counter |
+| Invalid SQL syntax | Syntax error with position | Parser match failure |
+| Unclosed string literal | Syntax error | Lexer reaches EOF while reading string |
+| Unknown keyword at statement start | Syntax error | parse_statement() match failure |
+| Invalid operator (bare `|` or `:`) | Syntax error with position | read_operator_or_punct() |
+| Exceeded max AST depth (64) | QueryTooComplex error | parse_expression() depth counter |
 
-### 10.2 Semantic Errors
-
-| Cause | Effect | Detection |
-|-------|--------|-----------|
-| Referenced table does not exist | Error: relation not found | Binder table lookup failure |
-| Referenced column does not exist | Error: column not found | Binder column lookup failure |
-| Ambiguous column name | Error: column reference ambiguous | Binder finds multiple matches |
-| Type mismatch in WHERE clause | Error: type mismatch | Type checker comparison |
-| Type mismatch in INSERT/UPDATE | Error: type mismatch or coercion failure | Type checker validation |
-| NOT NULL violation | Error: null value in NOT NULL column | Insert/Update executor check |
-| PRIMARY KEY violation | Error: duplicate key | Storage Engine unique constraint |
-| ORDER BY column not in select list | Error: cannot ORDER BY non-selected column | Binder validation (DISTINCT mode) |
-| GROUP BY clause with non-aggregate, non-grouped column | Error: column must appear in GROUP BY | Binder GROUP BY validation |
-
-### 10.3 Execution Errors
+### 11.2 Semantic Errors
 
 | Cause | Effect | Detection |
 |-------|--------|-----------|
-| Storage Engine failure | Execution error propagated | Storage Engine returns error |
-| Transaction conflict | Serialization error | MVCC conflict detection |
-| Deadlock detected | Deadlock error, tx rolled back | Lock manager timeout |
-| Memory budget exceeded | OutOfMemory error during execution | ExecutionContext memory tracking |
-| Timeout exceeded | QueryCanceled error | ExecutionContext deadline check |
-| Parameter count mismatch | Error: wrong number of parameters | Binder validation |
-| Invalid parameter type | Coercion error | Parameter binding type check |
-| Divide by zero | DivisionByZero error | Expression evaluator check |
-| Numeric overflow | Overflow error | Expression evaluator overflow check |
+| Referenced table does not exist | TableNotFound error | TableStore schema lookup |
+| Referenced column does not exist | ColumnNotFound error | Binder/expression column lookup |
+| Type mismatch in expression | TypeMismatch error | Type checker or expression evaluator |
+| NOT NULL violation | ConstraintViolation error | Insert executor post-evaluation check |
+| UNIQUE violation | ConstraintViolation error | Insert executor scan for duplicates |
+| PRIMARY KEY violation | ConstraintViolation error | Combined NOT NULL + UNIQUE check |
+| Type coercion failure | TypeMismatch error | TypeChecker::coerce_value() |
 
-### 10.4 Connection Errors
+### 11.3 Execution Errors
 
 | Cause | Effect | Detection |
 |-------|--------|-----------|
-| Max connection limit reached | Connection rejected | Connection pool limit check |
-| Authentication failure | Connection rejected | Auth plugin rejects credentials |
-| Connection reset by peer | Connection closed, transaction aborted | Socket read/write error |
-| TLS handshake failure | Connection rejected | TLS library returns error |
-| SSL not enabled but requested | Connection rejected | Config check during startup |
+| Divide by zero | Internal error | eval_binary_op() divisor check |
+| Invalid LIKE pattern | Internal error | regex compilation failure |
+| Empty statement | Syntax error | execute() returns None |
 
-### 10.5 Prepared Statement Errors
+## 12. Implementation Status
 
-| Cause | Effect | Detection |
-|-------|--------|-----------|
-| Cache full (max 1000) | Oldest entry evicted (LRU) | Cache insert check |
-| Statement not found | Error: prepared statement not found | Cache lookup miss |
-| Parameters changed between prepares | New plan replaces old | Cache insert overwrite |
+### 12.1 Currently Implemented
 
-## 11. Recovery Strategy
+| Feature | Status | Details |
+|---------|--------|---------|
+| Lexer tokenization | Done | Position tracking, keyword recognition, no panics |
+| Recursive descent parser | Done | Precedence climbing, MAX_NESTING_DEPTH=64 |
+| CREATE / DROP TABLE | Done | INTEGER, FLOAT, TEXT, BOOLEAN types |
+| SELECT with WHERE | Done | AND/OR, comparison operators, IS NULL/IS NOT NULL |
+| INSERT | Done | Multi-row, column selection |
+| UPDATE | Done | SET assignments, WHERE filter |
+| DELETE | Done | WHERE filter |
+| ORDER BY ASC/DESC | Done | Sort executor |
+| LIMIT / OFFSET | Done | Limit executor with offset skipping |
+| Arithmetic expressions | Done | +, -, *, /, %, with Integer/Float coercion |
+| String concatenation | Done | \|\| operator |
+| Aggregation (COUNT, SUM, AVG, MIN, MAX) | Done | Aggregate executor, single-group |
+| Type coercion | Done | Integer/Float/String/Boolean conversions |
+| DISTINCT | Done | DedupExecutor with hash-based dedup |
+| BETWEEN | Done | Expr::Between, decomposed to >= AND <= |
+| IN operator | Done | Expr::In, literal list comparison |
+| NOT IN / NOT BETWEEN / NOT LIKE | Done | UnaryOp(Not, ...) wrapping |
+| CASE / WHEN / THEN / ELSE / END | Done | Sequential evaluation, ELSE defaults to NULL |
+| CAST | Done | CAST(x AS type) and x::type syntax |
+| LIKE / ILIKE | Done | Regex-based, % and _ wildcards, escape support |
+| GROUP BY + HAVING | Done | Parsed and planned, single-group aggregate |
+| ORDER BY NULLS FIRST / LAST | Done | compare_values() null ordering |
+| NOT NULL constraint | Done | Rejects NULL on INSERT |
+| DEFAULT constraint | Done | Substitutes default for missing columns |
+| UNIQUE constraint | Done | Scans existing rows for duplicates on INSERT |
+| PRIMARY KEY constraint | Done | NOT NULL + UNIQUE combined |
+| Error position tracking | Done | (start, end) in Syntax errors |
+| Query nesting limit | Done | MAX_NESTING_DEPTH=64, QueryTooComplex error |
+| No panics in lexer/parser | Done | All panic!/unreachable! replaced with Result |
+| Error swallowing fix | Done | execute_query() propagates actual errors |
+| TableStore concurrency | Done | DashMap + RwLock fine-grained locking |
+| 37 integration tests | Done | All features covered, including error paths |
 
-### 11.1 Parse/Semantic Errors
+### 12.2 Planned / Future
 
-```
-RECOVERY: SQL parse/semantic errors are client errors
-1. Format detailed ErrorResponse with PostgreSQL-compatible error fields
-2. Do NOT roll back transaction (no state changed)
-3. Return ReadyForQuery
-4. Client should fix SQL and retry
+| Feature | Status | Notes |
+|---------|--------|-------|
+| PostgreSQL wire protocol | Planned | Not yet implemented |
+| Prepared statements | Planned | Not yet implemented |
+| Transactions (BEGIN/COMMIT/ROLLBACK) | Planned | Not yet implemented |
+| Joins (INNER, LEFT, OUTER, CROSS) | Planned | Not yet implemented |
+| Subqueries (scalar, EXISTS, IN) | Planned | Not yet implemented |
+| Common Table Expressions (WITH) | Planned | Not yet implemented |
+| Window functions | Planned | Not yet implemented |
+| Full-text search integration | Planned | Not yet implemented |
+| Cost-based optimizer | Planned | Not yet implemented |
+| Parallel query execution | Planned | Not yet implemented |
+| Views | Planned | Not yet implemented |
+| Stored procedures | Planned | Not yet implemented |
+| Triggers | Planned | Not yet implemented |
+| UPSERT (ON CONFLICT) | Planned | Not yet implemented |
+| MERGE | Planned | Not yet implemented |
+| INTERSECT / EXCEPT | Planned | Not yet implemented |
+| EXPLAIN ANALYZE | Planned | Not yet implemented |
+| Savepoints | Planned | Not yet implemented |
+| MySQL wire protocol | Planned | Not yet implemented |
+| Foreign key enforcement | Future | Application-level concern |
+| UPSERT (INSERT OR REPLACE) | Not implemented | |
+| Array and JSON operators | Not implemented | |
 
-For batch queries (multi-statement):
-1. Execute statements sequentially
-2. On error, stop execution of remaining statements
-3. Return error for the failed statement
-4. Previous statements in batch remain committed/rolled back according to their own TX
-```
+## 13. Performance Considerations
 
-### 11.2 Execution Errors (Timeout)
+### 13.1 Memory
 
-```
-RECOVERY: Query timeout
-1. Cancel query execution
-2. Set transaction to ABORT state if in transaction
-3. Return error response with SQLSTATE "57014" (query_canceled)
-4. Client should retry with simpler query or increase timeout
-```
+- **TableStore**: All rows are held in memory (Vec<Row>) per table
+- **Row**: Each row stores Vec<Option<LiteralValue>>, proportional to column count
+- **Sort**: Materializes all input rows into Vec before sorting
+- **Aggregate**: Consumes all input rows into Vec before computing
+- **Dedup**: Maintains Vec<u64> of seen hashes, proportional to unique output rows
+- **Parser**: AST allocation proportional to query size
+- **Lexer**: Token stream size proportional to SQL text size
 
-### 11.3 Execution Errors (Memory)
-
-```
-RECOVERY: Memory budget exceeded
-1. Immediately stop consuming input from child operators
-2. Close all open iterators
-3. Return error response with SQLSTATE "53200" (out_of_memory)
-4. Suggest client simplify query (fewer joins, smaller batch, more restrictive WHERE)
-```
-
-### 11.4 Transaction Conflicts
-
-```
-RECOVERY: Serialization failure
-1. Return error with SQLSTATE "40001" (serialization_failure)
-2. Transaction is automatically rolled back
-3. Client must retry the entire transaction
-4. Recommend using simpler transaction patterns
-5. Exponential backoff suggested: 10ms, 20ms, 40ms, 80ms, max 1s
-```
-
-### 11.5 Connection Failures
-
-```
-RECOVERY: Connection lost
-1. If transaction active, automatically rollback
-2. Release connection resources (prepared statements cleared)
-3. Log connection closure
-4. Connection pool slot becomes available for new connections
-```
-
-### 11.6 Prepared Statement Cache Corruption
-
-```
-RECOVERY: Cache inconsistency
-1. If cached plan validation fails (schema changed):
-   a. Remove stale entry from cache
-   b. Re-parse and re-plan the statement
-   c. Cache new plan
-   d. Execute with warning log
-2. If hash mismatch detected (planner version changed):
-   a. Clear all cached entries
-   b. Log "prepared statement cache cleared"
-   c. Client must re-prepare statements
-```
-
-## 12. Performance Considerations
-
-### 12.1 Memory
-
-- **RecordBatch**: Target 100 rows per batch, ~4KB-64KB depending on row width
-- **HashTable**: Up to 64MB for hash join build side
-- **Aggregation**: Group map proportional to unique group keys, each entry ~128 bytes + key/value storage
-- **Sort**: Input materialization up to memory budget, spilling to disk after 64MB
-- **TopN**: Binary heap of N elements, each entry ~row_size bytes
-- **PreparedStatementCache**: 1000 entries, each ~1KB-10KB (AST + plans)
-- **Parser**: AST allocation proportional to query size, ~100 bytes per node
-- **Lexer**: Token stream size ~1.5x SQL text size
-- **Expression evaluation**: No allocations for simple expressions; complex expressions allocate intermediate values
-
-### 12.2 CPU
+### 13.2 CPU
 
 - **Parsing**: O(n) for tokenization, O(n) for parsing where n = SQL text length
-- **Name Resolution**: O(t + c) where t = tables in FROM, c = columns referenced
+- **Name Resolution**: O(c) where c = columns referenced
 - **Logical Planning**: O(n) where n = AST node count
-- **Physical Planning**: O(n) with constant factor for rule application
-- **TableScan**: O(p) where p = pages read, with filter evaluation overhead
-- **HashJoin**: O(|L| + |R|) for build + probe phases
-- **NestedLoopJoin**: O(|L| * |R|) - use only for small right-hand sides
-- **HashAggregate**: O(|I|) for input rows, O(|G|) for group output
+- **TableScan**: O(R) where R = rows in table
+- **Filter**: O(R) per scan
 - **Sort**: O(n log n) where n = input rows
-- **TopN**: O(n log k) where k = limit, n = input rows
+- **Dedup**: O(n) with hash lookup per row
+- **Aggregate**: O(R * E) where R = rows, E = expressions
 - **Expression Evaluation**: O(1) per node, tree walk
+- **Unique constraint check**: O(R) per INSERT (scans all existing rows)
+- **UPDATE/DELETE**: O(R) full table scan + rewrite
 
-### 12.3 I/O
+### 13.3 Complexity Summary
 
-- **TableScan**: Sequential page read pattern, one Storage Engine page (default 4KB-16KB) per next() call
-- **With filter pushdown**: Pages read = total pages (sequential scan), not all rows returned
-- **Without filter**: Pages read = total pages
-- **With equality filter on primary key**: Direct page lookup, I/O = 1-2 pages
-- **Write operations**: WAL write + page write, ~2 I/O operations per mutation
-- **Batch inserts**: Append to WAL buffer, flush on commit or buffer full (64KB)
+| Operation | Time Complexity |
+|-----------|----------------|
+| Scan (full table) | O(R) |
+| Filter | O(R) |
+| Sort | O(n log n) |
+| Aggregate | O(R * E) |
+| Dedup (DISTINCT) | O(n) |
+| Limit/Offset | O(offset + limit) |
+| Insert (no constraints) | O(1) |
+| Insert (with UNIQUE check) | O(R) per row |
+| Update | O(R + N) |
+| Delete | O(R) |
 
-### 12.4 Complexity Summary
-
-| Operation | Time Complexity | I/O Complexity | Memory |
-|-----------|----------------|----------------|--------|
-| Scan (full table) | O(R) | O(P) | O(B) |
-| Scan (point lookup) | O(1) | O(1) | O(1) |
-| Filter | O(R) | O(P) | O(B) |
-| Hash Join | O(L + R + J) | O(P_L + P_R) | O(min(L, R)) |
-| Nested Loop Join | O(L * R) | O(P_L + P_R) | O(1) |
-| Hash Aggregate | O(I) | O(P_i) | O(G) |
-| Sort | O(n log n) | O(P_i + P_o) | O(M) |
-| TopN | O(n log k) | O(P_i) | O(k) |
-| Insert | O(1) | O(2) | O(1) |
-| Update | O(log R) | O(3) | O(1) |
-| Delete | O(log R) | O(2) | O(1) |
-
-R = rows, P = pages, B = batch size, L/R = left/right input rows, J = join output rows
-G = group count, n = sort input rows, k = limit, M = memory budget, I = input rows
-
-### 12.5 Optimization Targets
-
-| Query Pattern | Target Response Time (p50) | Target (p99) | Max Memory |
-|--------------|---------------------------|---------------|------------|
-| Point SELECT (by PK) | < 1ms | < 5ms | 64KB |
-| SELECT with filter (100 rows) | < 5ms | < 20ms | 1MB |
-| SELECT with JOIN (2 tables, 1K rows) | < 20ms | < 100ms | 16MB |
-| SELECT with GROUP BY (10K rows) | < 50ms | < 200ms | 32MB |
-| INSERT single row | < 1ms | < 5ms | 64KB |
-| INSERT batch (100 rows) | < 5ms | < 20ms | 256KB |
-| UPDATE by PK | < 1ms | < 5ms | 64KB |
-| DELETE by PK | < 1ms | < 5ms | 64KB |
-
-## 13. Security
-
-### 13.1 Threat Model
-
-| Threat | Vector | Risk Level |
-|--------|--------|------------|
-| SQL Injection | String concatenation in query building | HIGH |
-| Unauthorized access | SQL connection without auth | HIGH |
-| Privilege escalation | CREATE/DROP without authorization | HIGH |
-| Data exfiltration | Slow query extraction (timing attacks) | MEDIUM |
-| Denial of Service | Complex query resource exhaustion | MEDIUM |
-| Prepared statement overflow | Exhaust prepared cache | LOW |
-| Schema enumeration | Error messages revealing schema details | LOW |
-
-### 13.2 SQL Injection Prevention
-
-```
-Strategy: Parameterized queries + input validation
-
-1. Parameterized queries are MANDATORY for user-provided values
-   - Positional parameters: $1, $2, ...
-   - Named parameters: $name
-   - Values are type-checked and coerced at bind time
-
-2. Dynamic identifiers (table names, column names):
-   - Whitelist validation: compare against list of valid identifiers
-   - Reject any identifier containing special characters: ; -- ' " /* */
-   - Quote identifiers with double-quotes when necessary
-
-3. String escaping for literal strings in SQL:
-   - Single quotes escaped as doubled single quotes ('')
-   - Backslash escapes disabled by default (standard_conforming_strings = on)
-
-4. Query validation checks:
-   - Reject queries containing multiple semicolons (unless multi-statement is explicitly enabled)
-   - Max query length: 1MB
-   - Max parameter count: 65535
-   - Max string literal length: 1MB
-```
-
-### 13.3 Authentication
-
-```
-Authentication modes:
-1. No auth (development only):
-   - Only bind to localhost (127.0.0.1)
-   - Warning log on startup: "SQL layer running without authentication"
-   - Disabled in production configuration enforcement
-
-2. Password auth (production):
-   - Supported: MD5, SCRAM-SHA-256
-   - Passwords hashed and stored in auth subsystem
-   - Connection rejected with error code "28P01" (invalid_password)
-
-3. TLS (recommended):
-   - Required for remote connections
-   - Certificate verification
-   - TLS version minimum: 1.2
-   - Cipher suites: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256
-```
-
-### 13.4 Authorization
-
-```
-Authorization model:
-- SQL users mapped to auth subsystem principals
-- Table-level permissions: SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER
-- Default: no permissions (explicit GRANT required)
-- Permission check at each statement execution
-
-Permission checks:
-1. On Binder: verify user has SELECT on table for SELECT queries
-2. On Executor: verify user has INSERT/UPDATE/DELETE for DML
-3. On Planning: verify user has CREATE/DROP/ALTER for DDL
-```
-
-### 13.5 Rate Limiting
-
-```
-Query rate limiting:
-- Per-connection: max 100 queries/second (configurable)
-- Per-user: max 1000 queries/second (configurable)
-- Burst allowance: 2x sustained rate
-
-Resource limits:
-- Max query execution time: 30s (configurable)
-- Max memory per query: 64MB (configurable)
-- Max rows returned: 10000 (configurable, can be overridden with explicit limit up to 100000)
-- Max join tables: 32
-- Max subquery depth: 8
-- Max AST depth: 64
-```
+R = rows in table, n = input rows, E = expressions, N = updated rows
 
 ## 14. Testing
 
-### 14.1 Unit Tests
+### 14.1 Integration Tests
 
-```rust
-// Parser tests
-#[test]
-fn test_parse_simple_select() { ... }
-#[test]
-fn test_parse_select_with_where() { ... }
-#[test]
-fn test_parse_insert() { ... }
-#[test]
-fn test_parse_update() { ... }
-#[test]
-fn test_parse_delete() { ... }
-#[test]
-fn test_parse_create_table() { ... }
-#[test]
-fn test_parse_parameterized_query() { ... }
-#[test]
-fn test_parse_subquery() { ... }
-#[test]
-fn test_parse_join() { ... }
-#[test]
-fn test_parse_aggregation() { ... }
-#[test]
-fn test_parse_nested_expressions() { ... }
-#[test]
-fn test_parse_error_syntax() { ... }
-#[test]
-fn test_parse_error_unclosed_string() { ... }
+37 integration tests covering all implemented features and error paths.
 
-// Binder tests
-#[test]
-fn test_bind_simple_select() { ... }
-#[test]
-fn test_bind_qualified_columns() { ... }
-#[test]
-fn test_bind_table_not_found() { ... }
-#[test]
-fn test_bind_column_not_found() { ... }
-#[test]
-fn test_bind_ambiguous_column() { ... }
-#[test]
-fn test_bind_aggregate_without_group_by() { ... }
+**Core DML/DDL** (18 tests):
+- test_create_table_and_insert
+- test_simple_select
+- test_select_with_where
+- test_select_with_where_and_or
+- test_select_projection
+- test_select_limit
+- test_select_order_by
+- test_select_is_null
+- test_select_arithmetic
+- test_drop_table
+- test_insert_multiple_rows
+- test_select_count
+- test_nested_expressions
+- test_type_coercion
+- test_empty_table_select
+- test_syntax_error
+- test_table_not_found_error
+- test_column_not_found_error
 
-// Planner tests
-#[test]
-fn test_planner_select_pushdown() { ... }
-#[test]
-fn test_planner_join_strategy_selection() { ... }
-#[test]
-fn test_planner_topn_optimization() { ... }
-#[test]
-fn test_planner_insert_plan() { ... }
+**New Features** (19 tests):
+- test_select_distinct
+- test_between
+- test_in_operator
+- test_case_when
+- test_cast
+- test_like_pattern
+- test_ilike
+- test_not_null_constraint
+- test_default_value
+- test_unique_constraint
+- test_primary_key_constraint
+- test_group_by_having
+- test_order_by_nulls
+- test_query_nesting_limit
+- test_lexer_panic_error
+- test_multiple_errors
+- test_in_operator_with_not
+- test_like_special_chars
+- test_case_no_else
 
-// Executor tests
-#[test]
-fn test_executor_table_scan() { ... }
-#[test]
-fn test_executor_filter() { ... }
-#[test]
-fn test_executor_projection() { ... }
-#[test]
-fn test_executor_hash_join() { ... }
-#[test]
-fn test_executor_nested_loop_join() { ... }
-#[test]
-fn test_executor_hash_aggregate() { ... }
-#[test]
-fn test_executor_sort() { ... }
-#[test]
-fn test_executor_topn() { ... }
-#[test]
-fn test_executor_limit() { ... }
-#[test]
-fn test_executor_insert() { ... }
-#[test]
-fn test_executor_update() { ... }
-#[test]
-fn test_executor_delete() { ... }
-#[test]
-fn test_executor_expression_eval() { ... }
-#[test]
-fn test_executor_null_three_valued_logic() { ... }
-#[test]
-fn test_executor_division_by_zero() { ... }
-```
+### 14.2 Test Structure
 
-### 14.2 Integration Tests
-
-```
-Test categories:
-
-1. SQL → Result roundtrip:
-   - Execute SQL, verify result set matches expected
-   - Test all supported statement types
-   - Test with parameters
-   - Test prepared statements
-
-2. Transaction tests:
-   - BEGIN/COMMIT: verify data persisted
-   - BEGIN/ROLLBACK: verify data not persisted
-   - Nested transactions (savepoints)
-   - Transaction isolation behavior
-
-3. Error handling:
-   - Each error code triggered and verified
-   - Error response format compliance
-
-4. Type coercion:
-   - Verify all implicit type conversions
-   - Verify overflow detection
-   - Verify invalid conversion errors
-
-5. Edge cases:
-   - Empty tables (SELECT returns 0 rows)
-   - NULL handling in all contexts
-   - Very wide rows (up to 64KB)
-   - Very long SQL queries (up to 1MB)
-   - Unicode identifiers and string values
-   - Special characters in strings
-```
-
-### 14.3 Property-Based Tests
-
-```rust
-// Use proptest crate for property-based testing
-
-#[test]
-fn test_select_roundtrip_property() {
-    // For any valid table schema and any inserted data:
-    //   INSERT row -> SELECT * WHERE pk = inserted_pk -> returns exactly that row
-}
-
-#[test]
-fn test_insert_update_roundtrip() {
-    // For any valid update:
-    //   INSERT row -> UPDATE row -> SELECT row -> returns updated row
-}
-
-#[test]
-fn test_delete_is_idempotent() {
-    // DELETE by PK twice:
-    //   After first DELETE, row is gone
-    //   After second DELETE, 0 rows affected (no error)
-}
-
-#[test]
-fn test_transaction_atomicity() {
-    // For any valid transaction:
-    //   BEGIN -> INSERT n rows -> ROLLBACK -> SELECT count = 0
-}
-
-#[test]
-fn test_expression_evaluation() {
-    // For any valid expression tree:
-    //   Evaluate with same inputs -> same result (determinism)
-}
-```
-
-### 14.4 Chaos Tests
-
-```
-1. Concurrent query mix:
-   - 10 concurrent connections
-   - Mix of SELECT, INSERT, UPDATE, DELETE queries
-   - Verify no deadlocks or data corruption
-   - Run for 60 seconds minimum
-
-2. Connection storms:
-   - Rapid connect/disconnect cycles
-   - 100 connections per second
-   - Verify connection pool handles correctly
-
-3. Large result sets:
-   - SELECT returning 100K rows with LIMIT 10000
-   - Verify pagination/cursor behavior
-
-4. Prepared statement stress:
-   - Prepare 2000 statements (exceeds cache limit of 1000)
-   - Verify LRU eviction works correctly
-   - Verify no memory leak
-
-5. Parameter injection:
-   - Malformed parameter values (NaN, infinity, very large numbers)
-   - SQL injection attempts in parameter values
-   - Verify parameters are properly escaped/quoted
-```
-
-### 14.5 SQL Compliance Tests
-
-```
-Test against known SQL test suites:
-
-1. SQLite test suite (subset relevant to supported features)
-2. PostgreSQL regression tests (syntax compatibility subset)
-3. Custom Nova SQL test suite covering:
-   - All supported statement types
-   - All expression types
-   - All type coercions
-   - All error conditions with correct SQLSTATE codes
-   - All join types
-   - All aggregation functions
-   - ORDER BY with NULLS FIRST/LAST
-   - Subquery types (scalar, EXISTS, IN)
-```
+All tests use `SQLEngine::new(SQLConfig::default())` and execute SQL strings
+against the in-memory TableStore. Tests verify:
+- Row counts and column values in Query results
+- Rows affected counts in Exec results
+- Error types and messages for error paths
+- Column ordering and type correctness
 
 ## 15. Future Work
 
-1. **Window Functions**: ROW_NUMBER(), RANK(), DENSE_RANK(), LEAD(), LAG() with OVER clause and PARTITION BY
-2. **Common Table Expressions**: Recursive CTEs for hierarchical queries
-3. **Full-Text Search Integration**: Direct SQL access to Search subsystem indexes via MATCH() function
-4. **Cost-Based Optimizer**: Collect table statistics (row count, distinct values, histogram) and use cost model
-5. **Parallel Query Execution**: Partition scan across multiple worker threads
-6. **Foreign Key Enforcement**: Optional referential integrity at the storage engine level
-7. **Views**: Virtual (SQL-computed) and materialized (cached) views
-8. **Stored Procedures**: Lightweight scripting language for server-side logic
-9. **Triggers**: Event-driven hooks on INSERT/UPDATE/DELETE
-10. **UPSERT**: INSERT ... ON CONFLICT DO UPDATE/SET
-11. **MERGE**: Standard SQL MERGE statement (2016 SQL standard)
-12. **INTERSECT/EXCEPT**: Set operations beyond UNION
-13. **Array and JSON Operators**: Deeper integration with array and JSON types
-14. **Table Sampling**: TABLESAMPLE for approximate queries
-15. **EXPLAIN ANALYZE**: Detailed execution statistics with row counts and timing
-16. **Prepared Statement Persistence**: Cache prepared plans across restarts
-17. **Cursor Support**: DECLARE/FETCH for large result sets
-18. **Savepoints**: Nested transaction savepoints via SAVEPOINT/ROLLBACK TO
-19. **SQL Standard Compliance Report**: Automated tracking of SQL feature coverage
-20. **MySQL Wire Protocol**: Additional wire protocol listener for MySQL compatibility
+1. **Subqueries**: Scalar, EXISTS, and IN subqueries
+2. **Joins**: INNER, LEFT, RIGHT, CROSS JOIN with hash and nested-loop strategies
+3. **Common Table Expressions**: WITH clause, recursive CTEs
+4. **Window Functions**: ROW_NUMBER(), RANK(), LEAD(), LAG() with OVER/PARTITION BY
+5. **Prepared Statements**: Cached parsed/planned statements with parameter binding
+6. **Transactions**: BEGIN/COMMIT/ROLLBACK with MVCC
+7. **PostgreSQL Wire Protocol**: PG-compatible network protocol listener
+8. **Full-Text Search Integration**: MATCH() function for Search subsystem
+9. **Cost-Based Optimizer**: Statistics collection and cost model
+10. **Parallel Query Execution**: Multi-threaded scan and aggregation
+11. **Views**: Virtual and materialized views
+12. **Stored Procedures**: Lightweight scripting for server-side logic
+13. **UPSERT**: INSERT ... ON CONFLICT DO UPDATE
+14. **MERGE**: Standard SQL MERGE statement
+15. **INTERSECT/EXCEPT**: Set operations
+16. **EXPLAIN ANALYZE**: Detailed execution statistics
+17. **Savepoints**: Nested transaction savepoints
+18. **MySQL Wire Protocol**: Additional wire protocol listener
+19. **Array and JSON Operators**: Deeper type system integration
+20. **Foreign Key Enforcement**: Optional referential integrity
 
-## 16. Open Questions
+## 16. References
 
-1. **Should correlated subqueries use query unrolling (magic decorrelation) instead of per-row execution?**
-   - Unrolling transforms correlated subquery into join, enabling hash join
-   - Trade-off: More complex optimizer vs. much better performance
-   - Decision: Implement per-row first, add decorrelation as optimization later
-
-2. **Should the SQL layer provide its own caching, or rely entirely on the Storage Engine's page cache?**
-   - SQL-level caching: Result cache for identical queries, LRU with TTL
-   - Storage Engine cache: Page-level, benefits all operations
-   - Decision: Rely on Storage Engine page cache, add query result cache as optional future work
-
-3. **Should we implement the PostgreSQL extended query protocol or only simple query?**
-   - Extended protocol: Parse/Bind/Execute phases for prepared statements
-   - Simple protocol: SQL text only, no parameterized queries
-   - Decision: Implement both; extended protocol is essential for parameterized queries
-
-4. **What is the exact SQL compatibility target?**
-   - Option A: Target PostgreSQL dialect compatibility
-   - Option B: Target MySQL dialect compatibility
-   - Option C: Custom minimal SQL dialect
-   - Decision: Target PostgreSQL wire protocol compatibility with PostgreSQL SQL dialect subset
-
-5. **Should the SQL layer support cross-collection joins (i.e., joins across Object Model collections)?**
-   - Object Model collections map to SQL tables
-   - Joins between collections are supported via the standard FROM clause
-   - Decision: Yes, cross-collection joins are a core feature
-
-6. **How to handle schema changes while prepared statements exist?**
-   - Option A: Invalidate all prepared statements on DDL
-   - Option B: Version-prepared statements, re-plan on execution if schema version changed
-   - Option C: Allow stale plans, error on execution if column missing
-   - Decision: Option B - re-plan on schema version mismatch with automatic cache invalidation
-
-7. **Should SELECT * expand all Object Model fields or only top-level scalar fields?**
-   - Object Model supports nested documents and arrays
-   - Decision: SELECT * expands all top-level fields only; nested fields require explicit path specification
-
-8. **What is the transactional isolation level?**
-   - Option A: Read Committed (simplest, matches common expectations)
-   - Option B: Repeatable Read (prevents non-repeatable reads)
-   - Option C: Serializable (strongest guarantees, highest overhead)
-   - Decision: Read Committed as default, with Serializable available via SET transaction_isolation = 'serializable'
-
-## 17. References
-
-1. PostgreSQL Documentation: Frontend/Backend Protocol - https://www.postgresql.org/docs/current/protocol.html
-2. PostgreSQL Documentation: SQL Language - https://www.postgresql.org/docs/current/sql.html
-3. SQL Standard ISO/IEC 9075:2016
-4. "Query Processing in a Relational Database Management System" - Selinger et al. (1979)
-5. "Access Path Selection in a Relational Database Management System" - Selinger et al. (1979)
-6. "The Cascades Framework for Query Optimization" - Goetz Graefe (1995)
-7. "Volcano - An Extensible and Parallel Query Evaluation System" - Graefe (1994)
-8. "Iterator Model" - Classic Volcano iterator model for query execution
-9. "Efficiently Compiling Efficient Query Plans for Modern Hardware" - Neumann (2011)
-10. SQLite Source Code - https://sqlite.org/src - Reference for recursive descent parser
-11. DuckDB Source Code - https://github.com/duckdb/duckdb - Reference for embedded SQL engine design
-12. "SQL Grammar" - PostgreSQL SQL grammar in BNF - https://www.postgresql.org/docs/current/sql-grammar.html
-13. PostgreSQL SQLSTATE Codes - https://www.postgresql.org/docs/current/errcodes-appendix.html
-14. RFC 5802 - SCRAM-SHA-256 SASL Mechanism
-15. Nova Runtime Architecture Documents (docs/01 through docs/20)
+1. PostgreSQL Documentation: SQL Language - https://www.postgresql.org/docs/current/sql.html
+2. SQL Standard ISO/IEC 9075:2016
+3. "Query Processing in a Relational Database Management System" - Selinger et al. (1979)
+4. "Volcano - An Extensible and Parallel Query Evaluation System" - Graefe (1994)
+5. SQLite Source Code - https://sqlite.org/src - Reference for recursive descent parser
+6. DuckDB Source Code - https://github.com/duckdb/duckdb - Reference for embedded SQL engine design
+7. "SQL Grammar" - PostgreSQL SQL grammar in BNF - https://www.postgresql.org/docs/current/sql-grammar.html
+8. Nova Runtime Architecture Documents (docs/01 through docs/20)

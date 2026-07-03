@@ -1757,7 +1757,7 @@ sequenceDiagram
 
 | Metric | Target | Notes |
 |--------|--------|-------|
-| Unit test suite time (CI-small) | < 5 minutes | ~5000 tests across library and binary |
+| Unit test suite time (CI-small) | < 5 minutes | ~1236 tests across library and binary |
 | Integration test suite time (CI-small) | < 10 minutes | ~500 integration tests |
 | E2E smoke tests | < 5 minutes | 20 critical path scenarios |
 | Full E2E suite (nightly) | < 60 minutes | 200+ scenarios |
@@ -1906,13 +1906,13 @@ Fuzz crash triage:
 | Object Model | 95% line, 90% branch | Serialization, deserialization, validation, type coercion |
 | Networking | 90% line, 85% branch | Connection handling, TLS, HTTP parsing, WebSocket |
 | Configuration | 95% line, 90% branch | Parsing, validation, merging, hot-reload |
-| Cache | 95% line, 90% branch | Set/get/delete, TTL, eviction, LRU, LFU |
+| Cache | 95% line, 90% branch | Set/get/delete, TTL, eviction, LRU, LFU (43 tests) |
 | Queue | 95% line, 90% branch | Enqueue, dequeue, TTR, delay, dead letter, priority |
 | Scheduler | 95% line, 90% branch | Cron parsing, job execution, retry, concurrency |
-| Search | 95% line, 90% branch | Indexing, querying, scoring, facets, tokenization |
-| Blob Storage | 95% line, 90% branch | Upload, download, streaming, versioning, metadata |
+| Search | 95% line, 90% branch | Indexing, querying, scoring, facets, tokenization (55 tests) |
+| Blob Storage | 95% line, 90% branch | Upload, download, streaming, versioning, metadata (37 tests) |
 | Authentication | 95% line, 90% branch | Login, password hashing, token generation, MFA |
-| SQL Layer | 90% line, 85% branch | SQL parsing, query planning, optimization, execution |
+| SQL Layer | 90% line, 85% branch | SQL parsing, query planning, optimization, execution (37 tests) |
 | REST API | 90% line, 85% branch | Request handling, validation, routing, error formatting |
 | CLI | 80% line, 75% branch | Command parsing, argument validation, subcommand dispatch |
 
@@ -1931,7 +1931,19 @@ Fuzz crash triage:
 | REST API + All | 90% | Full request/response cycle for each endpoint |
 | Config + All | 85% | Config change propagation to all subsystems |
 
-### 14.3 E2E Test Scenarios
+### 14.3 Phase 3 — Data Subsystem Test Types
+
+The following test types were introduced with the Phase 3 crates (nova-cache, nova-blob, nova-search, nova-sql):
+
+| Test Type | Crate | Description |
+|-----------|-------|-------------|
+| TTL sweeper tests | nova-cache | Verify expired entries are removed by background sweeper, TTL accuracy under clock skew, sweeper back-pressure on large eviction batches |
+| GC cancellation tests | nova-blob | Verify blob garbage collection can be cancelled mid-scan, orphaned chunk cleanup on partial upload, concurrent GC and read isolation |
+| Pagination tests | nova-search | Verify cursor-based pagination returns correct slices, total-hits estimation accuracy, pagination with dynamic scoring (BM25 re-scoring across pages) |
+| Constraint enforcement tests | nova-sql | Verify NOT NULL, UNIQUE, CHECK, FOREIGN KEY constraints reject invalid mutations, constraint error messages, deferrable constraint semantics |
+| Unicode normalization tests | nova-sql | Verify NFC/NFD normalization on VARCHAR columns, collation-aware ordering for UTF-8 strings, Unicode identifier support in SQL |
+
+### 14.4 E2E Test Scenarios
 
 ```rust
 /// Critical path E2E scenarios (run on every PR)
@@ -1982,7 +1994,7 @@ const FULL_SCENARIOS: &[&str] = &[
 ];
 ```
 
-### 14.4 Dashboard Test Scenarios
+### 14.5 Dashboard Test Scenarios
 
 ```typescript
 // Dashboard E2E test scenarios (Playwright)
@@ -2045,7 +2057,7 @@ const DASHBOARD_E2E_SCENARIOS = [
 ];
 ```
 
-### 14.5 Coverage Enforcement
+### 14.6 Coverage Enforcement
 
 ```rust
 /// Coverage gate configuration
@@ -2078,7 +2090,7 @@ const WARNING_GATES: &[CoverageDomain] = &[
 ];
 ```
 
-### 14.6 Test Data Management
+### 14.7 Test Data Management
 
 ```rust
 /// Data lifecycle for test fixtures
@@ -2133,7 +2145,7 @@ impl TestDataManager {
 }
 ```
 
-### 14.7 Benchmark Test Infrastructure
+### 14.8 Benchmark Test Infrastructure
 
 (Detailed in Document 28: Benchmark Strategy. This section covers the test infrastructure used by benchmark tests.)
 
