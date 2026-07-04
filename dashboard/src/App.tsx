@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 import DashboardPage from './pages/Dashboard';
 import DatabasePage from './pages/Database';
 import CachePage from './pages/Cache';
@@ -16,16 +17,16 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/database" element={<DatabasePage />} />
-          <Route path="/cache" element={<CachePage />} />
-          <Route path="/queue" element={<QueuePage />} />
-          <Route path="/scheduler" element={<SchedulerPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/blob" element={<BlobPage />} />
-          <Route path="/auth" element={<AuthPage />} />
-          <Route path="/config" element={<ConfigPage />} />
-          <Route path="/logs" element={<LogsPage />} />
+          <Route path="/" element={<ErrorBoundary pageName="Dashboard"><DashboardPage /></ErrorBoundary>} />
+          <Route path="/database" element={<ErrorBoundary pageName="Database"><DatabasePage /></ErrorBoundary>} />
+          <Route path="/cache" element={<ErrorBoundary pageName="Cache"><CachePage /></ErrorBoundary>} />
+          <Route path="/queue" element={<ErrorBoundary pageName="Queue"><QueuePage /></ErrorBoundary>} />
+          <Route path="/scheduler" element={<ErrorBoundary pageName="Scheduler"><SchedulerPage /></ErrorBoundary>} />
+          <Route path="/search" element={<ErrorBoundary pageName="Search"><SearchPage /></ErrorBoundary>} />
+          <Route path="/blob" element={<ErrorBoundary pageName="Blob Storage"><BlobPage /></ErrorBoundary>} />
+          <Route path="/auth" element={<ErrorBoundary pageName="Users & API Keys"><AuthPage /></ErrorBoundary>} />
+          <Route path="/config" element={<ErrorBoundary pageName="Configuration"><ConfigPage /></ErrorBoundary>} />
+          <Route path="/logs" element={<ErrorBoundary pageName="Logs"><LogsPage /></ErrorBoundary>} />
         </Route>
       </Routes>
     </BrowserRouter>

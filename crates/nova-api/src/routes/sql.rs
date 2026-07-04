@@ -12,7 +12,7 @@ pub fn routes(state: Arc<AdminState>) -> Router {
         .route("/query", post(sql_query))
         .route("/execute", post(sql_execute))
         .route("/tables", get(list_tables))
-        .route("/tables/{table}/schema", get(get_table_schema))
+        .route("/tables/:table/schema", get(get_table_schema))
         .with_state(state)
 }
 

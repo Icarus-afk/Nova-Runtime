@@ -11,11 +11,11 @@ pub fn routes(state: Arc<AdminState>) -> Router {
     Router::new()
         .route("/indexes", post(create_index))
         .route("/indexes", get(list_indexes))
-        .route("/indexes/{name}", get(get_index))
-        .route("/indexes/{name}", delete(delete_index))
-        .route("/indexes/{name}/documents", post(index_documents))
-        .route("/indexes/{name}/query", post(search_query))
-        .route("/indexes/{name}/stats", get(index_stats))
+        .route("/indexes/:name", get(get_index))
+        .route("/indexes/:name", delete(delete_index))
+        .route("/indexes/:name/documents", post(index_documents))
+        .route("/indexes/:name/query", post(search_query))
+        .route("/indexes/:name/stats", get(index_stats))
         .with_state(state)
 }
 

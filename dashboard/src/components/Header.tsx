@@ -6,7 +6,7 @@ export default function Header() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const res = await fetch('/api/v1/dashboard/system/health', { signal: AbortSignal.timeout(3000) });
+        const res = await fetch('/api/v1/health', { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
           setConnectionStatus('connected');
         } else {
