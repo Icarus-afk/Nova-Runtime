@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import type { SystemHealth } from '../types';
 import MetricCard from '../components/MetricCard';
 import StatusBadge from '../components/StatusBadge';
+import { CheckCircleIcon, XCircleIcon, AlertTriangleIcon, InfoIcon } from '../components/Icons';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -159,7 +160,7 @@ export default function DashboardPage() {
           {recentActivity.map((item, i) => (
             <div key={i} className="activity-item">
               <div className={`activity-icon ${item.type}`}>
-                {item.type === 'success' ? '✓' : item.type === 'error' ? '✗' : item.type === 'warning' ? '!' : 'i'}
+                {item.type === 'success' ? <CheckCircleIcon size={14} /> : item.type === 'error' ? <XCircleIcon size={14} /> : item.type === 'warning' ? <AlertTriangleIcon size={14} /> : <InfoIcon size={14} />}
               </div>
               <div className="activity-text">{item.text}</div>
               <div className="activity-time">{item.time}</div>

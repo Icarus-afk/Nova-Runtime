@@ -1,4 +1,5 @@
 import type { MetricCardData } from '../types';
+import { ArrowUpIcon, ArrowDownIcon } from './Icons';
 
 interface MetricCardProps extends MetricCardData {
   color?: 'accent' | 'success' | 'warning' | 'danger' | 'info';
@@ -24,7 +25,7 @@ export default function MetricCard({ title, value, unit, change, changeDirection
       </div>
       {change !== undefined && (
         <div className={`card-change ${changeDirection === 'up' ? 'up' : 'down'}`}>
-          {changeDirection === 'up' ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
+          {changeDirection === 'up' ? <ArrowUpIcon size={12} /> : <ArrowDownIcon size={12} />} {Math.abs(change).toFixed(1)}%
         </div>
       )}
     </div>

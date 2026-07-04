@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import type { ConfigEntry } from '../types';
+import { CheckIcon, AlertIcon } from '../components/Icons';
 
 function formatValue(value: unknown): string {
   if (value === null) return 'null';
@@ -121,8 +122,8 @@ export default function ConfigPage() {
                                 {formatValue(entry.value)}
                               </td>
                               <td>{entry.type}</td>
-                              <td>{entry.mutable ? '✓' : '-'}</td>
-                              <td>{entry.requires_restart ? '⚠' : '-'}</td>
+                              <td>{entry.mutable ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : '-'}</td>
+                              <td>{entry.requires_restart ? <AlertIcon size={14} style={{ color: 'var(--warning)' }} /> : '-'}</td>
                             </tr>
                           ))}
                         </tbody>

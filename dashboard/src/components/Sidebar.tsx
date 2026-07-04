@@ -1,17 +1,18 @@
 import { NavLink } from 'react-router-dom';
 import type { NavItem } from '../types';
+import { OverviewIcon, DatabaseIcon, CacheIcon, QueueIcon, SchedulerIcon, SearchIcon, BlobIcon, AuthIcon, ConfigIcon, LogsIcon } from './Icons';
 
 const navItems: NavItem[] = [
-  { id: 'dashboard', label: 'Overview', path: '/', icon: '◉' },
-  { id: 'database', label: 'Database', path: '/database', icon: '🗄' },
-  { id: 'cache', label: 'Cache', path: '/cache', icon: '⚡' },
-  { id: 'queue', label: 'Queue', path: '/queue', icon: '📨' },
-  { id: 'scheduler', label: 'Scheduler', path: '/scheduler', icon: '⏰' },
-  { id: 'search', label: 'Search', path: '/search', icon: '🔍' },
-  { id: 'blob', label: 'Blob Storage', path: '/blob', icon: '📦' },
-  { id: 'auth', label: 'Users & API Keys', path: '/auth', icon: '🔐' },
-  { id: 'config', label: 'Configuration', path: '/config', icon: '⚙' },
-  { id: 'logs', label: 'Logs', path: '/logs', icon: '📋' },
+  { id: 'dashboard', label: 'Overview', path: '/', icon: <OverviewIcon /> },
+  { id: 'database', label: 'Database', path: '/database', icon: <DatabaseIcon /> },
+  { id: 'cache', label: 'Cache', path: '/cache', icon: <CacheIcon /> },
+  { id: 'queue', label: 'Queue', path: '/queue', icon: <QueueIcon /> },
+  { id: 'scheduler', label: 'Scheduler', path: '/scheduler', icon: <SchedulerIcon /> },
+  { id: 'search', label: 'Search', path: '/search', icon: <SearchIcon /> },
+  { id: 'blob', label: 'Blob Storage', path: '/blob', icon: <BlobIcon /> },
+  { id: 'auth', label: 'Users & API Keys', path: '/auth', icon: <AuthIcon /> },
+  { id: 'config', label: 'Configuration', path: '/config', icon: <ConfigIcon /> },
+  { id: 'logs', label: 'Logs', path: '/logs', icon: <LogsIcon /> },
 ];
 
 export default function Sidebar() {
