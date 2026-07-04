@@ -86,6 +86,11 @@ impl CacheManager {
         self.backend.len().await
     }
 
+    #[instrument(skip(self))]
+    pub async fn keys(&self) -> Result<Vec<CacheKey>> {
+        self.backend.keys().await
+    }
+
     pub async fn get_or_insert_with(
         &self,
         key: CacheKey,

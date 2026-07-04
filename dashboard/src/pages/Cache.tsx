@@ -29,7 +29,7 @@ export default function CachePage() {
     setSelectedKey(key);
     setValueLoading(true);
     try {
-      const res = await fetch(`/api/v1/dashboard/cache/keys/${encodeURIComponent(key)}`, {
+      const res = await fetch(`/api/v1/cache/${encodeURIComponent(key)}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('nova_token') || ''}` },
       });
       const data = await res.json();
@@ -49,11 +49,7 @@ export default function CachePage() {
   };
 
   const keyColumns = [
-    { key: 'key', header: 'Key', width: '250px' },
-    { key: 'value_size_bytes', header: 'Size', width: '80px', render: (v: unknown) => formatBytes(v as number) },
-    { key: 'ttl_seconds', header: 'TTL', width: '80px', render: (v: unknown) => v ? `${v}s` : '∞' },
-    { key: 'access_count', header: 'Access Count', width: '100px' },
-    { key: 'last_access_at', header: 'Last Accessed', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
+    { key: 'key', header: 'Key', width: 'auto' },
   ];
 
   const hitRate = stats ? (stats.hit_ratio * 100) : 0;

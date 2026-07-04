@@ -10,9 +10,9 @@ use std::time::Duration;
 
 pub fn routes(state: Arc<AdminState>) -> Router {
     Router::new()
-        .route("/{key}", get(cache_get))
-        .route("/{key}", post(cache_set))
-        .route("/{key}", delete(cache_delete))
+        .route("/:key", get(cache_get))
+        .route("/:key", post(cache_set))
+        .route("/:key", delete(cache_delete))
         .route("/batch", post(cache_batch_set))
         .route("/keys", get(cache_list_keys))
         .route("/stats", get(cache_stats))
@@ -112,11 +112,11 @@ async fn cache_list_keys(
 ) -> Result<Json<Value>, ApiError> {
     let mgr = state.cache_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
-    let count = mgr.len().await
+    let keys = mgr.keys().await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({
-        "data": [],
-        "total": count,
+        "data": keys,
+        "total": keys.len(),
         "pattern": params.pattern,
     })))
 }

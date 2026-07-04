@@ -14,9 +14,9 @@ pub fn routes(state: Arc<AdminState>) -> Router {
     Router::new()
         .route("/", post(upload_blob))
         .route("/", get(list_blobs))
-        .route("/{id}", get(download_blob))
-        .route("/{id}", delete(delete_blob))
-        .route("/{id}/info", get(blob_info))
+        .route("/:id", get(download_blob))
+        .route("/:id", delete(delete_blob))
+        .route("/:id/info", get(blob_info))
         .route("/stats", get(blob_stats))
         .with_state(state)
 }

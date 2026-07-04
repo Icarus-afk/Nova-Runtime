@@ -16,13 +16,13 @@ pub fn routes(state: Arc<AdminState>) -> Router {
         .route("/logout", post(auth_logout))
         .route("/api-keys", post(create_api_key))
         .route("/api-keys", get(list_api_keys))
-        .route("/api-keys/{id}", delete(revoke_api_key))
+        .route("/api-keys/:id", delete(revoke_api_key))
         .route("/users", post(create_user))
         .route("/users", get(list_users))
-        .route("/users/{id}", get(get_user))
-        .route("/users/{id}", delete(delete_user))
-        .route("/users/{id}/roles", put(update_user_roles))
-        .route("/users/{id}/password", put(change_password))
+        .route("/users/:id", get(get_user))
+        .route("/users/:id", delete(delete_user))
+        .route("/users/:id/roles", put(update_user_roles))
+        .route("/users/:id/password", put(change_password))
         .with_state(state)
 }
 
