@@ -1,14 +1,13 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum CacheCommands {
-    /// Show cache statistics
     Stats,
-    /// Clear the entire cache
     Clear,
-    /// Flush dirty cache entries to disk
     Flush,
-    /// List cache entries
     List {
         #[arg(long)]
         pattern: Option<String>,
@@ -16,19 +15,53 @@ pub enum CacheCommands {
 }
 
 impl CacheCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
         match self {
-            CacheCommands::Stats => println!("cache stats"),
-            CacheCommands::Clear => println!("cache clear"),
-            CacheCommands::Flush => println!("cache flush"),
-            CacheCommands::List { pattern } => {
-                match pattern {
-                    Some(p) => println!("cache list (pattern: {p})"),
-                    None => println!("cache list"),
+            CacheCommands::Stats => {
+                match client.get("/v1/cache/stats") {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        output::print_value(&serde_json::json!({
+                            "error": e,
+                            "message": "Cache endpoint not available"
+                        }), &ctx.output)?;
+                    }
                 }
+                Ok(())
+            }
+            CacheCommands::Clear => {
+                match client.post("/v1/cache/clear", None) {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to clear cache: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            CacheCommands::Flush => {
+                match client.post("/v1/cache/flush", None) {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to flush cache: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            CacheCommands::List { pattern } => {
+                let params: Vec<(&str, &str)> = pattern.as_ref().map(|p| vec![("pattern", p.as_str())]).unwrap_or_default();
+                match if params.is_empty() { client.get("/v1/cache/keys") } else { client.get_with_query("/v1/cache/keys", &params) } {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to list cache keys: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
             }
         }
-        Ok(())
     }
 }
 
@@ -66,14 +99,5 @@ mod tests {
     fn test_list() {
         assert!(matches!(parse(&["test", "list"]), CacheCommands::List { pattern: None }));
         assert!(matches!(parse(&["test", "list", "--pattern", "user:*"]), CacheCommands::List { pattern: Some(_) }));
-    }
-
-    #[test]
-    fn test_execute_stats() {
-        assert!(CacheCommands::Stats.execute().is_ok());
-        assert!(CacheCommands::Clear.execute().is_ok());
-        assert!(CacheCommands::Flush.execute().is_ok());
-        assert!(CacheCommands::List { pattern: None }.execute().is_ok());
-        assert!(CacheCommands::List { pattern: Some("user:*".into()) }.execute().is_ok());
     }
 }

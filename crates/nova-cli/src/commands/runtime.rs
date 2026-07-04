@@ -1,52 +1,84 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum RuntimeCommands {
-    /// Show runtime status
     Status,
-    /// Start the Nova daemon
     Start {
         #[arg(short, long)]
         daemonize: bool,
     },
-    /// Stop the Nova daemon
     Stop {
         #[arg(short, long)]
         force: bool,
     },
-    /// Restart the Nova daemon
     Restart,
-    /// Reload configuration
     Reload,
 }
 
 impl RuntimeCommands {
-    pub fn execute(&self, config: &nova_config::Config) -> anyhow::Result<()> {
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
         match self {
             RuntimeCommands::Status => {
-                println!("Nova Runtime");
-                println!("  Version:     {}", env!("CARGO_PKG_VERSION"));
-                println!("  Data Dir:    {}", config.general.data_dir.display());
-                println!(
-                    "  Listen:      {}:{}",
-                    config.networking.listen_address, config.networking.listen_port
-                );
-                println!(
-                    "  TLS:         {}",
-                    if config.networking.tls_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
+                match client.get("/admin/status") {
+                    Ok(body) => {
+                        let is_running = body["is_running"].as_bool().unwrap_or(false);
+                        let uptime = body["uptime_secs"].as_u64().unwrap_or(0);
+                        let active = body["active_operations"].as_u64().unwrap_or(0);
+                        let total = body["total_operations"].as_u64().unwrap_or(0);
+                        output::print_value(&serde_json::json!({
+                            "status": if is_running { "running" } else { "stopped" },
+                            "uptime_secs": uptime,
+                            "active_operations": active,
+                            "total_operations": total,
+                        }), &ctx.output)?;
                     }
-                );
-                println!(
-                    "  Max Memory:  {} MB",
-                    config.memory.max_memory / 1024 / 1024
-                );
+                    Err(e) => match &ctx.output {
+                        crate::app::OutputFormat::Json => {
+                            output::print_json(&serde_json::json!({
+                                "status": "unknown",
+                                "error": e,
+                            }))?;
+                        }
+                        _ => {
+                            println!("Nova Runtime");
+                            println!("  Status:       unknown (server unreachable)");
+                            println!("  Error:        {e}");
+                        }
+                    },
+                }
                 Ok(())
             }
-            _ => {
-                println!("Command not yet implemented. Use `novad` to start the daemon.");
+            RuntimeCommands::Start { daemonize } => {
+                if *daemonize {
+                    println!("Use `novad` to start the daemon as a background process.");
+                } else {
+                    println!("Use `nova run` to start the daemon in-process, or `novad` for the standalone daemon.");
+                }
+                Ok(())
+            }
+            RuntimeCommands::Stop { force: _ } => {
+                println!("Use `kill` or SIGTERM to stop the novad process.");
+                println!("Example: pkill novad");
+                Ok(())
+            }
+            RuntimeCommands::Restart => {
+                println!("To restart, stop novad and start it again.");
+                Ok(())
+            }
+            RuntimeCommands::Reload => {
+                match client.post("/admin/reload", None) {
+                    Ok(body) => {
+                        output::print_value(&body, &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Reload failed: {e}");
+                        eprintln!("Suggestion: send SIGHUP to the novad process");
+                    }
+                }
                 Ok(())
             }
         }

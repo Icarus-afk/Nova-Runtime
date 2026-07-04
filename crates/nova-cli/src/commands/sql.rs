@@ -1,27 +1,66 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum SqlCommands {
-    /// Execute a SQL query
     Query {
         sql: String,
         #[arg(short, long)]
         format: Option<String>,
     },
-    /// Execute a SQL script file
     Execute {
         file: String,
     },
-    /// Show SQL schema
     Schema {
         table: Option<String>,
     },
 }
 
 impl SqlCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
-        println!("SQL command not yet implemented");
-        Ok(())
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+        match self {
+            SqlCommands::Query { sql, format: _ } => {
+                let body = serde_json::json!({"sql": sql});
+                match client.post("/v1/sql/query", Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Query failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SqlCommands::Execute { file } => {
+                let content = std::fs::read_to_string(file)
+                    .map_err(|e| anyhow::anyhow!("Failed to read file '{file}': {e}"))?;
+                let body = serde_json::json!({"sql": content, "file": file});
+                match client.post("/v1/sql/execute", Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Execute failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SqlCommands::Schema { table } => {
+                let path = match table {
+                    Some(t) => format!("/v1/sql/schema/{t}"),
+                    None => "/v1/sql/schema".to_string(),
+                };
+                match client.get(&path) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to get schema: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -55,12 +94,5 @@ mod tests {
     fn test_schema() {
         assert!(matches!(parse(&["test", "schema"]), SqlCommands::Schema { table: None }));
         assert!(matches!(parse(&["test", "schema", "users"]), SqlCommands::Schema { table: Some(_) }));
-    }
-
-    #[test]
-    fn test_execute_returns_ok() {
-        assert!(SqlCommands::Query { sql: "SELECT 1".into(), format: None }.execute().is_ok());
-        assert!(SqlCommands::Execute { file: "f.sql".into() }.execute().is_ok());
-        assert!(SqlCommands::Schema { table: None }.execute().is_ok());
     }
 }

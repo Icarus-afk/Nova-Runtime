@@ -6,3 +6,5 @@
 .DS_Store
 start.md
 /.vscode
+/dashboard/node_modules
+/sdk/node_modules

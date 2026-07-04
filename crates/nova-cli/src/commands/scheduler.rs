@@ -1,33 +1,108 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum SchedulerCommands {
-    /// List scheduled jobs
     List,
-    /// Schedule a new job
     Create {
         name: String,
         schedule: String,
         command: String,
     },
-    /// Delete a scheduled job
     Delete {
         name: String,
     },
-    /// Pause a scheduled job
     Pause {
         name: String,
     },
-    /// Resume a scheduled job
     Resume {
         name: String,
     },
 }
 
 impl SchedulerCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
-        println!("Scheduler command not yet implemented");
-        Ok(())
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+        match self {
+            SchedulerCommands::List => {
+                match client.get("/v1/scheduler/jobs") {
+                    Ok(body) => {
+                        let jobs = if body.is_array() {
+                            body.clone()
+                        } else {
+                            body.get("jobs").cloned().unwrap_or(body.clone())
+                        };
+                        if let Some(arr) = jobs.as_array() {
+                            output::print_table_from_json(
+                                &["Name", "Schedule", "Command", "Status"],
+                                arr,
+                                |j| vec![
+                                    j["name"].as_str().unwrap_or("-").to_string(),
+                                    j["schedule"].as_str().unwrap_or("-").to_string(),
+                                    j["command"].as_str().unwrap_or("-").to_string(),
+                                    j["status"].as_str().unwrap_or("active").to_string(),
+                                ],
+                                &ctx.output,
+                            )?;
+                        } else {
+                            output::print_value(&body, &ctx.output)?;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to list jobs: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SchedulerCommands::Create { name, schedule, command } => {
+                let body = serde_json::json!({
+                    "name": name,
+                    "schedule": schedule,
+                    "command": command,
+                });
+                match client.post("/v1/scheduler/jobs", Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to create job: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SchedulerCommands::Delete { name } => {
+                match client.delete(&format!("/v1/scheduler/jobs/{name}")) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to delete job: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SchedulerCommands::Pause { name } => {
+                match client.post(&format!("/v1/scheduler/jobs/{name}/pause"), None) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to pause job: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            SchedulerCommands::Resume { name } => {
+                match client.post(&format!("/v1/scheduler/jobs/{name}/resume"), None) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to resume job: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -69,14 +144,5 @@ mod tests {
     #[test]
     fn test_resume() {
         assert!(matches!(parse(&["test", "resume", "job"]), SchedulerCommands::Resume { .. }));
-    }
-
-    #[test]
-    fn test_execute_returns_ok() {
-        assert!(SchedulerCommands::List.execute().is_ok());
-        assert!(SchedulerCommands::Create { name: "j".into(), schedule: "* * * * *".into(), command: "c".into() }.execute().is_ok());
-        assert!(SchedulerCommands::Delete { name: "j".into() }.execute().is_ok());
-        assert!(SchedulerCommands::Pause { name: "j".into() }.execute().is_ok());
-        assert!(SchedulerCommands::Resume { name: "j".into() }.execute().is_ok());
     }
 }

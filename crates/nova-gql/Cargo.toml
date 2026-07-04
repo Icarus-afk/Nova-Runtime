@@ -1,0 +1,31 @@
+[package]
+name = "nova-gql"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nova-core = { path = "../nova-core" }
+nova-config = { path = "../nova-config" }
+nova-executor = { path = "../nova-executor" }
+nova-memory = { path = "../nova-memory" }
+nova-cache = { path = "../nova-cache" }
+nova-queue = { path = "../nova-queue" }
+nova-scheduler = { path = "../nova-scheduler" }
+nova-search = { path = "../nova-search" }
+nova-blob = { path = "../nova-blob" }
+nova-auth = { path = "../nova-auth" }
+nova-sql = { path = "../nova-sql" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream = "0.1"
+base64.workspace = true
+futures-util = "0.3"
+async-graphql = { version = "6", features = ["chrono", "uuid"] }
+async-graphql-axum = "6"

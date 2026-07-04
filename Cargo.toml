@@ -19,6 +19,7 @@ members = [
     "crates/nova-queue",
     "crates/nova-scheduler",
     "crates/nova-auth",
+    "crates/nova-gql",
 ]
 
 [workspace.package]

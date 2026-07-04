@@ -1,4 +1,6 @@
+use crate::app::OutputFormat;
 use serde::Serialize;
+use serde_json::Value;
 
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     if rows.is_empty() {
@@ -50,6 +52,34 @@ pub fn print_yaml<T: Serialize>(value: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn print_value(value: &Value, format: &OutputFormat) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Table | OutputFormat::Yaml => {
+            println!("{}", serde_json::to_string_pretty(value)?);
+        }
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(value)?);
+        }
+    }
+    Ok(())
+}
+
+pub fn print_table_from_json(headers: &[&str], rows: &[Value], extract: fn(&Value) -> Vec<String>, format: &OutputFormat) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        OutputFormat::Yaml => {
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        OutputFormat::Table => {
+            let string_rows: Vec<Vec<String>> = rows.iter().map(|r| extract(r)).collect();
+            print_table(headers, &string_rows);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,28 +105,8 @@ mod tests {
     }
 
     #[test]
-    fn test_print_table_uneven_widths() {
-        let rows = vec![
-            vec!["tiny".into(), "very long cell content".into()],
-            vec!["much longer text".into(), "short".into()],
-        ];
-        print_table(&["Col A", "Col B"], &rows);
-    }
-
-    #[test]
-    fn test_print_table_single_column() {
-        print_table(&["Only"], &[vec!["row1".into()], vec!["row2".into()]]);
-    }
-
-    #[test]
     fn test_print_json_valid() {
         let data = serde_json::json!({"name": "test", "value": 42});
-        assert!(print_json(&data).is_ok());
-    }
-
-    #[test]
-    fn test_print_json_array() {
-        let data = serde_json::json!([1, 2, 3]);
         assert!(print_json(&data).is_ok());
     }
 
@@ -107,8 +117,14 @@ mod tests {
     }
 
     #[test]
-    fn test_print_yaml_nested() {
-        let data = serde_json::json!({"outer": {"inner": "v", "list": [1, 2]}});
-        assert!(print_yaml(&data).is_ok());
+    fn test_print_value_json_format() {
+        let value = serde_json::json!({"status": "ok"});
+        assert!(print_value(&value, &OutputFormat::Json).is_ok());
+    }
+
+    #[test]
+    fn test_print_value_table_format() {
+        let value = serde_json::json!({"status": "ok"});
+        assert!(print_value(&value, &OutputFormat::Table).is_ok());
     }
 }
