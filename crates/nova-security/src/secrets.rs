@@ -52,7 +52,18 @@ impl SecretsManager {
         SecretsManager { provider }
     }
 
+    fn validate_secret_name(name: &str) -> Result<()> {
+        if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
+            return Err(SecurityError::Validation(format!(
+                "invalid secret name: '{}'",
+                name
+            )));
+        }
+        Ok(())
+    }
+
     pub fn get_secret(&self, name: &str) -> Result<SecretValue> {
+        Self::validate_secret_name(name)?;
         match &self.provider {
             SecretsProvider::Environment { prefix } => {
                 let var_name = format!("{}{}", prefix, name.to_uppercase());
@@ -61,15 +72,24 @@ impl SecretsManager {
                 Ok(SecretValue::new(value.into_bytes()))
             }
             SecretsProvider::File { directory } => {
-                let path = PathBuf::from(directory).join(format!("{}.secret", name));
-                let data = fs::read(&path)
+                let base = PathBuf::from(directory);
+                let canonical_base = fs::canonicalize(&base)
+                    .map_err(|e| SecurityError::Internal(e.to_string()))?;
+                let path = base.join(format!("{}.secret", name));
+                let canonical_path = fs::canonicalize(&path)
                     .map_err(|_| SecurityError::SecretNotFound(path.to_string_lossy().to_string()))?;
+                if !canonical_path.starts_with(&canonical_base) {
+                    return Err(SecurityError::Internal("path traversal detected".to_string()));
+                }
+                let data = fs::read(&canonical_path)
+                    .map_err(|_| SecurityError::SecretNotFound(canonical_path.to_string_lossy().to_string()))?;
                 Ok(SecretValue::new(data))
             }
         }
     }
 
     pub fn set_secret(&self, name: &str, value: &[u8]) -> Result<()> {
+        Self::validate_secret_name(name)?;
         match &self.provider {
             SecretsProvider::Environment { .. } => {
                 tracing::warn!(
@@ -79,10 +99,14 @@ impl SecretsManager {
                 Ok(())
             }
             SecretsProvider::File { directory } => {
-                let dir = PathBuf::from(directory);
-                fs::create_dir_all(&dir)
+                let base = PathBuf::from(directory);
+                let canonical_base = fs::canonicalize(&base)
                     .map_err(|e| SecurityError::Internal(e.to_string()))?;
-                let path = dir.join(format!("{}.secret", name));
+                let path = canonical_base.join(format!("{}.secret", name));
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| SecurityError::Internal(e.to_string()))?;
+                }
                 fs::write(&path, value)
                     .map_err(|e| SecurityError::Internal(e.to_string()))?;
                 Ok(())

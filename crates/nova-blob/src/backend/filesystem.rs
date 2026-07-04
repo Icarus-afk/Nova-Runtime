@@ -33,6 +33,32 @@ impl FilesystemBackend {
         Ok(())
     }
 
+    fn validate_blob_id(id: &str) -> Result<()> {
+        if id.is_empty() {
+            return Err(BlobError::InvalidInput("blob_id is required".into()));
+        }
+        if id.contains("..") || id.contains('/') || id.contains('\\') {
+            return Err(BlobError::InvalidInput(format!("invalid blob_id: '{}'", id)));
+        }
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+            return Err(BlobError::InvalidInput(format!("invalid blob_id: '{}'", id)));
+        }
+        Ok(())
+    }
+
+    fn validate_namespace(ns: &str) -> Result<()> {
+        if ns.is_empty() {
+            return Err(BlobError::InvalidInput("namespace is required".into()));
+        }
+        if ns.contains("..") || ns.contains('/') || ns.contains('\\') {
+            return Err(BlobError::InvalidInput(format!("invalid namespace: '{}'", ns)));
+        }
+        if !ns.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+            return Err(BlobError::InvalidInput(format!("invalid namespace: '{}'", ns)));
+        }
+        Ok(())
+    }
+
     fn metadata_path(&self, blob_id: &str) -> PathBuf {
         self.data_dir.join("metadata").join(blob_id).with_extension("json")
     }
@@ -56,6 +82,7 @@ impl FilesystemBackend {
 #[async_trait]
 impl BlobStore for FilesystemBackend {
     async fn put_metadata(&self, metadata: &BlobMetadata) -> Result<()> {
+        Self::validate_blob_id(&metadata.id)?;
         let path = self.metadata_path(&metadata.id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -69,6 +96,7 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn get_metadata(&self, blob_id: &str) -> Result<BlobMetadata> {
+        Self::validate_blob_id(blob_id)?;
         let path = self.metadata_path(blob_id);
         let data = fs::read(&path).await
             .map_err(|_| BlobError::NotFound(blob_id.to_string()))?;
@@ -77,6 +105,7 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn delete_metadata(&self, blob_id: &str) -> Result<()> {
+        Self::validate_blob_id(blob_id)?;
         let path = self.metadata_path(blob_id);
         if path.exists() {
             fs::remove_file(&path).await?;
@@ -120,6 +149,7 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn list_blobs(&self, namespace: &str) -> Result<Vec<String>> {
+        Self::validate_namespace(namespace)?;
         let meta_dir = self.data_dir.join("metadata");
         if !meta_dir.exists() {
             return Ok(Vec::new());
@@ -145,6 +175,7 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)> {
+        Self::validate_namespace(namespace)?;
         let all = self.list_blobs(namespace).await?;
         let total = all.len();
         let page: Vec<String> = all.into_iter().skip(offset).take(limit).collect();
@@ -152,11 +183,13 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn namespace_exists(&self, namespace: &str) -> Result<bool> {
+        Self::validate_namespace(namespace)?;
         let path = self.namespace_path(namespace);
         Ok(path.exists())
     }
 
     async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        Self::validate_namespace(namespace)?;
         let path = self.namespace_path(namespace);
         fs::create_dir_all(&path).await?;
         // Also ensure metadata dir exists for this namespace
@@ -166,6 +199,7 @@ impl BlobStore for FilesystemBackend {
     }
 
     async fn delete_namespace(&self, namespace: &str) -> Result<()> {
+        Self::validate_namespace(namespace)?;
         let path = self.namespace_path(namespace);
         if path.exists() {
             fs::remove_dir_all(&path).await?;

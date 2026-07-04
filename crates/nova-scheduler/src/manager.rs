@@ -3,6 +3,7 @@ use crate::error::{Result, SchedulerError};
 use crate::time_wheel::{TimeWheel, PriorityQueue};
 use crate::types::*;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, Semaphore};
@@ -17,6 +18,7 @@ pub struct SchedulerManager {
     running_jobs: Arc<parking_lot::RwLock<HashSet<Uuid>>>,
     concurrency_semaphore: Arc<Semaphore>,
     shutdown_rx: watch::Receiver<bool>,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl SchedulerManager {
@@ -36,6 +38,7 @@ impl SchedulerManager {
             running_jobs: Arc::new(parking_lot::RwLock::new(HashSet::new())),
             concurrency_semaphore: Arc::new(Semaphore::new(max_concurrent)),
             shutdown_rx,
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -123,13 +126,21 @@ impl SchedulerManager {
                     self.process_priority_queue_tick().await;
                 }
                 _ = self.shutdown_rx.changed() => {
-                    if *self.shutdown_rx.borrow() {
+                    if *self.shutdown_rx.borrow() || self.shutdown_flag.load(Ordering::Relaxed) {
                         tracing::info!("Scheduler shutting down");
                         break;
                     }
                 }
             }
+
+            if self.shutdown_flag.load(Ordering::Relaxed) {
+                break;
+            }
         }
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown_flag.store(true, Ordering::Relaxed);
     }
 
     async fn process_time_wheel_tick(&self) {

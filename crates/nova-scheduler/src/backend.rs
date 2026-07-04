@@ -276,3 +276,243 @@ impl SchedulerBackend for StorageSchedulerBackend {
         Ok(stats)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nova_core::StorageEngine;
+
+    struct MockStorage {
+        data: parking_lot::RwLock<std::collections::HashMap<Vec<u8>, nova_core::Value>>,
+    }
+
+    impl StorageEngine for MockStorage {
+        fn get(&self, key: &nova_core::Key) -> nova_core::Result<Option<nova_core::Value>> {
+            let data = self.data.read();
+            Ok(data.get(key.as_bytes()).cloned())
+        }
+        fn set(&self, key: &nova_core::Key, value: nova_core::Value) -> nova_core::Result<()> {
+            let mut data = self.data.write();
+            data.insert(key.as_bytes().to_vec(), value);
+            Ok(())
+        }
+        fn delete(&self, key: &nova_core::Key) -> nova_core::Result<bool> {
+            let mut data = self.data.write();
+            Ok(data.remove(key.as_bytes()).is_some())
+        }
+        fn scan(&self, range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+            let data = self.data.read();
+            let mut results = Vec::new();
+            let start = range.start.as_bytes().to_vec();
+            let end = range.end.as_bytes().to_vec();
+            for (k, v) in data.iter() {
+                if start.as_slice() <= k.as_slice() && k.as_slice() < end.as_slice() {
+                    results.push((nova_core::Key::from(k.clone()), v.clone()));
+                }
+            }
+            results.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+            Ok(results)
+        }
+        fn batch(&self, ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {
+            let mut data = self.data.write();
+            for op in ops {
+                match op {
+                    nova_core::WriteOperation::Set { key, value } => {
+                        data.insert(key.as_bytes().to_vec(), value);
+                    }
+                    nova_core::WriteOperation::Delete { key } => {
+                        data.remove(key.as_bytes());
+                    }
+                }
+            }
+            Ok(())
+        }
+        fn flush(&self) -> nova_core::Result<()> {
+            Ok(())
+        }
+        fn sync(&self) -> nova_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_backend() -> StorageSchedulerBackend {
+        StorageSchedulerBackend::new(Arc::new(MockStorage {
+            data: parking_lot::RwLock::new(std::collections::HashMap::new()),
+        }))
+    }
+
+    fn make_job() -> Job {
+        Job::new("test-job", chrono::Utc::now().timestamp_millis(), vec![])
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_job() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.id, job.id);
+        assert_eq!(retrieved.name, "test-job");
+        assert_eq!(retrieved.state, JobState::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_create_duplicate_job() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        let result = backend.create_job(job.clone()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_job() {
+        let backend = make_backend();
+        let result = backend.get_job(&uuid::Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_job() {
+        let backend = make_backend();
+        let mut job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        job.state = JobState::Running;
+        backend.update_job(job.clone()).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.state, JobState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_job() {
+        let backend = make_backend();
+        let job = make_job();
+        let result = backend.update_job(job).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_job() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        backend.delete_job(&job.id).await.unwrap();
+        let result = backend.get_job(&job.id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_job() {
+        let backend = make_backend();
+        let result = backend.delete_job(&uuid::Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_jobs() {
+        let backend = make_backend();
+        let job1 = make_job();
+        let job2 = make_job();
+        backend.create_job(job1).await.unwrap();
+        backend.create_job(job2).await.unwrap();
+        let jobs = backend.list_jobs(None).await.unwrap();
+        assert_eq!(jobs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_jobs_filter_by_state() {
+        let backend = make_backend();
+        let job1 = make_job();
+        let mut job2 = make_job();
+        job2.state = JobState::Completed;
+        backend.create_job(job1).await.unwrap();
+        backend.create_job(job2).await.unwrap();
+        let pending = backend.list_jobs(Some(JobState::Pending)).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        let completed = backend.list_jobs(Some(JobState::Completed)).await.unwrap();
+        assert_eq!(completed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mark_running() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        backend.mark_running(&job.id).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.state, JobState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_mark_completed() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        backend.mark_completed(&job.id).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.state, JobState::Completed);
+        assert!(retrieved.last_run_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mark_failed() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        backend.mark_failed(&job.id).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.state, JobState::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_mark_cancelled() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        backend.mark_cancelled(&job.id).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.state, JobState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_stats() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job).await.unwrap();
+        let stats = backend.stats().await.unwrap();
+        assert_eq!(stats.total_scheduled, 1);
+        assert_eq!(stats.jobs_pending, 1);
+    }
+
+    #[tokio::test]
+    async fn test_find_ready_jobs() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().timestamp_millis();
+        let job = Job::new("ready", now - 1000, vec![]);
+        backend.create_job(job).await.unwrap();
+        let ready = backend.find_ready_jobs(now, 10).await.unwrap();
+        assert_eq!(ready.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_reschedule() {
+        let backend = make_backend();
+        let job = make_job();
+        backend.create_job(job.clone()).await.unwrap();
+        let next_run = chrono::Utc::now().timestamp_millis() + 60000;
+        backend.reschedule(&job, next_run).await.unwrap();
+        let retrieved = backend.get_job(&job.id).await.unwrap();
+        assert_eq!(retrieved.next_run_at, next_run);
+        assert_eq!(retrieved.state, JobState::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_recover_pending_jobs() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().timestamp_millis();
+        let job = Job::new("recover", now - 1000, vec![]);
+        backend.create_job(job).await.unwrap();
+        let recovered = backend.recover_pending_jobs(now).await.unwrap();
+        assert_eq!(recovered.len(), 1);
+    }
+}

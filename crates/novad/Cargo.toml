@@ -24,11 +24,12 @@ nova-queue = { path = "../nova-queue" }
 nova-scheduler = { path = "../nova-scheduler" }
 nova-auth = { path = "../nova-auth" }
 nova-api = { path = "../nova-api" }
+nova-event = { path = "../nova-event" }
 
 [dev-dependencies]
-tempfile = "3.10"
+tempfile.workspace = true
 nix = { version = "0.28", features = ["signal"] }
-reqwest = { version = "0.11", features = ["json", "blocking"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
