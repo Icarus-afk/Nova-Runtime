@@ -5,6 +5,7 @@ import type { DashboardUser, ApiKey } from '../types';
 import MetricCard from '../components/MetricCard';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
+import { CheckIcon, XIcon } from '../components/Icons';
 
 export default function AuthPage() {
   const [activeTab, setActiveTab] = useState<'users' | 'apikeys'>('users');
@@ -50,8 +51,8 @@ export default function AuthPage() {
     { key: 'username', header: 'Username' },
     { key: 'email', header: 'Email' },
     { key: 'role', header: 'Role', width: '80px', render: (v: unknown) => <StatusBadge status={v === 'admin' ? 'healthy' : v === 'operator' ? 'degraded' : 'critical'} label={v as string} /> },
-    { key: 'mfa_enabled', header: 'MFA', width: '60px', render: (v: unknown) => v ? '✓' : '-' },
-    { key: 'enabled', header: 'Enabled', width: '60px', render: (v: unknown) => v ? '✓' : '✗' },
+    { key: 'mfa_enabled', header: 'MFA', width: '60px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : '-' },
+    { key: 'enabled', header: 'Enabled', width: '60px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
     { key: 'last_login_at', header: 'Last Login', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
     { key: 'created_at', header: 'Created', width: '140px', render: (v: unknown) => new Date(v as number).toLocaleString() },
   ];
@@ -60,7 +61,7 @@ export default function AuthPage() {
     { key: 'name', header: 'Name' },
     { key: 'key_prefix', header: 'Prefix', width: '100px', render: (v: unknown) => `${v}...` },
     { key: 'role', header: 'Role', width: '80px' },
-    { key: 'enabled', header: 'Enabled', width: '60px', render: (v: unknown) => v ? '✓' : '✗' },
+    { key: 'enabled', header: 'Enabled', width: '60px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
     { key: 'last_used_at', header: 'Last Used', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
     { key: 'expires_at', header: 'Expires', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
   ];
