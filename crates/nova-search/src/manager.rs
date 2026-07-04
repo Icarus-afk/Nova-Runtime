@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::analysis::AnalyzerPipeline;
 use crate::config::SearchConfig;
@@ -37,6 +38,7 @@ pub struct IndexStats {
 pub struct SearchManager {
     writer: Arc<RwLock<IndexWriter>>,
     config: SearchConfig,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SearchManager {
@@ -46,13 +48,18 @@ impl SearchManager {
         SearchManager {
             writer,
             config: SearchConfig::default(),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn with_config(config: SearchConfig) -> Self {
         let analyzer = AnalyzerPipeline::default();
         let writer = Arc::new(RwLock::new(IndexWriter::new(analyzer)));
-        SearchManager { writer, config }
+        SearchManager { writer, config, shutdown: Arc::new(AtomicBool::new(false)) }
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 
     pub fn index_document(&self, doc: IndexedDocument) -> Result<()> {

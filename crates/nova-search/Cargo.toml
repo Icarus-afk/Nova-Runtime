@@ -15,4 +15,4 @@ unicode-segmentation = "1.12"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
-proptest = "1"
+proptest.workspace = true

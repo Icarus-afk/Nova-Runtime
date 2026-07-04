@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::ast::*;
@@ -18,6 +19,7 @@ pub struct SQLEngine {
     #[allow(dead_code)]
     config: SQLConfig,
     tables: Arc<TableStore>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SQLEngine {
@@ -25,7 +27,12 @@ impl SQLEngine {
         SQLEngine {
             config,
             tables: Arc::new(TableStore::new()),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 
     pub fn execute(&self, sql: &str) -> Result<SQLResult> {

@@ -463,6 +463,9 @@ impl StorageEngineStore {
     }
 }
 
+// SAFETY: StorageEngineStore contains only an Arc<Store>, which is both Send and Sync.
+// The Arc provides thread-safe reference counting, and Store's internal mutability
+// is managed through parking_lot::RwLock, making it safe to share across threads.
 unsafe impl Send for StorageEngineStore {}
 unsafe impl Sync for StorageEngineStore {}
 

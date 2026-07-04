@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio::task::JoinHandle;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -13,6 +15,7 @@ pub struct CacheManager {
     backend: Arc<dyn CacheBackend>,
     config: CacheConfig,
     metrics: Arc<CacheMetrics>,
+    event_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl CacheManager {
@@ -21,6 +24,7 @@ impl CacheManager {
             backend,
             config,
             metrics: Arc::new(CacheMetrics::default()),
+            event_handle: Mutex::new(None),
         }
     }
 
@@ -33,6 +37,7 @@ impl CacheManager {
             backend,
             config,
             metrics,
+            event_handle: Mutex::new(None),
         }
     }
 
@@ -135,7 +140,7 @@ impl CacheManager {
             .map_err(|e| CacheError::Internal(e.to_string()))?;
 
         let backend = Arc::clone(&self.backend);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             loop {
                 let result = tokio::task::spawn_blocking({
                     let rx = rx.clone();
@@ -163,7 +168,19 @@ impl CacheManager {
             }
         });
 
+        if let Ok(mut guard) = self.event_handle.lock() {
+            *guard = Some(handle);
+        }
+
         Ok(())
+    }
+
+    pub fn shutdown(&self) {
+        if let Ok(mut guard) = self.event_handle.lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
     }
 }
 

@@ -86,7 +86,12 @@ impl MiddlewareChain {
 
         for mw in middleware_list.into_iter().rev() {
             let mw = mw.middleware.clone();
-            let prev = std::mem::replace(&mut composed, Box::new(|_, _| unreachable!()));
+            let prev = std::mem::replace(&mut composed, Box::new(|_, _| {
+                PipelineResult::Error(PipelineError::new(
+                    ErrorCode::InternalError,
+                    "middleware chain internal error: unreachable state",
+                ))
+            }));
             composed = Box::new(move |ctx, req| {
                 mw.handle(ctx, req, &prev)
             });

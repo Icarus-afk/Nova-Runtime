@@ -8,7 +8,7 @@ nova-core = { path = "../nova-core" }
 nova-security = { path = "../nova-security" }
 nova-cache = { path = "../nova-cache" }
 nova-executor = { path = "../nova-executor" }
-async-trait = "0.1"
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -18,11 +18,11 @@ chrono.workspace = true
 base64.workspace = true
 hex.workspace = true
 rand.workspace = true
-sha2 = "0.10"
+sha2.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
 
 [dev-dependencies]
-proptest = "1"
-tempfile = "3"
+proptest.workspace = true
+tempfile.workspace = true

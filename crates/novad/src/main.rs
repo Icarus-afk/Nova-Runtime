@@ -167,6 +167,19 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("Cache manager initialized");
 
+    // Initialize event bus
+    {
+        let ev_cfg = config.read().event.clone();
+        let event_bus = Arc::new(nova_event::EventBus::new(
+            ev_cfg.ordering_shards,
+            nova_event::OverflowPolicy::DropNewest,
+            4 * 1024 * 1024,
+            ev_cfg.dlq_max_entries as usize,
+        ));
+        tracing::info!("Event bus initialized ({} shards)", ev_cfg.ordering_shards);
+        let _event_bus = event_bus;
+    }
+
     // Initialize blob manager
     let blob_cfg = {
         let cfg = config.read().blob.clone();

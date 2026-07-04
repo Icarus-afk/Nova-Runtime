@@ -25,4 +25,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
-tempfile = "3"
+tempfile.workspace = true
