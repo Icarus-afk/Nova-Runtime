@@ -1,32 +1,114 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
-    /// Create a new user
     CreateUser {
         username: String,
         role: Option<String>,
     },
-    /// Delete a user
     DeleteUser {
         username: String,
     },
-    /// List all users
     ListUsers,
-    /// Create a new API key
     CreateApiKey {
         name: String,
     },
-    /// Revoke an API key
     RevokeApiKey {
         key_id: String,
     },
 }
 
 impl AuthCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
-        println!("Auth command not yet implemented");
-        Ok(())
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+        match self {
+            AuthCommands::ListUsers => {
+                match client.get("/v1/auth/users") {
+                    Ok(body) => {
+                        let users = if body.is_array() {
+                            body.clone()
+                        } else {
+                            body.get("users").cloned().unwrap_or(body.clone())
+                        };
+                        if let Some(arr) = users.as_array() {
+                            output::print_table_from_json(
+                                &["Username", "Role", "Status"],
+                                arr,
+                                |u| vec![
+                                    u["username"].as_str().unwrap_or("-").to_string(),
+                                    u["role"].as_str().unwrap_or("-").to_string(),
+                                    u["status"].as_str().unwrap_or("active").to_string(),
+                                ],
+                                &ctx.output,
+                            )?;
+                        } else {
+                            output::print_value(&body, &ctx.output)?;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to list users: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            AuthCommands::CreateUser { username, role } => {
+                let mut body = serde_json::json!({"username": username});
+                if let Some(r) = role {
+                    body["role"] = serde_json::json!(r);
+                }
+                match client.post("/v1/auth/users", Some(&body)) {
+                    Ok(resp) => {
+                        output::print_value(&resp, &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create user: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            AuthCommands::DeleteUser { username } => {
+                match client.delete(&format!("/v1/auth/users/{username}")) {
+                    Ok(resp) => {
+                        output::print_value(&resp, &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to delete user: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            AuthCommands::CreateApiKey { name } => {
+                let body = serde_json::json!({"name": name});
+                match client.post("/v1/auth/api-keys", Some(&body)) {
+                    Ok(resp) => {
+                        output::print_value(&resp, &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create API key: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            AuthCommands::RevokeApiKey { key_id } => {
+                match client.delete(&format!("/v1/auth/api-keys/{key_id}")) {
+                    Ok(resp) => {
+                        output::print_value(&resp, &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to revoke API key: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -69,18 +151,5 @@ mod tests {
     #[test]
     fn test_revoke_api_key() {
         assert!(matches!(parse(&["test", "revoke-api-key", "key-123"]), AuthCommands::RevokeApiKey { .. }));
-    }
-
-    #[test]
-    fn test_execute_returns_ok() {
-        for cmd in &[
-            AuthCommands::ListUsers,
-            AuthCommands::CreateUser { username: "u".into(), role: None },
-            AuthCommands::DeleteUser { username: "u".into() },
-            AuthCommands::CreateApiKey { name: "k".into() },
-            AuthCommands::RevokeApiKey { key_id: "id".into() },
-        ] {
-            assert!(cmd.execute().is_ok());
-        }
     }
 }

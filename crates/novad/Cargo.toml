@@ -25,6 +25,9 @@ nova-scheduler = { path = "../nova-scheduler" }
 nova-auth = { path = "../nova-auth" }
 nova-api = { path = "../nova-api" }
 nova-event = { path = "../nova-event" }
+nova-gql = { path = "../nova-gql" }
+axum.workspace = true
+async-graphql = { version = "6", features = ["chrono", "uuid"] }
 
 [dev-dependencies]
 tempfile.workspace = true

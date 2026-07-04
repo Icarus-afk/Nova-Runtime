@@ -1,40 +1,134 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum QueueCommands {
-    /// List all queues
     List,
-    /// Create a new queue
     Create {
         name: String,
         #[arg(short, long)]
         durable: bool,
     },
-    /// Delete a queue
     Delete {
         name: String,
     },
-    /// Publish a message to a queue
     Publish {
         queue: String,
         message: String,
     },
-    /// Consume messages from a queue
     Consume {
         queue: String,
         #[arg(long)]
         count: Option<u32>,
     },
-    /// Get queue stats
     Stats {
         name: String,
     },
 }
 
 impl QueueCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
-        println!("Queue command not yet implemented");
-        Ok(())
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+        match self {
+            QueueCommands::List => {
+                match client.get("/v1/queues") {
+                    Ok(body) => {
+                        let queues = if body.is_array() {
+                            body.clone()
+                        } else {
+                            body.get("queues").cloned().unwrap_or(body.clone())
+                        };
+                        if let Some(arr) = queues.as_array() {
+                            output::print_table_from_json(
+                                &["Name", "Messages", "Durable"],
+                                arr,
+                                |q| vec![
+                                    q["name"].as_str().unwrap_or("-").to_string(),
+                                    q["messages"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                                    q["durable"].as_bool().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                                ],
+                                &ctx.output,
+                            )?;
+                        } else {
+                            output::print_value(&body, &ctx.output)?;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to list queues: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            QueueCommands::Create { name, durable } => {
+                let body = serde_json::json!({"name": name, "durable": durable});
+                match client.post("/v1/queues", Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to create queue: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            QueueCommands::Delete { name } => {
+                match client.delete(&format!("/v1/queues/{name}")) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to delete queue: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            QueueCommands::Publish { queue, message } => {
+                let body = serde_json::json!({"message": message});
+                match client.post(&format!("/v1/queues/{queue}/messages"), Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to publish message: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            QueueCommands::Consume { queue, count } => {
+                let path = format!("/v1/queues/{queue}/messages");
+                match count {
+                    Some(n) => {
+                        match client.get_with_query(&path, &[("count", &n.to_string())]) {
+                            Ok(body) => output::print_value(&body, &ctx.output)?,
+                            Err(e) => {
+                                eprintln!("Failed to consume messages: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    None => {
+                        match client.get(&path) {
+                            Ok(body) => output::print_value(&body, &ctx.output)?,
+                            Err(e) => {
+                                eprintln!("Failed to consume messages: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            QueueCommands::Stats { name } => {
+                match client.get(&format!("/v1/queues/{name}/stats")) {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to get queue stats: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -83,15 +177,5 @@ mod tests {
     #[test]
     fn test_stats() {
         assert!(matches!(parse(&["test", "stats", "q"]), QueueCommands::Stats { .. }));
-    }
-
-    #[test]
-    fn test_execute_returns_ok() {
-        assert!(QueueCommands::List.execute().is_ok());
-        assert!(QueueCommands::Create { name: "q".into(), durable: true }.execute().is_ok());
-        assert!(QueueCommands::Delete { name: "q".into() }.execute().is_ok());
-        assert!(QueueCommands::Publish { queue: "q".into(), message: "m".into() }.execute().is_ok());
-        assert!(QueueCommands::Consume { queue: "q".into(), count: None }.execute().is_ok());
-        assert!(QueueCommands::Stats { name: "q".into() }.execute().is_ok());
     }
 }

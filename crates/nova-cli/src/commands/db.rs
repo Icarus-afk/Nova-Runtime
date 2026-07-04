@@ -1,41 +1,133 @@
 use clap::Subcommand;
+use crate::app::CommandContext;
+use crate::client::ApiClient;
+use crate::output;
 
 #[derive(Subcommand)]
 pub enum DbCommands {
-    /// List databases
     List,
-    /// Create a database
     Create {
         name: String,
     },
-    /// Drop a database
     Drop {
         name: String,
     },
-    /// List collections in a database
     Collections {
         database: String,
     },
-    /// Create a collection
     CreateCollection {
         database: String,
         collection: String,
     },
-    /// Drop a collection
     DropCollection {
         database: String,
         collection: String,
     },
-    /// Get database stats
     Stats {
         database: Option<String>,
     },
 }
 
 impl DbCommands {
-    pub fn execute(&self) -> anyhow::Result<()> {
-        println!("Database command not yet implemented");
-        Ok(())
+    pub fn execute(&self, ctx: &CommandContext) -> anyhow::Result<()> {
+        let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+        match self {
+            DbCommands::List => {
+                match client.get("/v1/databases") {
+                    Ok(body) => {
+                        let dbs = if body.is_array() {
+                            body.clone()
+                        } else {
+                            body.get("databases").cloned().unwrap_or(body.clone())
+                        };
+                        if let Some(arr) = dbs.as_array() {
+                            output::print_table_from_json(
+                                &["Name", "Collections"],
+                                arr,
+                                |d| vec![
+                                    d["name"].as_str().unwrap_or("-").to_string(),
+                                    d["collections"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                                ],
+                                &ctx.output,
+                            )?;
+                        } else {
+                            output::print_value(&body, &ctx.output)?;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to list databases: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::Create { name } => {
+                let body = serde_json::json!({"name": name});
+                match client.post("/v1/databases", Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to create database: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::Drop { name } => {
+                match client.delete(&format!("/v1/databases/{name}")) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to drop database: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::Collections { database } => {
+                match client.get(&format!("/v1/databases/{database}/collections")) {
+                    Ok(body) => output::print_value(&body, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to list collections: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::CreateCollection { database, collection } => {
+                let body = serde_json::json!({"name": collection, "database": database});
+                match client.post(&format!("/v1/databases/{database}/collections"), Some(&body)) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to create collection: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::DropCollection { database, collection } => {
+                match client.delete(&format!("/v1/databases/{database}/collections/{collection}")) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to drop collection: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            DbCommands::Stats { database } => {
+                let path = match database {
+                    Some(d) => format!("/v1/databases/{d}/stats"),
+                    None => "/v1/databases/stats".to_string(),
+                };
+                match client.get(&path) {
+                    Ok(resp) => output::print_value(&resp, &ctx.output)?,
+                    Err(e) => {
+                        eprintln!("Failed to get database stats: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -88,16 +180,5 @@ mod tests {
     fn test_stats() {
         assert!(matches!(parse(&["test", "stats"]), DbCommands::Stats { database: None }));
         assert!(matches!(parse(&["test", "stats", "mydb"]), DbCommands::Stats { database: Some(_) }));
-    }
-
-    #[test]
-    fn test_execute_returns_ok() {
-        assert!(DbCommands::List.execute().is_ok());
-        assert!(DbCommands::Create { name: "d".into() }.execute().is_ok());
-        assert!(DbCommands::Drop { name: "d".into() }.execute().is_ok());
-        assert!(DbCommands::Collections { database: "d".into() }.execute().is_ok());
-        assert!(DbCommands::CreateCollection { database: "d".into(), collection: "c".into() }.execute().is_ok());
-        assert!(DbCommands::DropCollection { database: "d".into(), collection: "c".into() }.execute().is_ok());
-        assert!(DbCommands::Stats { database: None }.execute().is_ok());
     }
 }

@@ -1,6 +1,9 @@
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use axum::response::{Html, IntoResponse, Json};
+use axum::routing::get;
+use axum::{Extension, Router};
 
 #[derive(Parser)]
 #[command(name = "novad", version, about = "Nova Runtime Daemon")]
@@ -137,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Execution engine initialized");
 
     // Initialize cache manager
-    {
+    let cache_mgr = {
         let cfg = config.read().cache.clone();
         let eviction_policy = match cfg.eviction_policy.as_str() {
             "Lfu" => nova_cache::EvictionPolicy::Lfu,
@@ -163,8 +166,8 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(nova_cache::CacheMetrics::default()),
             )?
         );
-        let _cache_mgr = Arc::new(nova_cache::CacheManager::new(backend, cache_cfg));
-    }
+        Arc::new(nova_cache::CacheManager::new(backend, cache_cfg))
+    };
     tracing::info!("Cache manager initialized");
 
     // Initialize event bus
@@ -181,38 +184,40 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize blob manager
-    let blob_cfg = {
-        let cfg = config.read().blob.clone();
-        nova_blob::BlobConfig {
-            chunk_size: cfg.chunk_size,
-            max_blob_size: cfg.max_blob_size,
-            gc_interval_secs: cfg.gc_interval_secs,
-            gc_grace_period_secs: cfg.gc_grace_period_secs,
-            data_dir: cfg.data_dir,
-            chunk_nesting_depth: cfg.chunk_nesting_depth,
-        }
+    let blob_mgr = {
+        let blob_cfg = {
+            let cfg = config.read().blob.clone();
+            nova_blob::BlobConfig {
+                chunk_size: cfg.chunk_size,
+                max_blob_size: cfg.max_blob_size,
+                gc_interval_secs: cfg.gc_interval_secs,
+                gc_grace_period_secs: cfg.gc_grace_period_secs,
+                data_dir: cfg.data_dir,
+                chunk_nesting_depth: cfg.chunk_nesting_depth,
+            }
+        };
+        Arc::new(nova_blob::BlobManager::new(blob_cfg).await?)
     };
-    let _blob_mgr = Arc::new(nova_blob::BlobManager::new(blob_cfg).await?);
     tracing::info!("Blob manager initialized");
 
     // Initialize search manager
-    let search_cfg = {
-        let cfg = config.read().search.clone();
-        nova_search::SearchConfig {
-            default_limit: cfg.default_limit,
-            max_limit: cfg.max_limit,
-            bm25_k1: cfg.bm25_k1,
-            bm25_b: cfg.bm25_b,
-            fuzzy_max_distance: cfg.fuzzy_max_distance,
-            highlight_snippet_len: cfg.highlight_snippet_len,
-            highlight_max_snippets: cfg.highlight_max_snippets,
-            refresh_interval_ms: cfg.refresh_interval_ms,
-            merge_segment_threshold: cfg.merge_segment_threshold,
-        }
+    let search_mgr: Arc<nova_search::SearchManager> = {
+        let search_cfg = {
+            let cfg = config.read().search.clone();
+            nova_search::SearchConfig {
+                default_limit: cfg.default_limit,
+                max_limit: cfg.max_limit,
+                bm25_k1: cfg.bm25_k1,
+                bm25_b: cfg.bm25_b,
+                fuzzy_max_distance: cfg.fuzzy_max_distance,
+                highlight_snippet_len: cfg.highlight_snippet_len,
+                highlight_max_snippets: cfg.highlight_max_snippets,
+                refresh_interval_ms: cfg.refresh_interval_ms,
+                merge_segment_threshold: cfg.merge_segment_threshold,
+            }
+        };
+        Arc::new(nova_search::SearchManager::with_config(search_cfg))
     };
-    let _search_mgr = Arc::new(parking_lot::RwLock::new(
-        nova_search::SearchManager::with_config(search_cfg),
-    ));
     tracing::info!("Search manager initialized");
 
     // Initialize SQL engine
@@ -224,11 +229,11 @@ async fn main() -> anyhow::Result<()> {
             default_limit: cfg.default_limit,
         }
     };
-    let _sql_engine = Arc::new(nova_sql::SQLEngine::new(sql_cfg));
+    let sql_engine = Arc::new(nova_sql::SQLEngine::new(sql_cfg));
     tracing::info!("SQL engine initialized");
 
     // Initialize queue manager
-    {
+    let queue_mgr = {
         let cfg = config.read().queue.clone();
         let queue_cfg = nova_queue::QueueConfig {
             max_queues: cfg.max_queues,
@@ -250,14 +255,12 @@ async fn main() -> anyhow::Result<()> {
         let backend: Arc<dyn nova_queue::QueueBackend> = Arc::new(
             nova_queue::StorageQueueBackend::new(engine),
         );
-        let _queue_mgr = Arc::new(nova_queue::QueueManager::new(backend, queue_cfg));
-    }
+        Arc::new(nova_queue::QueueManager::new(backend, queue_cfg))
+    };
     tracing::info!("Queue manager initialized");
 
-
-
     // Initialize auth manager
-    {
+    let auth_mgr = {
         let cfg = config.read().auth.clone();
         let auth_cfg = nova_auth::AuthConfig {
             session_ttl_secs: cfg.session.ttl_seconds,
@@ -277,18 +280,46 @@ async fn main() -> anyhow::Result<()> {
             password_min_digits: cfg.internal.password_policy.min_digits,
             password_min_special: cfg.internal.password_policy.min_special,
         };
-        let auth_mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg));
+        let mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg));
 
-        // Register auth middleware with pipeline
-        let middleware_reg = auth_mgr.create_middleware_registration(0);
+        let middleware_reg = mgr.create_middleware_registration(0);
         if let Err(e) = pipeline.register_middleware(middleware_reg) {
             tracing::warn!("Failed to register auth middleware: {}", e);
         }
 
-        // Store reference
-        let _auth_mgr = auth_mgr;
-    }
+        mgr
+    };
     tracing::info!("Auth manager initialized");
+
+    // Shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Initialize scheduler manager
+    let scheduler_mgr = {
+        let cfg = config.read().scheduler.clone();
+        let scheduler_cfg = nova_scheduler::SchedulerConfig {
+            time_wheel_tick_ms: cfg.time_wheel_tick_ms,
+            time_wheel_slots: cfg.time_wheel_slots,
+            priority_queue_tick_ms: cfg.priority_queue_tick_ms,
+            max_jobs_per_queue: cfg.max_jobs_per_queue,
+            max_concurrent_jobs: cfg.max_concurrent_jobs,
+            default_job_timeout_secs: cfg.default_job_timeout_secs,
+            default_max_retries: cfg.default_max_retries,
+            default_retry_delay_secs: cfg.default_retry_delay_secs,
+            enable_startup_recovery: cfg.enable_startup_recovery,
+            enable_catch_up: cfg.enable_catch_up,
+        };
+        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
+            nova_storage::StorageEngineStore::new(store.clone()),
+        );
+        let backend: Arc<dyn nova_scheduler::SchedulerBackend> = Arc::new(
+            nova_scheduler::StorageSchedulerBackend::new(engine),
+        );
+        Arc::new(
+            nova_scheduler::SchedulerManager::new(backend, scheduler_cfg, shutdown_rx.clone()),
+        )
+    };
+    tracing::info!("Scheduler manager initialized");
 
     // Build admin state
     let listen_addr = format!("{}:{}", config.read().networking.listen_address, config.read().networking.listen_port);
@@ -296,12 +327,16 @@ async fn main() -> anyhow::Result<()> {
         started_at: std::time::Instant::now(),
         pipeline: pipeline.clone(),
         config: config.clone(),
-        memory_mgr: Some(memory_mgr),
+        memory_mgr: Some(memory_mgr.clone()),
+        sql_engine: Some(sql_engine.clone()),
+        cache_mgr: Some(cache_mgr.clone()),
+        queue_mgr: Some(queue_mgr.clone()),
+        scheduler_mgr: Some(scheduler_mgr.clone()),
+        search_mgr: Some(search_mgr.clone()),
+        blob_mgr: Some(blob_mgr.clone()),
+        auth_mgr: Some(auth_mgr.clone()),
         storage_ok: true,
     });
-
-    // Shutdown channel
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Handle SIGINT / SIGTERM
     let shutdown_tx_clone = shutdown_tx.clone();
@@ -328,39 +363,31 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("SIGHUP handler not available on this platform");
     }
 
-    // Initialize scheduler manager
-    {
-        let cfg = config.read().scheduler.clone();
-        let scheduler_cfg = nova_scheduler::SchedulerConfig {
-            time_wheel_tick_ms: cfg.time_wheel_tick_ms,
-            time_wheel_slots: cfg.time_wheel_slots,
-            priority_queue_tick_ms: cfg.priority_queue_tick_ms,
-            max_jobs_per_queue: cfg.max_jobs_per_queue,
-            max_concurrent_jobs: cfg.max_concurrent_jobs,
-            default_job_timeout_secs: cfg.default_job_timeout_secs,
-            default_max_retries: cfg.default_max_retries,
-            default_retry_delay_secs: cfg.default_retry_delay_secs,
-            enable_startup_recovery: cfg.enable_startup_recovery,
-            enable_catch_up: cfg.enable_catch_up,
-        };
-        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
-            nova_storage::StorageEngineStore::new(store.clone()),
-        );
-        let backend: Arc<dyn nova_scheduler::SchedulerBackend> = Arc::new(
-            nova_scheduler::StorageSchedulerBackend::new(engine),
-        );
-        let scheduler_shutdown_rx = shutdown_rx.clone();
-        let _scheduler_mgr = Arc::new(parking_lot::RwLock::new(
-            nova_scheduler::SchedulerManager::new(backend, scheduler_cfg, scheduler_shutdown_rx),
-        ));
-    }
-    tracing::info!("Scheduler manager initialized");
+    // Build GraphQL context and schema
+    let app_ctx = Arc::new(nova_gql::context::AppContext {
+        started_at: std::time::Instant::now(),
+        pipeline: pipeline.clone(),
+        config: config.clone(),
+        memory_mgr: Some(memory_mgr),
+        cache: cache_mgr.clone(),
+        queue: queue_mgr.clone(),
+        scheduler: scheduler_mgr.clone(),
+        search: search_mgr.clone(),
+        blob: blob_mgr.clone(),
+        auth: auth_mgr.clone(),
+        sql: sql_engine.clone(),
+    });
+    let gql_schema = nova_gql::schema::build_schema(app_ctx);
+    let gql_router = Router::new()
+        .route("/graphql", get(graphql_playground).post(graphql_handler))
+        .layer(Extension(gql_schema));
 
     println!();
     println!("  ╔══════════════════════════════════════╗");
     println!("  ║         Nova Runtime v{:<14} ║", env!("CARGO_PKG_VERSION"));
     println!("  ║     Status: RUNNING                   ║");
     println!("  ║     Listen: {:18} ║", listen_addr);
+    println!("  ║     GraphQL: /graphql                 ║");
     println!("  ║     PID:    {:<27} ║", std::process::id());
     println!("  ╚══════════════════════════════════════╝");
     println!();
@@ -370,6 +397,7 @@ async fn main() -> anyhow::Result<()> {
         &listen_addr,
         admin_state,
         shutdown_rx,
+        Some(gql_router),
     ).await;
 
     match server_result {
@@ -398,6 +426,17 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Goodbye.");
     Ok(())
+}
+
+async fn graphql_playground() -> impl IntoResponse {
+    Html(include_str!("../static/graphql-playground.html"))
+}
+
+async fn graphql_handler(
+    Extension(schema): Extension<nova_gql::schema::NovaSchema>,
+    Json(req): Json<async_graphql::Request>,
+) -> Json<async_graphql::Response> {
+    Json(schema.execute(req).await)
 }
 
 /// Resolve the config file path to watch for hot-reload.

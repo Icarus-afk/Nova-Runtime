@@ -1,7 +1,8 @@
 use crate::admin::{self, AdminState};
 use crate::middleware::{request_logger, cors_layer};
+use crate::routes;
 use axum::http::StatusCode;
-use axum::response::Json;
+use axum::response::{Html, Json};
 use axum::{Router, middleware};
 use serde_json::json;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ pub async fn start_server(
     addr: &str,
     admin_state: Arc<AdminState>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    graphql_router: Option<Router>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fallback = || async {
         (StatusCode::NOT_FOUND, Json(json!({
@@ -21,12 +23,17 @@ pub async fn start_server(
         })))
     };
 
-    let app = Router::new()
-        .nest("/", admin::routes(admin_state))
+    let mut app = Router::new()
+        .nest("/", admin::routes(admin_state.clone()))
+        .nest("/api/v1", routes::v1_routes(admin_state))
         .fallback(fallback)
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))
         .layer(TraceLayer::new_for_http());
+
+    if let Some(gql) = graphql_router {
+        app = app.merge(gql);
+    }
 
     let listener = TcpListener::bind(addr).await?;
     info!("HTTP server listening on {}", addr);
