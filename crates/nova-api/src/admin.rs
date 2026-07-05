@@ -43,14 +43,43 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let storage_ok = state.storage_ok;
     let memory_ok = state.memory_mgr.as_ref().map(|_| true).unwrap_or(true);
     let healthy = storage_ok && memory_ok;
+
+    let mem_used_bytes = state.memory_mgr.as_ref().map(|m| m.total_used()).unwrap_or(0);
+    let mem_max_bytes = state.config.read().memory.max_memory;
+
+    let disk_info = std::fs::metadata(state.config.read().general.data_dir.clone())
+        .ok()
+        .map(|meta| {
+            let total = 0u64;
+            let used = meta.len();
+            let free = 0u64;
+            (total, used, free)
+        })
+        .unwrap_or((0, 0, 0));
+
+    let subsystems = json!({
+        "database": {"status": if state.sql_engine.is_some() { "healthy" } else { "disabled" }},
+        "cache": {"status": if state.cache_mgr.is_some() { "healthy" } else { "disabled" }},
+        "queue": {"status": if state.queue_mgr.is_some() { "healthy" } else { "disabled" }},
+        "scheduler": {"status": if state.scheduler_mgr.is_some() { "healthy" } else { "disabled" }},
+        "search": {"status": if state.search_mgr.is_some() { "healthy" } else { "disabled" }},
+        "blob": {"status": if state.blob_mgr.is_some() { "healthy" } else { "disabled" }},
+    });
+
     Json(json!({
         "status": if healthy { "healthy" } else { "degraded" },
         "uptime_secs": uptime,
-        "checks": {
-            "storage": storage_ok,
-            "memory": memory_ok,
-        },
         "version": env!("CARGO_PKG_VERSION"),
+        "memory": {
+            "total_bytes": mem_max_bytes,
+            "used_bytes": mem_used_bytes,
+        },
+        "disk": {
+            "total_bytes": disk_info.0,
+            "used_bytes": disk_info.1,
+            "free_bytes": disk_info.2,
+        },
+        "subsystems": subsystems,
     }))
 }
 
@@ -216,6 +245,7 @@ mod tests {
     use super::*;
     use axum::extract::State;
     use nova_executor::PipelineConfig;
+    use parking_lot::RwLock;
 
     fn make_state() -> Arc<AdminState> {
         Arc::new(AdminState {
