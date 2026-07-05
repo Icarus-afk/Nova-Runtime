@@ -29,6 +29,7 @@ pub enum JobState {
     Failed,
     Cancelled,
     Skipped,
+    Paused,
 }
 
 impl Default for JobState {
@@ -291,6 +292,7 @@ pub struct SchedulerStats {
     pub jobs_failed: u64,
     pub jobs_cancelled: u64,
     pub jobs_skipped: u64,
+    pub jobs_paused: u64,
     pub total_scheduled: u64,
     pub total_executed: u64,
     pub total_failures: u64,

@@ -112,7 +112,7 @@ impl PriorityQueue {
         let mut jobs = self.jobs.write();
         let mut due = Vec::new();
 
-        while let Some((ts, id)) = jobs.first() {
+        while let Some((ts, _)) = jobs.first() {
             if *ts <= now_ms {
                 due.push(jobs.remove(0).1);
             } else {
