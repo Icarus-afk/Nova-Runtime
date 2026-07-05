@@ -113,6 +113,30 @@ impl Credential {
     }
 }
 
+/// A stored user record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRecord {
+    pub id: Uuid,
+    pub username: String,
+    pub password_hash: String,
+    pub roles: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A stored API key record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyRecord {
+    pub id: Uuid,
+    pub name: String,
+    pub key_hash: String,
+    pub prefix: String,
+    pub permissions: Vec<String>,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
+    pub enabled: bool,
+}
+
 /// Result of an authentication attempt.
 #[derive(Debug, Clone)]
 pub struct AuthResult {

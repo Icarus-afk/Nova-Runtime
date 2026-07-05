@@ -3,6 +3,8 @@ use crate::types::*;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use dashmap::DashMap;
+use crate::types::UserRecord;
 
 /// Abstract authentication provider trait.
 /// Each provider handles one credential type.
@@ -25,42 +27,27 @@ pub trait AuthProvider: Send + Sync {
 pub struct PasswordProvider {
     name: String,
     config: AuthConfig,
+    users: Arc<DashMap<String, UserRecord>>,
 }
 
 impl PasswordProvider {
-    pub fn new(name: &str, config: AuthConfig) -> Self {
+    pub fn new(name: &str, config: AuthConfig, users: Arc<DashMap<String, UserRecord>>) -> Self {
         PasswordProvider {
             name: name.to_string(),
             config,
+            users,
         }
     }
 
-    /// Hash a password using a simple SHA-256 + salt approach.
-    /// In production, this would use argon2 or bcrypt.
-    fn hash_password(password: &str, salt: &str) -> String {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(salt.as_bytes());
-        hasher.update(password.as_bytes());
-        let result = hasher.finalize();
-        format!("sha256:{}:{}", salt, hex::encode(result))
+    /// Hash a password with bcrypt.
+    fn hash_password(password: &str, cost: u32) -> String {
+        use bcrypt::{hash, DEFAULT_COST};
+        let actual_cost = if cost == 0 { DEFAULT_COST } else { cost };
+        hash(password, actual_cost).unwrap_or_else(|_| panic!("bcrypt hash failed"))
     }
 
     fn verify_password(password: &str, stored_hash: &str) -> bool {
-        if let Some(hash_body) = stored_hash.strip_prefix("sha256:") {
-            if let Some(salt_end) = hash_body.find(':') {
-                let salt = &hash_body[..salt_end];
-                let expected = &hash_body[salt_end + 1..];
-                let computed = Self::hash_password(password, salt);
-                let computed_hash = computed.strip_prefix("sha256:").unwrap_or(&computed);
-                // Extract just the hex part
-                if let Some(computed_hex_end) = computed_hash.find(':') {
-                    let computed_hex = &computed_hash[computed_hex_end + 1..];
-                    return computed_hex == expected;
-                }
-            }
-        }
-        false
+        bcrypt::verify(password, stored_hash).unwrap_or(false)
     }
 }
 
@@ -80,19 +67,20 @@ impl AuthProvider for PasswordProvider {
         let password = credentials.get("password")
             .ok_or_else(|| AuthError::InvalidCredentials("missing password".into()))?;
 
-        // Validate password format
-        let _ = validate_password(password, &self.config)
-            .map_err(|errors| AuthError::PasswordPolicyViolation(errors.join("; ")))?;
+        let user = self.users.get(username)
+            .ok_or_else(|| AuthError::InvalidCredentials("invalid username or password".into()))?;
 
-        // In a real implementation, we'd look up the stored credential from the backend.
-        // For now, return a simple auth result.
+        if !Self::verify_password(password, &user.password_hash) {
+            return Err(AuthError::InvalidCredentials("invalid username or password".into()));
+        }
+
         Ok(AuthResult {
             success: true,
             session: None,
-            user_id: None,
+            user_id: Some(user.id),
             username: Some(username.clone()),
-            roles: vec!["user".to_string()],
-            permissions: vec!["read".to_string()],
+            roles: user.roles.clone(),
+            permissions: vec!["*".to_string()],
             mfa_required: false,
             error_message: None,
             retry_after_ms: None,
@@ -106,8 +94,16 @@ impl AuthProvider for PasswordProvider {
     }
 
     async fn create_credential(&self, credential: Credential) -> Result<()> {
-        // Stub: in production, store in StorageEngine via a CredentialBackend
-        tracing::info!("Creating credential for user {} via provider {}", credential.user_id, self.name);
+        let user = UserRecord {
+            id: credential.user_id,
+            username: credential.identifier.clone(),
+            password_hash: credential.secret_hash,
+            roles: vec!["user".to_string()],
+            created_at: credential.created_at,
+            updated_at: credential.created_at,
+        };
+        self.users.insert(credential.identifier.clone(), user);
+        tracing::info!("Created credential for user {} via provider {}", credential.user_id, self.name);
         Ok(())
     }
 }
@@ -278,7 +274,8 @@ mod tests {
     #[test]
     fn test_password_provider_new() {
         let config = AuthConfig::default();
-        let provider = PasswordProvider::new("local", config);
+        let users = Arc::new(DashMap::new());
+        let provider = PasswordProvider::new("local", config, users);
         assert_eq!(provider.name(), "local");
         assert_eq!(provider.credential_type(), CredentialType::Password);
     }
@@ -286,9 +283,8 @@ mod tests {
     #[test]
     fn test_password_hashing_and_verification() {
         let password = "MySecurePassword123!";
-        let salt = "random_salt_value";
-        let hash = PasswordProvider::hash_password(password, salt);
-        assert!(hash.starts_with("sha256:"));
+        let hash = PasswordProvider::hash_password(password, 4);
+        assert!(hash.starts_with("$2"));
         assert!(PasswordProvider::verify_password(password, &hash));
         assert!(!PasswordProvider::verify_password("wrong_password", &hash));
     }
@@ -310,7 +306,8 @@ mod tests {
     #[test]
     fn test_provider_registry() {
         let mut registry = ProviderRegistry::new();
-        let password_provider = Arc::new(PasswordProvider::new("local", AuthConfig::default()));
+        let users = Arc::new(DashMap::new());
+        let password_provider = Arc::new(PasswordProvider::new("local", AuthConfig::default(), users));
         let api_key_provider = Arc::new(ApiKeyProvider::new("api-keys"));
 
         assert!(registry.register(password_provider).is_ok());
@@ -324,7 +321,8 @@ mod tests {
     #[test]
     fn test_provider_registry_duplicate() {
         let mut registry = ProviderRegistry::new();
-        let provider = Arc::new(PasswordProvider::new("local", AuthConfig::default()));
+        let users = Arc::new(DashMap::new());
+        let provider = Arc::new(PasswordProvider::new("local", AuthConfig::default(), users));
         assert!(registry.register(provider.clone()).is_ok());
         assert!(registry.register(provider).is_err());
     }
@@ -332,7 +330,8 @@ mod tests {
     #[test]
     fn test_provider_registry_get_by_type() {
         let mut registry = ProviderRegistry::new();
-        registry.register(Arc::new(PasswordProvider::new("local", AuthConfig::default()))).unwrap();
+        let users = Arc::new(DashMap::new());
+        registry.register(Arc::new(PasswordProvider::new("local", AuthConfig::default(), users))).unwrap();
         registry.register(Arc::new(ApiKeyProvider::new("api"))).unwrap();
 
         assert!(registry.get_by_type(CredentialType::Password).is_some());
@@ -343,7 +342,8 @@ mod tests {
     #[test]
     fn test_password_provider_validate_credential() {
         let config = AuthConfig::default();
-        let provider = PasswordProvider::new("local", config);
+        let users = Arc::new(DashMap::new());
+        let provider = PasswordProvider::new("local", config, users);
         assert!(provider.validate_credential("ValidPass1!").is_ok());
         assert!(provider.validate_credential("short").is_err());
     }

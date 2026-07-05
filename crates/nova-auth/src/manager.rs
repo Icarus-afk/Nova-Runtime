@@ -7,10 +7,14 @@ use crate::providers::{AuthProvider, ProviderRegistry};
 use crate::rbac::RbacEngine;
 use crate::session::SessionManager;
 use crate::types::*;
+use crate::types::{UserRecord, ApiKeyRecord};
 use nova_executor::middleware::{Middleware, MiddlewareRegistration};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
+use dashmap::DashMap;
+use rand::Rng;
+use sha2::{Sha256, Digest};
 
 /// Central manager for the authentication subsystem.
 pub struct AuthManager {
@@ -22,6 +26,8 @@ pub struct AuthManager {
     mfa_store: Arc<parking_lot::RwLock<MfaStore>>,
     password_policy: PasswordPolicyEngine,
     mfa_provider: MfaProvider,
+    users: Arc<DashMap<String, UserRecord>>,
+    api_keys: Arc<DashMap<String, ApiKeyRecord>>,
 }
 
 impl AuthManager {
@@ -40,9 +46,11 @@ impl AuthManager {
             rbac_engine: Arc::new(parking_lot::RwLock::new(RbacEngine::new())),
             brute_force_detector: brute_force,
             mfa_store: Arc::new(parking_lot::RwLock::new(MfaStore::new())),
-            password_policy: PasswordPolicyEngine::new(&config),
-            mfa_provider: MfaProvider::new(&config.mfa_issuer, config.mfa_window),
-        }
+        password_policy: PasswordPolicyEngine::new(&config),
+        mfa_provider: MfaProvider::new(&config.mfa_issuer, config.mfa_window),
+        users: Arc::new(DashMap::new()),
+        api_keys: Arc::new(DashMap::new()),
+    }
     }
 
     pub fn session_manager(&self) -> &Arc<SessionManager> {
@@ -220,6 +228,119 @@ impl AuthManager {
     pub fn cleanup_brute_force(&self) {
         self.brute_force_detector.cleanup();
     }
+
+    pub fn users(&self) -> &Arc<DashMap<String, UserRecord>> {
+        &self.users
+    }
+
+    pub fn api_keys(&self) -> &Arc<DashMap<String, ApiKeyRecord>> {
+        &self.api_keys
+    }
+
+    pub fn create_user(&self, username: &str, password: &str, roles: Vec<String>) -> Result<UserRecord> {
+        use bcrypt::{hash, DEFAULT_COST};
+
+        if self.users.contains_key(username) {
+            return Err(AuthError::InvalidArgument(format!("user '{}' already exists", username)));
+        }
+
+        let cost = if self.config.bcrypt_cost == 0 { DEFAULT_COST } else { self.config.bcrypt_cost };
+        let password_hash = hash(password, cost)
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let user = UserRecord {
+            id: Uuid::new_v4(),
+            username: username.to_string(),
+            password_hash,
+            roles,
+            created_at: now,
+            updated_at: now,
+        };
+        self.users.insert(username.to_string(), user.clone());
+        Ok(user)
+    }
+
+    pub fn list_users(&self) -> Vec<UserRecord> {
+        self.users.iter().map(|e| e.value().clone()).collect()
+    }
+
+    pub fn get_user_by_id(&self, id: &Uuid) -> Option<UserRecord> {
+        self.users.iter().find(|e| e.value().id == *id).map(|e| e.value().clone())
+    }
+
+    pub fn get_user_by_username(&self, username: &str) -> Option<UserRecord> {
+        self.users.get(username).map(|e| e.value().clone())
+    }
+
+    pub fn delete_user(&self, id: &Uuid) -> bool {
+        if let Some(key) = self.users.iter().find(|e| e.value().id == *id).map(|e| e.key().clone()) {
+            self.users.remove(&key);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_user_roles(&self, id: &Uuid, roles: Vec<String>) -> Result<()> {
+        let mut found = false;
+        if let Some(mut entry) = self.users.iter_mut().find(|e| e.value().id == *id) {
+            entry.value_mut().roles = roles;
+            entry.value_mut().updated_at = chrono::Utc::now().timestamp_millis();
+            found = true;
+        }
+        if found { Ok(()) } else { Err(AuthError::InvalidArgument("user not found".into())) }
+    }
+
+    pub fn change_password(&self, id: &Uuid, new_password: &str) -> Result<()> {
+        use bcrypt::{hash, DEFAULT_COST};
+        let cost = if self.config.bcrypt_cost == 0 { DEFAULT_COST } else { self.config.bcrypt_cost };
+        let password_hash = hash(new_password, cost)
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let mut found = false;
+        if let Some(mut entry) = self.users.iter_mut().find(|e| e.value().id == *id) {
+            entry.value_mut().password_hash = password_hash;
+            entry.value_mut().updated_at = chrono::Utc::now().timestamp_millis();
+            found = true;
+        }
+        if found { Ok(()) } else { Err(AuthError::InvalidArgument("user not found".into())) }
+    }
+
+    pub fn create_api_key(&self, name: &str, permissions: Vec<String>) -> (ApiKeyRecord, String) {
+        let id = Uuid::new_v4();
+        let key_bytes: [u8; 32] = rand::thread_rng().r#gen();
+        let key = format!("nr_{}", hex::encode(&key_bytes[..16]));
+        let prefix = key[..10].to_string();
+        let key_hash = Self::hash_api_key(&key);
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let record = ApiKeyRecord {
+            id,
+            name: name.to_string(),
+            key_hash,
+            prefix,
+            permissions: permissions.clone(),
+            created_at: now,
+            expires_at: None,
+            enabled: true,
+        };
+        self.api_keys.insert(id.to_string(), record.clone());
+        (record, key)
+    }
+
+    fn hash_api_key(key: &str) -> String {
+        let result = Sha256::digest(key.as_bytes());
+        hex::encode(result)
+    }
+
+    pub fn list_api_keys(&self) -> Vec<ApiKeyRecord> {
+        self.api_keys.iter().map(|e| e.value().clone()).collect()
+    }
+
+    pub fn revoke_api_key(&self, id: &Uuid) -> bool {
+        self.api_keys.remove(&id.to_string()).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +357,8 @@ mod tests {
     #[test]
     fn test_auth_manager_register_provider() {
         let manager = AuthManager::new(AuthConfig::default());
-        let provider = Arc::new(PasswordProvider::new("local", AuthConfig::default()));
+        let users = Arc::new(DashMap::new());
+        let provider = Arc::new(PasswordProvider::new("local", AuthConfig::default(), users));
         assert!(manager.register_provider(provider).is_ok());
     }
 
