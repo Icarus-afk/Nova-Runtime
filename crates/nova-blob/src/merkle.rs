@@ -27,7 +27,7 @@ impl MerkleTree {
             }
             level = next;
         }
-        level.into_iter().next().unwrap()
+        level.into_iter().next().expect("merkle tree root must not be empty — at least one leaf required")
     }
 
     pub fn verify(chunk_hash: &str, proof: &[ProofStep], root: &str) -> bool {

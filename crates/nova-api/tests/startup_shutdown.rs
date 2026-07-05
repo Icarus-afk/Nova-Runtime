@@ -33,11 +33,18 @@ fn start_server(addr: &str, pipeline: Arc<nova_executor::PipelineExecutor>, conf
         pipeline,
         config,
         memory_mgr: None,
+        sql_engine: None,
+        cache_mgr: None,
+        queue_mgr: None,
+        scheduler_mgr: None,
+        search_mgr: None,
+        blob_mgr: None,
+        auth_mgr: None,
         storage_ok: true,
     });
     let addr = addr.to_string();
     tokio::spawn(async move {
-        nova_api::server::start_server(&addr, admin_state, shutdown_rx)
+        nova_api::server::start_server(&addr, admin_state, shutdown_rx, None)
             .await
             .unwrap();
     })

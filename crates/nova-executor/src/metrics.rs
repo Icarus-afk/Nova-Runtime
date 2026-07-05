@@ -207,7 +207,7 @@ impl PipelineMetrics {
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {
-        let hist = self.queue_wait_time_ns.lock().unwrap();
+        let hist = self.queue_wait_time_ns.lock().expect("metrics mutex poisoned");
         MetricsSnapshot {
             operations_total: self.operations_total.load(Ordering::Relaxed),
             active_operations: self.active_operations.load(Ordering::Relaxed),

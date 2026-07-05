@@ -223,7 +223,7 @@ impl Store {
         let record = wal::make_record(WalRecordType::Insert, TransactionId::ZERO, key.clone(), Some(value.clone()));
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().unwrap();
+            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
             wal.append(&record)?;
         }
 
@@ -241,7 +241,7 @@ impl Store {
         let record = wal::make_record(WalRecordType::Delete, TransactionId::ZERO, key.clone(), None);
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().unwrap();
+            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
             wal.append(&record)?;
         }
 
@@ -299,7 +299,7 @@ impl Store {
         self.txn_manager.commit(tx_id)?;
         let record = wal::make_record(WalRecordType::Commit, TransactionId::new(tx_id), Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().unwrap();
+        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
         wal.append(&record)
     }
 
@@ -307,7 +307,7 @@ impl Store {
         self.txn_manager.rollback(tx_id)?;
         let record = wal::make_record(WalRecordType::Rollback, TransactionId::new(tx_id), Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().unwrap();
+        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
         wal.append(&record)?;
         Ok(())
     }
@@ -315,14 +315,14 @@ impl Store {
     pub fn commit(&self, tx_id: TransactionId) -> Result<Lsn> {
         let record = wal::make_record(WalRecordType::Commit, tx_id, Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().unwrap();
+        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
         wal.append(&record)
     }
 
     pub fn rollback(&self, tx_id: TransactionId) -> Result<()> {
         let record = wal::make_record(WalRecordType::Rollback, tx_id, Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().unwrap();
+        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
         wal.append(&record)?;
         Ok(())
     }
@@ -353,7 +353,7 @@ impl Store {
 
         let current_lsn = {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().unwrap();
+            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
             wal.flush()?;
             wal.current_lsn()
         };
@@ -366,7 +366,7 @@ impl Store {
         );
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().unwrap();
+            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
             wal.append(&checkpoint_record)?;
             wal.flush()?;
         }

@@ -75,7 +75,9 @@ impl UploadManager {
 
         self.sessions.write().insert(upload_id.clone(), session);
 
-        let session = self.sessions.read().get(&upload_id).unwrap().clone();
+        let session = self.sessions.read().get(&upload_id)
+            .expect("upload session was just inserted")
+            .clone();
         debug!("initiated multipart upload {}", upload_id);
         Ok(session)
     }
