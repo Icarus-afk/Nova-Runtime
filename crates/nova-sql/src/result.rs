@@ -4,11 +4,17 @@ use crate::ast::LiteralValue;
 pub struct RecordBatch {
     pub columns: Vec<Column>,
     pub num_rows: usize,
+    pub column_names: Vec<String>,
 }
 
 impl RecordBatch {
     pub fn new(columns: Vec<Column>, num_rows: usize) -> Self {
-        RecordBatch { columns, num_rows }
+        let column_names: Vec<String> = (0..columns.len()).map(|i| format!("col_{}", i)).collect();
+        RecordBatch { columns, num_rows, column_names }
+    }
+
+    pub fn with_names(columns: Vec<Column>, num_rows: usize, column_names: Vec<String>) -> Self {
+        RecordBatch { columns, num_rows, column_names }
     }
 
     pub fn num_columns(&self) -> usize {
