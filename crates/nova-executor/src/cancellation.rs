@@ -34,7 +34,7 @@ impl CancellationToken {
         self.inner.cancelled.store(true, Ordering::Release);
 
         let callbacks = {
-            let mut guard = self.inner.callbacks.lock().unwrap();
+            let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
             guard.drain(..).collect::<Vec<_>>()
         };
 
@@ -53,7 +53,7 @@ impl CancellationToken {
             return;
         }
 
-        let mut guard = self.inner.callbacks.lock().unwrap();
+        let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
 
         if self.inner.cancelled.load(Ordering::Acquire) {
             drop(guard);
@@ -65,7 +65,7 @@ impl CancellationToken {
     }
 
     pub fn drain(&self) {
-        let mut guard = self.inner.callbacks.lock().unwrap();
+        let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
         guard.clear();
     }
 

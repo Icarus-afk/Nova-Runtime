@@ -62,22 +62,31 @@ struct RefreshRequest {
 
 async fn auth_refresh(
     State(state): State<Arc<AdminState>>,
-    Json(_req): Json<RefreshRequest>,
+    Json(req): Json<RefreshRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let session = mgr.validate_session(&req.refresh_token)
+        .map_err(|_| ApiError::unauthorized("Invalid or expired session"))?;
     Ok(Json(json!({
         "token_type": "Bearer",
-        "access_token": "refreshed",
+        "access_token": session.token,
         "expires_in": 3600,
     })))
 }
 
 async fn auth_logout(
     State(state): State<Arc<AdminState>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let token = headers.get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("Missing authorization header"))?;
+    mgr.revoke_session(token)
+        .map_err(|_| ApiError::unauthorized("Invalid session"))?;
     Ok(Json(json!({"status": "logged_out"})))
 }
 
@@ -92,28 +101,35 @@ async fn create_api_key(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
-    let key_id = Uuid::new_v4();
-    let b = key_id.to_string().as_bytes()[..4].to_vec();
-    let prefix = format!("nr_{}", b.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    let (record, full_key) = mgr.create_api_key(&req.name, req.permissions);
     Ok(Json(json!({
-        "id": key_id.to_string(),
-        "name": req.name,
-        "key": format!("{}_secret", prefix),
-        "prefix": prefix,
-        "permissions": req.permissions,
-        "created_at": chrono::Utc::now().timestamp_millis(),
+        "id": record.id.to_string(),
+        "name": record.name,
+        "key": full_key,
+        "prefix": record.prefix,
+        "permissions": record.permissions,
+        "created_at": record.created_at,
     })))
 }
 
 async fn list_api_keys(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let keys: Vec<Value> = mgr.list_api_keys().into_iter().map(|k| json!({
+        "id": k.id.to_string(),
+        "name": k.name,
+        "prefix": k.prefix,
+        "permissions": k.permissions,
+        "created_at": k.created_at,
+        "expires_at": k.expires_at,
+        "enabled": k.enabled,
+    })).collect();
     Ok(Json(json!({
-        "data": [],
+        "data": keys,
         "pagination": {"cursor": null, "limit": 50, "has_more": false}
     })))
 }
@@ -122,9 +138,15 @@ async fn revoke_api_key(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
-    Ok(Json(json!({"status": "revoked", "id": id})))
+    let key_id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::bad_request("Invalid API key ID"))?;
+    if mgr.revoke_api_key(&key_id) {
+        Ok(Json(json!({"status": "revoked", "id": id})))
+    } else {
+        Err(ApiError::not_found("API key not found"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -142,15 +164,12 @@ async fn create_user(
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
     mgr.password_policy().validate(&req.password)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let session = mgr.session_manager().create_session(Uuid::new_v4(), &req.username);
-    if let Some(roles) = req.roles {
-        for role in roles {
-            let _ = mgr.assign_role(session.user_id, &role);
-        }
-    }
+    let user = mgr.create_user(&req.username, &req.password, req.roles.unwrap_or_default())
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({
-        "id": session.user_id.to_string(),
-        "username": req.username,
+        "id": user.id.to_string(),
+        "username": user.username,
+        "roles": user.roles,
         "status": "created",
     })))
 }
@@ -158,10 +177,16 @@ async fn create_user(
 async fn list_users(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let users: Vec<Value> = mgr.list_users().into_iter().map(|u| json!({
+        "id": u.id.to_string(),
+        "username": u.username,
+        "roles": u.roles,
+        "created_at": u.created_at,
+    })).collect();
     Ok(Json(json!({
-        "data": [],
+        "data": users,
         "pagination": {"cursor": null, "limit": 50, "has_more": false}
     })))
 }
@@ -170,14 +195,17 @@ async fn get_user(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
     let user_id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::bad_request("Invalid user ID"))?;
+    let user = mgr.get_user_by_id(&user_id)
+        .ok_or_else(|| ApiError::not_found("User not found"))?;
     Ok(Json(json!({
-        "id": user_id.to_string(),
-        "username": "user",
-        "roles": [],
+        "id": user.id.to_string(),
+        "username": user.username,
+        "roles": user.roles,
+        "created_at": user.created_at,
     })))
 }
 
@@ -185,9 +213,15 @@ async fn delete_user(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
-    Ok(Json(json!({"status": "deleted", "id": id})))
+    let user_id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::bad_request("Invalid user ID"))?;
+    if mgr.delete_user(&user_id) {
+        Ok(Json(json!({"status": "deleted", "id": id})))
+    } else {
+        Err(ApiError::not_found("User not found"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -200,8 +234,12 @@ async fn update_user_roles(
     Path(id): Path<String>,
     Json(req): Json<UpdateRolesRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let user_id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::bad_request("Invalid user ID"))?;
+    mgr.update_user_roles(&user_id, req.roles.clone())
+        .map_err(|_| ApiError::not_found("User not found"))?;
     Ok(Json(json!({
         "status": "updated",
         "user_id": id,
@@ -218,10 +256,21 @@ struct ChangePasswordRequest {
 async fn change_password(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-    Json(_req): Json<ChangePasswordRequest>,
+    Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.auth_mgr.as_ref()
+    let mgr = state.auth_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
+    let user_id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::bad_request("Invalid user ID"))?;
+    let user = mgr.get_user_by_id(&user_id)
+        .ok_or_else(|| ApiError::not_found("User not found"))?;
+    if !bcrypt::verify(&req.current_password, &user.password_hash).unwrap_or(false) {
+        return Err(ApiError::unauthorized("Current password is incorrect"));
+    }
+    mgr.password_policy().validate(&req.new_password)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    mgr.change_password(&user_id, &req.new_password)
+        .map_err(|_| ApiError::not_found("User not found"))?;
     Ok(Json(json!({
         "status": "changed",
         "user_id": id,

@@ -34,7 +34,9 @@ impl MmapRegion {
 
     pub unsafe fn map(&self) -> Result<*mut u8> {
         use std::os::unix::io::AsRawFd;
-        let fd = self.file.as_ref().unwrap().as_raw_fd();
+        let fd = self.file.as_ref()
+            .ok_or_else(|| RuntimeError::Io("MmapRegion constructed without a file — constructor bug".into()))?
+            .as_raw_fd();
         // SAFETY: The following invariants hold:
         // - `fd` is a valid file descriptor (guaranteed by `self.file`)
         // - `self.len` is non-zero and properly sized (guaranteed by `set_len` in constructor)

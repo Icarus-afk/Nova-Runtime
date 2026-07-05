@@ -3,7 +3,7 @@ use crate::error::ApiError;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::response::{Json, Response};
-use axum::http::header;
+use axum::http::{header, HeaderValue};
 use axum::{routing::{get, post, delete}, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -23,11 +23,17 @@ pub fn routes(state: Arc<AdminState>) -> Router {
 
 async fn upload_blob(
     State(state): State<Arc<AdminState>>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let mgr = state.blob_mgr.as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    let meta = mgr.create_blob("default", &body, "application/octet-stream", HashMap::new()).await
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let meta = mgr.create_blob("default", &body, &content_type, HashMap::new()).await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({
         "id": meta.id,
@@ -54,9 +60,9 @@ async fn download_blob(
     let body = axum::body::Body::from(data);
     let mut response = Response::new(body);
     if let Some(m) = meta {
-        response.headers_mut().insert("X-Blob-Size", m.size.to_string().parse().unwrap());
-        response.headers_mut().insert("X-Blob-Checksum-SHA256", hex_encode(m.sha256.as_bytes()).parse().unwrap());
-        response.headers_mut().insert(header::CONTENT_TYPE, m.content_type.parse().unwrap());
+        response.headers_mut().insert("X-Blob-Size", m.size.to_string().parse().expect("valid header value"));
+        response.headers_mut().insert("X-Blob-Checksum-SHA256", hex_encode(m.sha256.as_bytes()).parse().expect("valid header value"));
+        response.headers_mut().insert(header::CONTENT_TYPE, m.content_type.parse().unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
     }
     Ok(response)
 }
@@ -104,9 +110,25 @@ async fn list_blobs(
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
     let blob_ids = mgr.list_blobs("default").await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let data: Vec<Value> = blob_ids.into_iter().map(|id| {
-        json!({"id": id, "filename": &id, "size_bytes": 0, "content_type": "application/octet-stream"})
-    }).collect();
+    let mut data = Vec::new();
+    for id in blob_ids {
+        if let Ok(meta) = mgr.get_metadata(&id).await {
+            data.push(json!({
+                "id": meta.id,
+                "filename": &meta.id,
+                "size_bytes": meta.size,
+                "content_type": meta.content_type,
+                "created_at": meta.created_at,
+            }));
+        } else {
+            data.push(json!({
+                "id": id,
+                "filename": &id,
+                "size_bytes": 0,
+                "content_type": "application/octet-stream",
+            }));
+        }
+    }
     Ok(Json(json!({
         "data": data,
         "pagination": {"cursor": null, "limit": params.limit.unwrap_or(50), "has_more": false}
