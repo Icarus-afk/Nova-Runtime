@@ -44,7 +44,9 @@ async fn sql_query(
         nova_sql::SQLResult::Query { batches, stats } => {
             let mut rows = Vec::new();
             let mut columns = Vec::new();
+            let mut column_names = Vec::new();
             for batch in &batches {
+                column_names = batch.column_names.clone();
                 for col in &batch.columns {
                     let col_name = match col {
                         nova_sql::Column::Integer(_) => "integer",
@@ -83,6 +85,7 @@ async fn sql_query(
             }
             Ok(Json(json!({
                 "columns": columns,
+                "column_names": column_names,
                 "types": columns,
                 "rows": rows,
                 "row_count": rows.len(),
@@ -132,10 +135,15 @@ async fn sql_execute(
 async fn list_tables(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<Value>, ApiError> {
-    let _engine = state.sql_engine.as_ref()
+    let engine = state.sql_engine.as_ref()
         .ok_or_else(|| ApiError::internal("SQL engine not available"))?;
+    let tables = engine.table_names();
+    let data: Vec<Value> = tables.into_iter().map(|name| {
+        let count = engine.num_rows(&name).unwrap_or(0);
+        json!({ "name": name, "document_count": count })
+    }).collect();
     Ok(Json(json!({
-        "data": [],
+        "data": data,
         "pagination": {"cursor": null, "limit": 50, "has_more": false}
     })))
 }
@@ -144,10 +152,19 @@ async fn get_table_schema(
     State(state): State<Arc<AdminState>>,
     Path(table): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _engine = state.sql_engine.as_ref()
+    let engine = state.sql_engine.as_ref()
         .ok_or_else(|| ApiError::internal("SQL engine not available"))?;
+    let schema = engine.get_table_schema(&table)
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let columns: Vec<Value> = schema.columns.iter().map(|c| json!({
+        "name": c.name,
+        "type": format!("{:?}", c.sql_type),
+        "nullable": c.nullable,
+        "is_primary_key": c.is_primary_key,
+        "unique": c.unique,
+    })).collect();
     Ok(Json(json!({
         "table": table,
-        "columns": [],
+        "columns": columns,
     })))
 }
