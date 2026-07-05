@@ -9,4 +9,5 @@ start.md
 /dashboard/node_modules
 /sdk/node_modules
 /novad-blobs/*
+/data
 
