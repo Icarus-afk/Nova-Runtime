@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::ast::{LiteralValue, SQLType};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Schema {
     pub columns: Vec<ColumnInfo>,
 }
@@ -27,7 +29,7 @@ impl Schema {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     pub sql_type: SQLType,

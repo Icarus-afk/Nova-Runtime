@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::get;
 use axum::{Extension, Router};
+use nova_auth::providers::PasswordProvider;
 
 #[derive(Parser)]
 #[command(name = "novad", version, about = "Nova Runtime Daemon")]
@@ -229,7 +230,12 @@ async fn main() -> anyhow::Result<()> {
             default_limit: cfg.default_limit,
         }
     };
-    let sql_engine = Arc::new(nova_sql::SQLEngine::new(sql_cfg));
+    let sql_engine = {
+        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
+            nova_storage::StorageEngineStore::new(store.clone()),
+        );
+        Arc::new(nova_sql::SQLEngine::new_with_storage(sql_cfg, engine))
+    };
     tracing::info!("SQL engine initialized");
 
     // Initialize queue manager
@@ -280,7 +286,19 @@ async fn main() -> anyhow::Result<()> {
             password_min_digits: cfg.internal.password_policy.min_digits,
             password_min_special: cfg.internal.password_policy.min_special,
         };
-        let mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg));
+        let mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg.clone()));
+
+        // Register PasswordProvider
+        let password_provider = Arc::new(PasswordProvider::new("local", auth_cfg, mgr.users().clone()));
+        mgr.register_provider(password_provider)
+            .map_err(|e| anyhow::anyhow!("Failed to register auth provider: {}", e))?;
+
+        // Bootstrap default admin user if no users exist
+        if mgr.list_users().is_empty() {
+            mgr.create_user("admin", "admin123", vec!["admin".to_string()])
+                .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
+            tracing::info!("Bootstrapped default admin user (admin/admin123)");
+        }
 
         let middleware_reg = mgr.create_middleware_registration(0);
         if let Err(e) = pipeline.register_middleware(middleware_reg) {

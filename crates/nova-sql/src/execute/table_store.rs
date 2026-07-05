@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 
 use crate::ast::LiteralValue;
 use crate::error::{Result, SQLError};
 use crate::schema::Schema;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
     pub values: Vec<Option<LiteralValue>>,
 }
