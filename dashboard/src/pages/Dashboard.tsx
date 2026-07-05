@@ -52,8 +52,8 @@ export default function DashboardPage() {
   const { data: health, loading } = useApi<SystemHealth>(() => api.getSystemHealth(), []);
 
   const cpuPercent = health?.cpu.usage_percent ?? 0;
-  const memPercent = health ? (health.memory.used_bytes / health.memory.total_bytes) * 100 : 0;
-  const diskPercent = health ? (health.disk.used_bytes / health.disk.total_bytes) * 100 : 0;
+  const memPercent = health?.memory.total_bytes ? (health.memory.used_bytes / health.memory.total_bytes) * 100 : 0;
+  const diskPercent = health?.disk.total_bytes ? (health.disk.used_bytes / health.disk.total_bytes) * 100 : 0;
 
   return (
     <div>
