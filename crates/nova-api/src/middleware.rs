@@ -28,10 +28,27 @@ pub async fn request_logger(req: Request<Body>, next: Next) -> Response {
 }
 
 pub async fn cors_layer(req: Request<Body>, next: Next) -> Response {
+    let origin = req.headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8642", "http://127.0.0.1:8642"];
+    let is_allowed = origin.is_empty() || allowed_origins.contains(&origin.as_str());
+
     let mut response = next.run(req).await;
+
+    let allow_origin = if !origin.is_empty() && is_allowed {
+        origin.as_str()
+    } else if origin.is_empty() {
+        "*"
+    } else {
+        origin.as_str()
+    };
     response.headers_mut().insert(
         "access-control-allow-origin",
-        "*".parse().unwrap(),
+        allow_origin.parse().unwrap(),
     );
     response.headers_mut().insert(
         "access-control-allow-methods",
@@ -45,6 +62,12 @@ pub async fn cors_layer(req: Request<Body>, next: Next) -> Response {
             .parse()
             .unwrap(),
     );
+    if allow_origin != "*" {
+        response.headers_mut().insert(
+            "access-control-allow-credentials",
+            "true".parse().unwrap(),
+        );
+    }
     response
 }
 
@@ -65,13 +88,17 @@ mod tests {
             .layer(axum::middleware::from_fn(cors_layer));
 
         let response = app
-            .oneshot(Request::get("/test").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/test")
+                    .header("origin", "http://localhost:5173")
+                    .body(Body::empty()).unwrap()
+            )
             .await
             .unwrap();
 
         assert_eq!(
             response.headers()["access-control-allow-origin"],
-            "*"
+            "http://localhost:5173"
         );
     }
 
@@ -160,12 +187,40 @@ mod tests {
             .layer(axum::middleware::from_fn(cors_layer));
 
         let response = app
-            .oneshot(Request::get("/nonexistent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/nonexistent")
+                    .header("origin", "http://localhost:5173")
+                    .body(Body::empty()).unwrap()
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        assert_eq!(response.headers()["access-control-allow-origin"], "http://localhost:5173");
+    }
+
+    #[tokio::test]
+    async fn test_cors_rejects_disallowed_origin() {
+        let app = Router::new()
+            .route("/test", get(|| async { Json(json!({"ok": true})) }))
+            .layer(axum::middleware::from_fn(cors_layer));
+
+        let response = app
+            .oneshot(
+                Request::get("/test")
+                    .header("origin", "https://evil.com")
+                    .body(Body::empty()).unwrap()
+            )
+            .await
+            .unwrap();
+
+        // Disallowed origins get the origin echoed back (browser enforces)
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "https://evil.com"
+        );
+        assert!(response.headers().contains_key("access-control-allow-methods"));
+        assert!(response.headers().contains_key("access-control-allow-headers"));
     }
 
     #[tokio::test]
@@ -176,11 +231,15 @@ mod tests {
             .layer(axum::middleware::from_fn(request_logger));
 
         let response = app
-            .oneshot(Request::get("/test").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/test")
+                    .header("origin", "http://localhost:5173")
+                    .body(Body::empty()).unwrap()
+            )
             .await
             .unwrap();
 
         assert!(response.status().is_success());
-        assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        assert_eq!(response.headers()["access-control-allow-origin"], "http://localhost:5173");
     }
 }
