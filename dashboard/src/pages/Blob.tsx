@@ -47,7 +47,7 @@ export default function BlobPage() {
 
   const handleDownload = async (key: string) => {
     if (!selectedBucket) return;
-    window.open(`/api/v1/dashboard/blob/buckets/${selectedBucket}/objects/${encodeURIComponent(key)}/download`, '_blank');
+    window.open(`/api/v1/blobs/${encodeURIComponent(key)}`, '_blank');
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -55,20 +55,9 @@ export default function BlobPage() {
     setUploadStatus('Uploading...');
     try {
       const file = e.target.files[0];
-      const formData = new FormData();
-      formData.append('file', file);
-      const token = localStorage.getItem('nova_token');
-      const res = await fetch(`/api/v1/dashboard/blob/buckets/${selectedBucket}/objects`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      });
-      if (res.ok) {
-        setUploadStatus(`Uploaded ${file.name} successfully`);
-        refetchObjects();
-      } else {
-        setUploadStatus(`Upload failed: ${res.statusText}`);
-      }
+      const result = await api.uploadBlob(selectedBucket, file);
+      setUploadStatus(`Uploaded ${file.name} successfully (${formatBytes(result.size_bytes)})`);
+      refetchObjects();
     } catch (err: unknown) {
       setUploadStatus(err instanceof Error ? err.message : 'Upload failed');
     }

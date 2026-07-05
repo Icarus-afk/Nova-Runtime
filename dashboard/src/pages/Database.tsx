@@ -34,7 +34,7 @@ export default function DatabasePage() {
     setQueryError(null);
     try {
       const result = await api.queryDatabase({
-        collection: selectedCollection || 'default',
+        collection: queryInput,
         filter: {},
         limit: 100,
       });
