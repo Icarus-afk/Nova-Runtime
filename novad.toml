@@ -1,0 +1,77 @@
+[general]
+data_dir = "./data"
+
+[networking]
+listen_address = "127.0.0.1"
+listen_port = 8642
+
+[storage]
+wal_dir = "./data/wal"
+page_cache_size = 65536
+memtable_size = 67108864
+fsync_policy = { every_n_ms = 100 }
+
+[auth.session]
+ttl_seconds = 86400
+max_active_sessions = 100
+cache_size = 100000
+
+[auth.internal]
+bcrypt_cost = 12
+enable_brute_force_detection = true
+
+[auth.internal.lockout]
+max_attempts = 5
+duration_secs = 900
+
+[auth.internal.mfa]
+issuer = "Nova Runtime"
+window = 1
+
+[auth.internal.password_policy]
+min_length = 8
+max_length = 128
+min_lowercase = 1
+min_uppercase = 1
+min_digits = 1
+min_special = 0
+
+[execution]
+max_concurrent_ops = 100
+pipeline_queue_depth = 10000
+worker_threads = 4
+default_operation_timeout_ms = 30000
+
+[blob]
+chunk_size = 4194304
+max_blob_size = 1073741824
+gc_interval_secs = 3600
+gc_grace_period_secs = 86400
+data_dir = "./data/blobs"
+chunk_nesting_depth = 2
+
+[search]
+default_limit = 20
+max_limit = 100
+
+[sql]
+max_batch_size = 100
+max_columns = 100
+
+[queue]
+max_queues = 100
+max_messages_per_queue = 10000
+max_message_size = 262144
+default_visibility_timeout_secs = 30
+message_ttl_secs = 604800
+enable_scanners = true
+
+[scheduler]
+time_wheel_tick_ms = 100
+time_wheel_slots = 360
+max_concurrent_jobs = 10
+enable_startup_recovery = true
+
+[event]
+ordering_shards = 4
+dlq_max_entries = 100
