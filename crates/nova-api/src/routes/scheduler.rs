@@ -137,26 +137,34 @@ async fn trigger_job(
         .ok_or_else(|| ApiError::internal("Scheduler not available"))?;
     let job_id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::bad_request("Invalid job ID"))?;
-    let _job = mgr.get_job(&job_id).await
-        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    mgr.trigger_job(&job_id).await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "triggered"})))
 }
 
 async fn pause_job(
-    State(_state): State<Arc<AdminState>>,
+    State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _job_id = Uuid::parse_str(&id)
+    let mgr = state.scheduler_mgr.as_ref()
+        .ok_or_else(|| ApiError::internal("Scheduler not available"))?;
+    let job_id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::bad_request("Invalid job ID"))?;
+    mgr.pause_job(&job_id).await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "paused"})))
 }
 
 async fn resume_job(
-    State(_state): State<Arc<AdminState>>,
+    State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _job_id = Uuid::parse_str(&id)
+    let mgr = state.scheduler_mgr.as_ref()
+        .ok_or_else(|| ApiError::internal("Scheduler not available"))?;
+    let job_id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::bad_request("Invalid job ID"))?;
+    mgr.resume_job(&job_id).await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "resumed"})))
 }
 
