@@ -270,6 +270,7 @@ impl SchedulerBackend for StorageSchedulerBackend {
                 }
                 JobState::Cancelled => stats.jobs_cancelled += 1,
                 JobState::Skipped => stats.jobs_skipped += 1,
+                JobState::Paused => stats.jobs_paused += 1,
             }
         }
 

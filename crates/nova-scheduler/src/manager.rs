@@ -337,6 +337,44 @@ impl SchedulerManager {
         }
     }
 
+    pub async fn trigger_job(&self, id: &Uuid) -> Result<()> {
+        let mut job = self.backend.get_job(id).await?;
+        self.time_wheel.cancel(id);
+        self.priority_queue.cancel(id);
+        job.state = JobState::Pending;
+        job.next_run_at = chrono::Utc::now().timestamp_millis();
+        self.backend.update_job(job.clone()).await?;
+        self.dispatch_job(job).await;
+        Ok(())
+    }
+
+    pub async fn pause_job(&self, id: &Uuid) -> Result<()> {
+        let mut job = self.backend.get_job(id).await?;
+        job.state = JobState::Paused;
+        job.updated_at = chrono::Utc::now().timestamp_millis();
+        self.backend.update_job(job).await?;
+        self.time_wheel.cancel(id);
+        self.priority_queue.cancel(id);
+        Ok(())
+    }
+
+    pub async fn resume_job(&self, id: &Uuid) -> Result<()> {
+        let mut job = self.backend.get_job(id).await?;
+        job.state = JobState::Pending;
+        job.next_run_at = chrono::Utc::now().timestamp_millis();
+        job.updated_at = chrono::Utc::now().timestamp_millis();
+        self.backend.update_job(job.clone()).await?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let delta = job.next_run_at - now_ms;
+        let tw_max = (self.config.time_wheel_slots as u64) * self.config.time_wheel_tick_ms;
+        if delta >= 0 && (delta as u64) <= tw_max {
+            self.time_wheel.schedule(job.id, job.next_run_at);
+        } else {
+            self.priority_queue.schedule(job.id, job.next_run_at);
+        }
+        Ok(())
+    }
+
     pub async fn stats(&self) -> Result<SchedulerStats> {
         self.backend.stats().await
     }
