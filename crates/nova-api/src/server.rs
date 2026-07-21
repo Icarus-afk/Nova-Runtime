@@ -26,7 +26,7 @@ pub async fn start_server(
     let mut app = Router::new()
         .nest("/", admin::routes(admin_state.clone()))
         .nest("/api/v1", routes::v1_routes(admin_state.clone()))
-        .nest("/api/v1", routes::ws_routes(admin_state))
+        .nest("/api/v1", routes::ws_router().with_state(admin_state))
         .fallback(fallback)
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))
