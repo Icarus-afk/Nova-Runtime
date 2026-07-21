@@ -120,21 +120,189 @@ The complete architecture is specified across 30 documents in [`docs/`](docs/). 
 
 ## Quick Start
 
-Nova Runtime is not yet implemented. Once available:
+### Prerequisites
+
+- **Rust** 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- **Node.js** 18+ and **npm** (`sudo apt install nodejs npm` or from [nodejs.org](https://nodejs.org))
+- **Ports 8642 and 5173** must be free (see [troubleshooting](#troubleshooting))
+
+### One-Command Setup
 
 ```bash
-# Download the binary
-curl -O https://releases.novaruntime.io/novad-latest-x86_64-linux
+bash scripts/setup.sh
+```
 
-# Run with default configuration
-./novad
+This builds the backend, installs dashboard dependencies, and creates a default config file.
 
-# Or with a config file
-./novad --config /etc/novad/novad.toml
+### Start Everything
 
-# Interact via CLI
-novactl runtime status
-novactl db query "SELECT * FROM users LIMIT 10"
+```bash
+bash scripts/dev.sh
+```
+
+This starts both the backend (`novad` on port 8642) and the dashboard dev server (Vite on port 5173).
+
+| Service | URL | Default Credentials |
+|---------|-----|-------------------|
+| Backend API | `http://127.0.0.1:8642` | — |
+| Dashboard | `http://127.0.0.1:5173` | `admin` / `admin123` |
+| GraphQL | `http://127.0.0.1:8642/graphql` | Bearer token from login |
+
+### Manual Startup
+
+```bash
+# Terminal 1 — Backend
+cargo build --bin novad
+target/debug/novad --config novad.toml
+
+# Terminal 2 — Dashboard
+cd dashboard && npm run dev
+
+# Terminal 3 — Seed data (optional)
+bash scripts/seed.sh
+```
+
+### Seed Data
+
+The seed script populates all subsystems with test data:
+
+```bash
+bash scripts/seed.sh
+```
+
+| Subsystem | What Gets Created |
+|-----------|------------------|
+| SQL | 5 tables (users, products, orders, logs, events), 160 rows |
+| Cache | 10 cache keys |
+| Queue | 5 queues, 29 messages |
+| Scheduler | 10 scheduled jobs |
+| Search | 2 indexes, 25 documents |
+| Blob | 8 blobs (text, JSON, CSV, YAML, XML, SQL) |
+| Auth | 2 extra users + 2 API keys |
+
+> **Idempotent**: Safe to re-run. Drops existing tables before recreating.
+
+### Troubleshooting
+
+#### Port 8642 already in use
+
+```bash
+# Check what's using it
+ss -tlnp | grep 8642
+
+# Kill it
+fuser -k 8642/tcp
+
+# Then retry
+bash scripts/dev.sh
+```
+
+#### Port 5173 already in use
+
+```bash
+fuser -k 5173/tcp
+```
+
+#### Dashboard shows empty collections
+
+SQL tables are in-memory only — they don't survive a restart. Re-run the seed script:
+
+```bash
+bash scripts/seed.sh
+```
+
+(If SQL persistence is enabled, tables survive restarts automatically.)
+
+#### Login fails
+
+The admin user is bootstrapped on first startup. If you're running a fresh instance with no `data/` directory, wait a few seconds for startup to complete before logging in.
+
+### API Overview
+
+All API routes are at `http://127.0.0.1:8642`:
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/health` | GET | System health (status, uptime, memory, disk, subsystems) |
+| `/api/v1/auth/login` | POST | Login with username/password |
+| `/api/v1/auth/me` | GET | Current user info |
+| `/api/v1/auth/api-keys` | GET/POST | List/create API keys |
+| `/api/v1/sql/tables` | GET | List tables with row counts |
+| `/api/v1/sql/tables/:name/schema` | GET | Table schema |
+| `/api/v1/sql/query` | POST | Run SELECT query |
+| `/api/v1/sql/execute` | POST | Run INSERT/UPDATE/DELETE/CREATE/DROP |
+| `/api/v1/cache/stats` | GET | Cache statistics |
+| `/api/v1/cache/keys` | GET | List cache keys |
+| `/api/v1/cache/:key` | GET/DELETE | Get/delete cache entry |
+| `/api/v1/queue/queues` | GET | List queues |
+| `/api/v1/queue/:name/messages` | GET/POST/DELETE | Message CRUD |
+| `/api/v1/scheduler/jobs` | GET | List scheduled jobs |
+| `/api/v1/scheduler/jobs/:id/pause` | POST | Pause a job |
+| `/api/v1/scheduler/jobs/:id/resume` | POST | Resume a job |
+| `/api/v1/scheduler/jobs/:id/trigger` | POST | Trigger a job immediately |
+| `/api/v1/search/indexes` | GET | List search indexes |
+| `/api/v1/search/:index/documents` | GET/POST | Search document CRUD |
+| `/api/v1/blob/files` | GET | List blobs |
+| `/api/v1/blob/upload` | POST | Upload blob |
+| `/api/v1/blob/:hash` | GET/DELETE | Get/delete blob |
+| `/runtime/config` | GET | Runtime configuration |
+| `/graphql` | POST | GraphQL endpoint |
+
+**Login flow:**
+
+```bash
+# Login
+curl -X POST http://127.0.0.1:8642/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}'
+
+# Response: {"token_type":"Bearer","access_token":"nova_sess_...","expires_in":3600}
+
+# Use the token for subsequent requests
+curl -H "Authorization: Bearer nova_sess_..." http://127.0.0.1:8642/api/v1/sql/tables
+```
+
+### SQL Examples
+
+```bash
+# Create table
+curl -X POST http://127.0.0.1:8642/api/v1/sql/execute \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"CREATE TABLE users (id Integer, name Text, email Text)"}'
+
+# Insert
+curl -X POST http://127.0.0.1:8642/api/v1/sql/execute \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"INSERT INTO users VALUES (1, '\''Alice'\'', '\''alice@example.com'\'')"}'
+
+# Query
+curl -X POST http://127.0.0.1:8642/api/v1/sql/query \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"SELECT * FROM users"}'
+
+# List tables
+curl http://127.0.0.1:8642/api/v1/sql/tables \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Available CLI Commands
+
+```bash
+# Check backend health
+curl http://127.0.0.1:8642/health | jq
+
+# List all tables
+curl http://127.0.0.1:8642/api/v1/sql/tables -H "Authorization: Bearer $(curl -s -X POST .../auth/login -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')"
+
+# Quick alias
+alias nova='curl -sf -H "Authorization: Bearer $(curl -s -X POST http://127.0.0.1:8642/api/v1/auth/login -H Content-Type:application/json -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')"'
+
+# Use it
+nova http://127.0.0.1:8642/api/v1/sql/tables
+nova -X POST http://127.0.0.1:8642/api/v1/sql/query -H 'Content-Type: application/json' -d '{"query":"SELECT * FROM users LIMIT 5"}'
 ```
 
 ## Development Status
@@ -145,34 +313,34 @@ Phase 1: Core Abstractions    ██████████ 100%  9 crates buil
 Phase 2: Runtime Core         ██████████ 100%  Execution Engine + novad alpha verified
 Phase 3: Data Subsystems      ██████████ 100%  SQL, Cache, Search, Blob (172 tests)
 Phase 4: Async Subsystems     ██████████ 100%  Queue, Scheduler, Auth (123 tests)
-Phase 5: API & Tooling        ░░░░░░░░░░   0%  (next — REST API, GraphQL, SDK, Dashboard)
+Phase 5: API & Tooling        ████████████ 100%  REST, GraphQL, SDK, Dashboard
 Phase 6: Hardening            ░░░░░░░░░░   0%
 ```
 
-**Completed crates** (all compile with 0 errors, 0 warnings):
+**Completed crates:**
 
 | Crate | Tests | Key Components |
 |-------|-------|----------------|
-| `nova-core` | 137+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits (StorageEngine, TransactionalStorage, EventPublisher, etc.) |
-| `nova-config` | 127+ | 21-section Config, 5-layer resolution, env var `NOVA_SECTION_KEY`, hot-reload with Arc\<RwLock\> swap |
-| `nova-memory` | 41+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager with pressure levels, GenerationalGC, MmapRegion |
-| `nova-storage` | 86+ | Page cache (latch-free reads), WAL (11 record types, GroupCommit), B+Tree (order 128), LSM (cached BloomFilter, compression cascade), KeyRouter (13 prefix rules), TransactionManager (MVCC, 4 isolation levels) |
-| `nova-object` | 90+ | Value (32 variants), DocumentMeta, CollectionSchema, SchemaRegistry (additive-only), ValidationEngine, custom MessagePack ext 8-19 |
-| `nova-event` | 41+ | EventId (UUID v7), FilterExpr AST (8 variants), EventBuilder, SubscriptionTrie, EventBus (22 metrics counters, sharded delivery, replay with checkpoint) |
-| `nova-security` | 85+ | InputValidator, EncryptionEngine (3 algorithms), KeyProvider trait, SecretsManager (zeroize-on-drop), AuditLogger (10 categories), RateLimiter |
-| `nova-cli` | 86+ | 12 command groups, config get/set via serde_json path, shell completion scaffolding |
-| `nova-executor` | 10+ | 6-stage pipeline, middleware chain, rate limiter, circuit breaker, priority queue, cancellation tokens |
-| `nova-api` | 6+ | HTTP server, health/ready/live endpoints, admin config/status |
-| `nova-cache` | 43 | HashMapBackend + TtlBackend, LRU/LFU/TTL eviction, batch ops, TTL sweeper, event invalidation |
-| `nova-blob` | 37 | SHA-256 chunking, Merkle tree, multipart upload, dedup persistence, GC, TTL enforcement, pagination |
-| `nova-search` | 55 | BM25 scoring (configurable), Porter stemmer, query DSL, Unicode NFC, pagination, concurrent read/write |
-| `nova-sql` | 37 | Full DML/DQL, DISTINCT/BETWEEN/IN/CASE/CAST/LIKE, constraint enforcement, GROUP BY HAVING, ORDER BY NULLS |
-| `nova-queue` | 23 | Pull-model backend, visibility timeout, DLQ, dedup, priority, delay, consumer groups, auto-scanner |
-| `nova-scheduler` | 29 | Hierarchical TimeWheel + PriorityQueue, CronSchedule parser, startup recovery, dependency validation |
-| `nova-auth` | 77 | Password/API Key/JWT providers, RBAC with wildcards, session mgmt, TOTP MFA, brute-force detection, password policy |
-| `novad` | 5+ | Tracing init, TLS + PEM validation, all subsystem wiring, SIGHUP handler, graceful shutdown |
+| `nova-core` | 137+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits |
+| `nova-config` | 127+ | 21-section Config, 5-layer resolution, hot-reload |
+| `nova-memory` | 41+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager, GC |
+| `nova-storage` | 86+ | Page cache, WAL (11 record types), B+Tree, LSM, MVCC |
+| `nova-object` | 90+ | Value (32 variants), SchemaRegistry, MessagePack |
+| `nova-event` | 41+ | EventId (UUID v7), EventBus, sharded delivery, replay |
+| `nova-security` | 85+ | InputValidator, Encryption, RateLimiter, AuditLogger |
+| `nova-cli` | 86+ | 12 command groups, shell completions |
+| `nova-executor` | 10+ | 6-stage pipeline, middleware, circuit breaker |
+| `nova-api` | 6+ | HTTP server, health, admin endpoints |
+| `nova-cache` | 43 | HashMap+Ttl backends, LRU/LFU, TTL sweeper |
+| `nova-blob` | 37 | SHA-256 chunking, Merkle tree, dedup, GC |
+| `nova-search` | 55 | BM25 scoring, Porter stemmer, query DSL |
+| `nova-sql` | 37 | Full DML/DQL, GROUP BY, ORDER BY, constraints |
+| `nova-queue` | 23 | Pull-model, visibility timeout, DLQ, dedup |
+| `nova-scheduler` | 29 | TimeWheel, CronSchedule, dependency validation |
+| `nova-auth` | 77 | Password/API Key/JWT, RBAC, TOTP MFA, brute-force detection |
+| `novad` | 5+ | Subsystem wiring, graceful shutdown, SIGHUP handler |
 
-**Total: ~1,359 tests across 17 crates.**
+**Total: ~1,359 tests across 18 crates.**
 
 ## Target Hardware
 
