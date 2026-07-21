@@ -88,10 +88,44 @@ impl ConfigCommands {
                 }
                 Ok(())
             }
-            ConfigCommands::Set { key: _, value: _ } => {
-                eprintln!("Runtime config changes are not yet supported via the API.");
-                eprintln!("Modify the config file directly and reload with SIGHUP.");
-                std::process::exit(1);
+            ConfigCommands::Set { key, value } => {
+                let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
+                let parsed: serde_json::Value = if let Ok(n) = value.parse::<i64>() {
+                    serde_json::json!(n)
+                } else if let Ok(n) = value.parse::<f64>() {
+                    serde_json::json!(n)
+                } else if let Ok(b) = value.parse::<bool>() {
+                    serde_json::json!(b)
+                } else {
+                    serde_json::json!(value)
+                };
+                let parts: Vec<&str> = key.split('.').collect();
+                let mut patch = serde_json::json!({});
+                let mut current = &mut patch;
+                for (i, part) in parts.iter().enumerate() {
+                    if i == parts.len() - 1 {
+                        current[part] = parsed.clone();
+                    } else {
+                        if !current[part].is_object() {
+                            current[part] = serde_json::json!({});
+                        }
+                        current = &mut current[part];
+                    }
+                }
+                match client.put("/admin/config", Some(&patch)) {
+                    Ok(_body) => {
+                        output::print_value(&serde_json::json!({
+                            "status": "updated",
+                            "key": key,
+                            "value": value,
+                        }), &ctx.output)?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to set config: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
             }
             ConfigCommands::Default => {
                 println!("{}", nova_config::DEFAULT_TOML);

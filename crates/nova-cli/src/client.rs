@@ -53,6 +53,10 @@ impl ApiClient {
         self.request("POST", path, body)
     }
 
+    pub fn put(&self, path: &str, body: Option<&Value>) -> Result<Value, String> {
+        self.request("PUT", path, body)
+    }
+
     pub fn delete(&self, path: &str) -> Result<Value, String> {
         self.request("DELETE", path, None::<&Value>)
     }
@@ -63,6 +67,13 @@ impl ApiClient {
             "GET" => self.client.get(&url),
             "POST" => {
                 let mut r = self.client.post(&url);
+                if let Some(b) = body {
+                    r = r.json(b);
+                }
+                r
+            }
+            "PUT" => {
+                let mut r = self.client.put(&url);
                 if let Some(b) = body {
                     r = r.json(b);
                 }
