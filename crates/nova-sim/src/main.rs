@@ -32,7 +32,15 @@ fn level_label(level: &LogLevel) -> &'static str {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max.saturating_sub(1)]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut end = max.saturating_sub(1);
+        while !s.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        format!("{}…", &s[..end])
+    }
 }
 
 fn render_header(frame: &mut Frame, area: Rect, eng: &SimEngine) {
