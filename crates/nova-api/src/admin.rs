@@ -1,12 +1,27 @@
 use axum::extract::State;
 use axum::response::Json;
-use axum::{routing::get, Router};
+use axum::{routing::get, routing::put, Router};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
 
 use nova_executor::PipelineExecutor;
 use nova_config::Config;
+
+fn merge_json(base: &mut Value, patch: &Value) {
+    match (base, patch) {
+        (Value::Object(base_map), Value::Object(patch_map)) => {
+            for (k, v) in patch_map {
+                if v.is_object() {
+                    merge_json(base_map.entry(k).or_insert(Value::Object(Default::default())), v);
+                } else {
+                    base_map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        (base, patch) => *base = patch.clone(),
+    }
+}
 
 pub struct AdminState {
     pub started_at: Instant,
@@ -30,7 +45,7 @@ pub fn routes(state: Arc<AdminState>) -> Router {
         .route("/ready", get(readiness_check))
         .route("/live", get(liveness_check))
         .route("/metrics", get(metrics_handler))
-        .route("/admin/config", get(config_get))
+        .route("/admin/config", get(config_get).put(config_put))
         .route("/admin/status", get(pipeline_status))
         .route("/openapi.json", get(openapi_handler))
         .route("/runtime/status", get(runtime_status))
@@ -153,34 +168,53 @@ async fn metrics_handler(State(state): State<Arc<AdminState>>) -> String {
 
 async fn config_get(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let config = state.config.read();
-    Json(json!({
-        "version": 1,
-        "general": {
-            "data_dir": config.general.data_dir,
-            "max_connections": config.general.max_connections,
-        },
-        "storage": {
-            "wal_segment_size": config.storage.wal_segment_size,
-            "block_cache_size": config.storage.block_cache_size,
-            "page_size": config.storage.page_size,
-            "compression": config.storage.compression,
-        },
-        "memory": {
-            "max_memory": config.memory.max_memory,
-            "pressure_threshold_pct": config.memory.pressure_threshold_pct,
-        },
-        "networking": {
-            "listen_address": config.networking.listen_address,
-            "listen_port": config.networking.listen_port,
-            "tls_enabled": config.networking.tls_enabled,
-        },
-        "execution": {
-            "max_concurrent_ops": config.execution.max_concurrent_ops,
-            "pipeline_queue_depth": config.execution.pipeline_queue_depth,
-            "default_operation_timeout_ms": config.execution.default_operation_timeout_ms,
-            "max_retries": config.execution.pipeline_max_retries,
-        },
-    }))
+    let mut value = serde_json::to_value(&*config).unwrap_or_default();
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("version".to_string(), json!(1));
+    }
+    Json(value)
+}
+
+async fn config_put(
+    State(state): State<Arc<AdminState>>,
+    axum::extract::Json(patch): axum::extract::Json<Value>,
+) -> Result<Json<Value>, (axum::http::StatusCode, Json<Value>)> {
+    let mut current = {
+        let c = state.config.read();
+        serde_json::to_value(&*c).map_err(|e| {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": "serialization_failed", "detail": e.to_string()
+            })))
+        })?
+    };
+
+    merge_json(&mut current, &patch);
+
+    let new_config: Config = serde_json::from_value(current).map_err(|e| {
+        (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+            "error": "validation_failed", "detail": format!("Invalid config: {}", e)
+        })))
+    })?;
+
+    if let Err(errors) = new_config.validate() {
+        return Err((axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+            "error": "validation_failed", "detail": errors
+        }))));
+    }
+
+    {
+        let mut c = state.config.write();
+        *c = new_config.clone();
+    }
+
+    tracing::info!("Configuration updated via API");
+
+    let mut value = serde_json::to_value(&new_config).unwrap_or_default();
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("version".to_string(), json!(1));
+        obj.insert("status".to_string(), json!("updated"));
+    }
+    Ok(Json(value))
 }
 
 async fn pipeline_status(State(state): State<Arc<AdminState>>) -> Json<Value> {
