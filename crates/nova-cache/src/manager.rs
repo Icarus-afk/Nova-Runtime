@@ -134,7 +134,7 @@ impl CacheManager {
             queue_capacity: 1024,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
+                .expect("system clock before UNIX_EPOCH")
                 .as_millis() as u64,
             active: true,
             consumer_group: None,
