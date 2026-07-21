@@ -1,5 +1,6 @@
 use crate::engine::*;
 use std::sync::atomic::Ordering;
+use std::time::Instant as StdInstant;
 
 macro_rules! log {
     ($ctx:expr, $lvl:expr, $sub:expr, $msg:expr) => {
@@ -27,19 +28,25 @@ macro_rules! log_detail {
 }
 
 pub struct HttpSubsystem {
-    active: u32,
+    client: reqwest::blocking::Client,
+    target: String,
     counter: u64,
-    paths: &'static [&'static str],
-    methods: &'static [&'static str],
+    endpoints: Vec<String>,
 }
 
 impl HttpSubsystem {
-    pub fn new() -> Self {
-        Self {
-            active: 0, counter: 0,
-            paths: &["/api/v1/users", "/api/v1/items", "/api/v1/orders", "/health", "/api/v1/search", "/api/v1/auth/login", "/api/v1/blobs"],
-            methods: &["GET", "POST", "PUT", "DELETE", "PATCH"],
-        }
+    pub fn new(target: &str) -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("http client");
+        let endpoints = vec![
+            "/health", "/ready",
+            "/api/v1/sql", "/api/v1/cache", "/api/v1/queues",
+            "/api/v1/scheduler", "/api/v1/search",
+            "/api/v1/blobs", "/api/v1/auth/login",
+        ].into_iter().map(|p| format!("{target}{p}")).collect();
+        Self { client, target: target.to_string(), counter: 0, endpoints }
     }
 }
 
@@ -47,34 +54,52 @@ impl Subsystem for HttpSubsystem {
     fn name(&self) -> &'static str { "http" }
     fn init(&mut self, _ctx: &mut TickContext) {}
     fn tick(&mut self, ctx: &mut TickContext) {
-        let count = ctx.rng.range(0, ctx.load as u64 / 10 + 2);
-        self.active += count as u32;
+        let count = ctx.rng.range(1, (ctx.load as u64 / 8 + 2).min(8));
         ctx.metrics.requests_total.fetch_add(count, Ordering::Relaxed);
 
         for _ in 0..count {
             self.counter += 1;
             let req_id = format!("req-{:06x}", self.counter);
-            let path = ctx.rng.pick(self.paths);
-            let method = ctx.rng.pick(self.methods);
-            let dur = ctx.rng.range(5, 200);
-            let is_error = (ctx.failure_injected && ctx.rng.bool(0.15)) || ctx.rng.bool(0.03);
-            let is_4xx = !is_error && ctx.rng.bool(0.04);
+            let url = ctx.rng.pick(&self.endpoints);
+            let start = StdInstant::now();
 
-            if is_error {
+            let result = match self.client.get(url).send() {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let dur_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    (status.as_u16(), dur_ms as u64)
+                }
+                Err(e) => {
+                    let dur_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let is_timeout = e.is_timeout();
+                    ctx.metrics.http_5xx.fetch_add(1, Ordering::Relaxed);
+                    let msg = if is_timeout {
+                        format!("GET {url} → timeout ({dur_ms:.0}ms)")
+                    } else {
+                        format!("GET {url} → error: {e}")
+                    };
+                    log_detail!(ctx, LogLevel::Error, "http", msg, Some(req_id), Some(dur_ms as u64));
+                    continue;
+                }
+            };
+
+            let (status, dur_ms) = result;
+            if status >= 500 {
                 ctx.metrics.http_5xx.fetch_add(1, Ordering::Relaxed);
-                log_detail!(ctx, LogLevel::Error, "http", format!("{method} {path} → 500 ({dur}ms)"), Some(req_id), Some(dur));
-            } else if is_4xx {
+                log_detail!(ctx, LogLevel::Error, "http",
+                    format!("GET {url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
+            } else if status >= 400 {
                 ctx.metrics.http_4xx.fetch_add(1, Ordering::Relaxed);
-                log_detail!(ctx, LogLevel::Warn, "http", format!("{method} {path} → 401 ({dur}ms)"), Some(req_id), Some(dur));
+                log_detail!(ctx, LogLevel::Warn, "http",
+                    format!("GET {url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
             } else {
                 ctx.metrics.http_2xx.fetch_add(1, Ordering::Relaxed);
                 if ctx.verbose {
-                    log_detail!(ctx, LogLevel::Info, "http", format!("{method} {path} → 200 ({dur}ms)"), Some(req_id), Some(dur));
+                    log_detail!(ctx, LogLevel::Info, "http",
+                        format!("GET {url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
                 }
             }
-            ctx.metrics.requests_active.store(self.active, Ordering::Relaxed);
         }
-        self.active = self.active.saturating_sub(ctx.rng.range(0, (self.active + 1) as u64) as u32);
     }
     fn shutdown(&mut self, _ctx: &mut TickContext) {}
 }
