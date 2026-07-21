@@ -275,6 +275,8 @@ impl Parser {
         let mut unique = false;
         let mut is_primary_key = false;
         let mut default = None;
+        let mut auto_increment = false;
+        let mut check_expr = None;
 
         loop {
             if self.eat_if(Token::Not) {
@@ -283,13 +285,26 @@ impl Parser {
             } else if self.eat_if(Token::Null) {
                 nullable = true;
             } else if self.eat_if(Token::Default) {
-                default = Some(self.parse_literal()?);
+                if self.eat_identifier("current_timestamp")
+                    || self.eat_identifier("current_date")
+                    || self.eat_identifier("current_time")
+                {
+                    default = Some(LiteralValue::String("current_timestamp".to_string()));
+                } else {
+                    default = Some(self.parse_literal()?);
+                }
             } else if self.eat_if(Token::Primary) {
                 self.expect(Token::Key)?;
                 is_primary_key = true;
                 nullable = false;
             } else if self.eat_if(Token::Unique) {
                 unique = true;
+            } else if self.eat_identifier("auto_increment") {
+                auto_increment = true;
+            } else if self.eat_if(Token::Check) {
+                self.expect(Token::LParen)?;
+                check_expr = Some(self.parse_expression()?);
+                self.expect(Token::RParen)?;
             } else {
                 break;
             }
@@ -301,16 +316,20 @@ impl Parser {
             default,
             unique,
             is_primary_key,
+            auto_increment,
+            check_expr,
         })
     }
 
     fn parse_sql_type(&mut self) -> Result<SQLType> {
         let ident = self.parse_identifier()?;
         match ident.to_lowercase().as_str() {
-            "int" | "integer" => Ok(SQLType::Integer),
-            "float" | "double" | "real" => Ok(SQLType::Float),
-            "text" | "varchar" | "string" => Ok(SQLType::Text),
-            "bool" | "boolean" => Ok(SQLType::Boolean),
+            "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" => Ok(SQLType::Integer),
+            "float" | "double" | "real" | "decimal" | "numeric" => Ok(SQLType::Float),
+            "text" | "varchar" | "string" | "char" | "tinytext" | "mediumtext" | "longtext" => Ok(SQLType::Text),
+            "bool" | "boolean" | "bit" => Ok(SQLType::Boolean),
+            "timestamp" | "datetime" | "date" | "time" | "year" => Ok(SQLType::Text),
+            "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => Ok(SQLType::Text),
             other => Err(self.err_syntax(format!("unknown type: {}", other))),
         }
     }
@@ -850,6 +869,16 @@ impl Parser {
             true
         } else {
             false
+        }
+    }
+
+    fn eat_identifier(&mut self, ident: &str) -> bool {
+        match self.peek() {
+            Token::Identifier(ref s) if s.eq_ignore_ascii_case(ident) => {
+                self.advance();
+                true
+            }
+            _ => false,
         }
     }
 

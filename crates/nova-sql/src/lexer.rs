@@ -7,7 +7,7 @@ pub enum Token {
     And, Or, Not, Null, Is, In, Between, Like, ILike, True, False, As, On, Group, By, Having,
     Order, Asc, Desc, Limit, Offset, Distinct, All, Exists, Default,
     Count, Sum, Avg, Min, Max, Case, When, Then, Else, End, Cast,
-    Primary, Key, Unique, Nulls, First, Last,
+    Primary, Key, Unique, Nulls, First, Last, Check,
     // Identifiers & literals
     Identifier(String),
     Number(String),
@@ -197,6 +197,7 @@ impl Lexer {
             "primary" => Token::Primary,
             "key" => Token::Key,
             "unique" => Token::Unique,
+            "check" => Token::Check,
             "nulls" => Token::Nulls,
             "first" => Token::First,
             "last" => Token::Last,
