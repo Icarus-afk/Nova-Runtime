@@ -12,6 +12,11 @@ if [ ! -f "$REPO_DIR/target/release/novad" ] && [ ! -f "$REPO_DIR/target/debug/n
     "$SCRIPT_DIR/setup.sh"
 fi
 
+# Check if port is already in use
+if ss -tlnp | grep -q ":8642 "; then
+    echo "Warning: port 8642 appears to be in use"
+fi
+
 # Start backend in background
 echo ""
 echo "--- Starting novad backend ---"
