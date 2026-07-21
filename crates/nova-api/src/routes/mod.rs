@@ -23,8 +23,7 @@ pub fn v1_routes(state: Arc<AdminState>) -> Router {
         .nest("/auth", auth::routes(state.clone()))
 }
 
-pub fn ws_routes(state: Arc<AdminState>) -> Router {
+pub fn ws_router() -> Router<Arc<AdminState>> {
     Router::new()
         .route("/ws", get(ws::ws_handler))
-        .with_state(state)
 }
