@@ -172,17 +172,14 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Cache manager initialized");
 
     // Initialize event bus
-    {
-        let ev_cfg = config.read().event.clone();
-        let event_bus = Arc::new(nova_event::EventBus::new(
-            ev_cfg.ordering_shards,
-            nova_event::OverflowPolicy::DropNewest,
-            4 * 1024 * 1024,
-            ev_cfg.dlq_max_entries as usize,
-        ));
-        tracing::info!("Event bus initialized ({} shards)", ev_cfg.ordering_shards);
-        let _event_bus = event_bus;
-    }
+    let ev_cfg = config.read().event.clone();
+    let event_bus = Arc::new(nova_event::EventBus::new(
+        ev_cfg.ordering_shards,
+        nova_event::OverflowPolicy::DropNewest,
+        4 * 1024 * 1024,
+        ev_cfg.dlq_max_entries as usize,
+    ));
+    tracing::info!("Event bus initialized ({} shards)", ev_cfg.ordering_shards);
 
     // Initialize blob manager
     let blob_mgr = {
@@ -237,6 +234,13 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(nova_sql::SQLEngine::new_with_storage(sql_cfg, engine))
     };
     tracing::info!("SQL engine initialized");
+
+    // Attach mutation observer to SQL engine (publishes DB mutations to event bus)
+    {
+        use nova_sql::MutationObserver;
+        let bus = event_bus.clone();
+        sql_engine.set_observer(Arc::new(nova_sql::SQLEngineMutationObserver::new(bus)));
+    }
 
     // Initialize queue manager
     let queue_mgr = {
@@ -353,6 +357,7 @@ async fn main() -> anyhow::Result<()> {
         search_mgr: Some(search_mgr.clone()),
         blob_mgr: Some(blob_mgr.clone()),
         auth_mgr: Some(auth_mgr.clone()),
+        event_bus: Some(event_bus.clone()),
         storage_ok: true,
     });
 
@@ -409,6 +414,18 @@ async fn main() -> anyhow::Result<()> {
     println!("  ║     PID:    {:<27} ║", std::process::id());
     println!("  ╚══════════════════════════════════════╝");
     println!();
+
+    // Quick port conflict check before starting the server
+    {
+        let addr = listen_addr.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::net::TcpStream;
+            if let Ok(stream) = TcpStream::connect(&addr) {
+                tracing::warn!("Port {} appears to be in use", addr);
+                drop(stream);
+            }
+        }).await.ok();
+    }
 
     // Start HTTP server
     let server_result = nova_api::server::start_server(
