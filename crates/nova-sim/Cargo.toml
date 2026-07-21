@@ -1,0 +1,20 @@
+[package]
+name = "nova-sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nova-event = { path = "../nova-event" }
+nova-core = { path = "../nova-core" }
+rand.workspace = true
+chrono.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+uuid.workspace = true
+crossbeam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
