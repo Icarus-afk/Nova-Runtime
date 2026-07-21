@@ -20,6 +20,7 @@ members = [
     "crates/nova-scheduler",
     "crates/nova-auth",
     "crates/nova-gql",
+    "crates/nova-sim",
 ]
 
 [workspace.package]
@@ -59,7 +60,7 @@ aes-gcm-siv = "0.10"
 chacha20poly1305 = "0.10"
 rand = "0.8"
 chrono = "0.4"
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 hyper = "1"

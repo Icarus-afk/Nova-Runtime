@@ -40,6 +40,7 @@ fn start_server(addr: &str, pipeline: Arc<nova_executor::PipelineExecutor>, conf
         search_mgr: None,
         blob_mgr: None,
         auth_mgr: None,
+        event_bus: None,
         storage_ok: true,
     });
     let addr = addr.to_string();
