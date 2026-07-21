@@ -191,6 +191,8 @@ fn render_controls_hint(frame: &mut Frame, area: Rect) {
 }
 
 fn main() -> anyhow::Result<()> {
+    let api_target = std::env::args().nth(1).unwrap_or_else(|| "http://127.0.0.1:8642".to_string());
+
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
@@ -199,7 +201,7 @@ fn main() -> anyhow::Result<()> {
     let mut eng = SimEngine::new(config);
 
     eng.register(Box::new(WorkerSubsystem::new()));
-    eng.register(Box::new(HttpSubsystem::new()));
+    eng.register(Box::new(HttpSubsystem::new(&api_target)));
     eng.register(Box::new(AuthSubsystem::new()));
     eng.register(Box::new(SqlSubsystem::new()));
     eng.register(Box::new(CacheSubsystem::new()));
@@ -212,6 +214,7 @@ fn main() -> anyhow::Result<()> {
 
     eng.log(LogLevel::Info, "system", "Nova Runtime Simulation v0.1.0 starting...".into());
     eng.log(LogLevel::Info, "system", format!("Seed: {} | Tick rate: {}ms | Press [s] for speed", 42, eng.config.tick_rate_ms));
+    eng.log(LogLevel::Info, "system", format!("Target API: {api_target}").into());
     eng.log(LogLevel::Info, "system", "Registered 11 subsystems".into());
     eng.log(LogLevel::Info, "system", "Initialization complete — entering run loop".into());
 

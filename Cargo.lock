@@ -2143,18 +2143,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "crossbeam",
  "crossterm",
  "futures",
- "nova-core",
  "nova-event",
  "rand 0.8.6",
  "ratatui",
- "serde",
+ "reqwest",
  "serde_json",
  "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
