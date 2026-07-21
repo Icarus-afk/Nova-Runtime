@@ -43,8 +43,8 @@ async fn sql_query(
     match result {
         nova_sql::SQLResult::Query { batches, stats } => {
             let mut rows = Vec::new();
-            let mut columns = Vec::new();
             let mut column_names = Vec::new();
+            let mut types = Vec::new();
             for batch in &batches {
                 column_names = batch.column_names.clone();
                 for col in &batch.columns {
@@ -55,9 +55,7 @@ async fn sql_query(
                         nova_sql::Column::String(_) => "text",
                         nova_sql::Column::Null(_) => "null",
                     };
-                    if !columns.contains(&col_name.to_string()) {
-                        columns.push(col_name.to_string());
-                    }
+                    types.push(col_name.to_string());
                 }
                 for i in 0..batch.num_rows {
                     let mut row = Vec::new();
@@ -84,9 +82,9 @@ async fn sql_query(
                 }
             }
             Ok(Json(json!({
-                "columns": columns,
+                "columns": column_names,
                 "column_names": column_names,
-                "types": columns,
+                "types": types,
                 "rows": rows,
                 "row_count": rows.len(),
                 "truncated": false,
