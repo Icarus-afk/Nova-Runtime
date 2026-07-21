@@ -1,6 +1,8 @@
 use crate::engine::*;
 use std::sync::atomic::Ordering;
 use std::time::Instant as StdInstant;
+use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::Method;
 
 macro_rules! log {
     ($ctx:expr, $lvl:expr, $sub:expr, $msg:expr) => {
@@ -27,11 +29,22 @@ macro_rules! log_detail {
     };
 }
 
+struct EndpointDef {
+    path: &'static str,
+    method: Method,
+    body: Option<&'static str>,
+}
+
+impl EndpointDef {
+    fn get(path: &'static str) -> Self { Self { path, method: Method::GET, body: None } }
+    fn post(path: &'static str, body: Option<&'static str>) -> Self { Self { path, method: Method::POST, body } }
+}
+
 pub struct HttpSubsystem {
-    client: reqwest::blocking::Client,
+    client: Client,
     target: String,
     counter: u64,
-    endpoints: Vec<String>,
+    endpoints: Vec<EndpointDef>,
     server_down: bool,
     probe_tick: u64,
     consecutive_errors: u64,
@@ -39,25 +52,42 @@ pub struct HttpSubsystem {
 
 impl HttpSubsystem {
     pub fn new(target: &str) -> Self {
-        let client = reqwest::blocking::Client::builder()
+        let client = Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()
             .expect("http client");
         let endpoints = vec![
-            "/health", "/ready",
-            "/api/v1/sql", "/api/v1/cache", "/api/v1/queues",
-            "/api/v1/scheduler", "/api/v1/search",
-            "/api/v1/blobs", "/api/v1/auth/login",
-        ].into_iter().map(|p| format!("{target}{p}")).collect();
+            EndpointDef::get("/health"),
+            EndpointDef::get("/ready"),
+            EndpointDef::get("/api/v1/queues"),
+            EndpointDef::get("/api/v1/queues"),
+            EndpointDef::get("/api/v1/blobs"),
+            EndpointDef::get("/api/v1/blobs/stats"),
+            EndpointDef::get("/api/v1/cache/stats"),
+            EndpointDef::get("/api/v1/cache/keys"),
+            EndpointDef::get("/api/v1/scheduler/stats"),
+            EndpointDef::get("/api/v1/scheduler/jobs"),
+            EndpointDef::get("/api/v1/search/indexes"),
+            EndpointDef::get("/api/v1/sql/tables"),
+            EndpointDef::post("/api/v1/auth/login", Some(r#"{"username":"admin","password":"admin123"}"#)),
+            EndpointDef::post("/api/v1/sql/query", Some(r#"{"query":"SELECT * FROM iot_weather_sensors"}"#)),
+        ];
         Self { client, target: target.to_string(), counter: 0, endpoints, server_down: false, probe_tick: 0, consecutive_errors: 0 }
+    }
+
+    fn build_request(&self, ep: &EndpointDef) -> RequestBuilder {
+        let url = format!("{}{}", self.target, ep.path);
+        let rb = self.client.request(ep.method.clone(), &url);
+        match ep.body {
+            Some(body) => rb.header("Content-Type", "application/json").body(body.to_string()),
+            None => rb,
+        }
     }
 }
 
 impl Subsystem for HttpSubsystem {
     fn name(&self) -> &'static str { "http" }
     fn init(&mut self, ctx: &mut TickContext) {
-        // Check server availability on init
-        let start = StdInstant::now();
         match self.client.get(&format!("{}/health", self.target)).send() {
             Ok(_) => {
                 self.server_down = false;
@@ -68,31 +98,30 @@ impl Subsystem for HttpSubsystem {
                 log!(ctx, LogLevel::Warn, "http", format!("{} unreachable — requests suspended", self.target));
             }
         }
-        let _ = start;
     }
     fn tick(&mut self, ctx: &mut TickContext) {
         self.probe_tick += 1;
 
-        // If server is down, only probe once every ~10 ticks
         if self.server_down && self.probe_tick % 10 != 0 {
             return;
         }
 
-        // Only probe one endpoint per tick when recovering
         let count = if self.server_down { 1 } else { ctx.rng.range(1, (ctx.load as u64 / 8 + 2).min(8)) };
         ctx.metrics.requests_total.fetch_add(count, Ordering::Relaxed);
 
         for _ in 0..count {
             self.counter += 1;
             let req_id = format!("req-{:06x}", self.counter);
-            let url = if self.server_down {
-                format!("{}/health", self.target)
+            let ep = if self.server_down {
+                &self.endpoints[0] // /health
             } else {
-                ctx.rng.pick(&self.endpoints).clone()
+                ctx.rng.pick(&self.endpoints)
             };
             let start = StdInstant::now();
+            let method_str = ep.method.as_str();
+            let path = ep.path;
 
-            let result = match self.client.get(&url).send() {
+            let result = match self.build_request(ep).send() {
                 Ok(resp) => {
                     if self.server_down {
                         self.server_down = false;
@@ -112,28 +141,26 @@ impl Subsystem for HttpSubsystem {
                     }
                     ctx.metrics.http_5xx.fetch_add(1, Ordering::Relaxed);
                     let kind = if e.is_timeout() { "timeout" } else if e.is_connect() { "refused" } else { "unreachable" };
-                    let short_url = url.trim_start_matches(&self.target);
                     log_detail!(ctx, LogLevel::Error, "http",
-                        format!("GET {short_url} → {kind} ({dur_ms:.0}ms)"), Some(req_id), Some(dur_ms as u64));
+                        format!("{method_str} {path} → {kind} ({dur_ms:.0}ms)"), Some(req_id), Some(dur_ms as u64));
                     continue;
                 }
             };
 
             let (status, dur_ms) = result;
-            let short_url = url.trim_start_matches(&self.target);
             if status >= 500 {
                 ctx.metrics.http_5xx.fetch_add(1, Ordering::Relaxed);
                 log_detail!(ctx, LogLevel::Error, "http",
-                    format!("GET {short_url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
+                    format!("{method_str} {path} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
             } else if status >= 400 {
                 ctx.metrics.http_4xx.fetch_add(1, Ordering::Relaxed);
                 log_detail!(ctx, LogLevel::Warn, "http",
-                    format!("GET {short_url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
+                    format!("{method_str} {path} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
             } else {
                 ctx.metrics.http_2xx.fetch_add(1, Ordering::Relaxed);
                 if ctx.verbose {
                     log_detail!(ctx, LogLevel::Info, "http",
-                        format!("GET {short_url} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
+                        format!("{method_str} {path} → {status} ({dur_ms}ms)"), Some(req_id), Some(dur_ms));
                 }
             }
         }
