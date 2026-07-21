@@ -20,6 +20,7 @@ pub struct AdminState {
     pub search_mgr: Option<Arc<nova_search::SearchManager>>,
     pub blob_mgr: Option<Arc<nova_blob::BlobManager>>,
     pub auth_mgr: Option<Arc<nova_auth::AuthManager>>,
+    pub event_bus: Option<Arc<nova_event::EventBus>>,
     pub storage_ok: bool,
 }
 
