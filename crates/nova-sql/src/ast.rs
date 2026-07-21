@@ -168,6 +168,8 @@ pub struct ColumnDef {
     pub default: Option<LiteralValue>,
     pub unique: bool,
     pub is_primary_key: bool,
+    pub auto_increment: bool,
+    pub check_expr: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]
