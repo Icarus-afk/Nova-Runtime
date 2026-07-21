@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -24,12 +25,83 @@ struct PersistedTable {
     rows: Vec<Row>,
 }
 
+pub trait MutationObserver: Send + Sync {
+    fn on_table_created(&self, _table: &str) {}
+    fn on_table_dropped(&self, _table: &str) {}
+    fn on_rows_inserted(&self, _table: &str, _count: u64) {}
+    fn on_rows_updated(&self, _table: &str, _count: u64) {}
+    fn on_rows_deleted(&self, _table: &str, _count: u64) {}
+}
+
+pub struct SQLEngineMutationObserver {
+    bus: Arc<nova_event::EventBus>,
+}
+
+impl SQLEngineMutationObserver {
+    pub fn new(bus: Arc<nova_event::EventBus>) -> Self {
+        SQLEngineMutationObserver { bus }
+    }
+}
+
+impl MutationObserver for SQLEngineMutationObserver {
+    fn on_table_created(&self, table: &str) {
+        use nova_event::{EventBuilder, Subsystem};
+        let payload = serde_json::json!({"table": table});
+        let event = EventBuilder::new("db.table.created")
+            .unwrap()
+            .source(Subsystem::Storage, "sql", "local", "default")
+            .build(serde_json::to_vec(&payload).unwrap_or_default());
+        let _ = self.bus.publish(event);
+    }
+
+    fn on_table_dropped(&self, table: &str) {
+        use nova_event::{EventBuilder, Subsystem};
+        let payload = serde_json::json!({"table": table});
+        let event = EventBuilder::new("db.table.dropped")
+            .unwrap()
+            .source(Subsystem::Storage, "sql", "local", "default")
+            .build(serde_json::to_vec(&payload).unwrap_or_default());
+        let _ = self.bus.publish(event);
+    }
+
+    fn on_rows_inserted(&self, table: &str, count: u64) {
+        use nova_event::{EventBuilder, Subsystem};
+        let payload = serde_json::json!({"table": table, "count": count});
+        let event = EventBuilder::new("db.table.insert")
+            .unwrap()
+            .source(Subsystem::Storage, "sql", "local", "default")
+            .build(serde_json::to_vec(&payload).unwrap_or_default());
+        let _ = self.bus.publish(event);
+    }
+
+    fn on_rows_updated(&self, table: &str, count: u64) {
+        use nova_event::{EventBuilder, Subsystem};
+        let payload = serde_json::json!({"table": table, "count": count});
+        let event = EventBuilder::new("db.table.update")
+            .unwrap()
+            .source(Subsystem::Storage, "sql", "local", "default")
+            .build(serde_json::to_vec(&payload).unwrap_or_default());
+        let _ = self.bus.publish(event);
+    }
+
+    fn on_rows_deleted(&self, table: &str, count: u64) {
+        use nova_event::{EventBuilder, Subsystem};
+        let payload = serde_json::json!({"table": table, "count": count});
+        let event = EventBuilder::new("db.table.delete")
+            .unwrap()
+            .source(Subsystem::Storage, "sql", "local", "default")
+            .build(serde_json::to_vec(&payload).unwrap_or_default());
+        let _ = self.bus.publish(event);
+    }
+}
+
 pub struct SQLEngine {
     #[allow(dead_code)]
     config: SQLConfig,
     tables: Arc<TableStore>,
     shutdown: Arc<AtomicBool>,
     storage: Option<Arc<dyn StorageEngine>>,
+    observer: Mutex<Option<Arc<dyn MutationObserver>>>,
 }
 
 impl SQLEngine {
@@ -39,6 +111,7 @@ impl SQLEngine {
             tables: Arc::new(TableStore::new()),
             shutdown: Arc::new(AtomicBool::new(false)),
             storage: None,
+            observer: Mutex::new(None),
         };
         engine
     }
@@ -49,11 +122,26 @@ impl SQLEngine {
             tables: Arc::new(TableStore::new()),
             shutdown: Arc::new(AtomicBool::new(false)),
             storage: Some(storage),
+            observer: Mutex::new(None),
         };
         if let Err(e) = engine.load_tables() {
             tracing::warn!("Failed to load SQL tables from storage: {e}");
         }
         engine
+    }
+
+    pub fn set_observer(&self, observer: Arc<dyn MutationObserver>) {
+        if let Ok(mut guard) = self.observer.lock() {
+            *guard = Some(observer);
+        }
+    }
+
+    fn notify(&self, f: impl FnOnce(&dyn MutationObserver)) {
+        if let Ok(guard) = self.observer.lock() {
+            if let Some(ref obs) = *guard {
+                f(obs.as_ref());
+            }
+        }
     }
 
     fn table_key(name: &str) -> Key {

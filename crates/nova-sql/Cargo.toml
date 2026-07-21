@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 nova-core = { path = "../nova-core" }
+nova-event = { path = "../nova-event" }
 tracing.workspace = true
 thiserror.workspace = true
 serde.workspace = true
