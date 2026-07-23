@@ -1,4 +1,6 @@
-# 23. GraphQL API
+# 24. GraphQL API
+
+> **Implementation Status:** A partial GraphQL implementation exists in `nova-gql/` with an `updateConfiguration` mutation that handles 3 fields in-memory only. The full schema, queries, subscriptions, and DataLoader batching described in this spec are not implemented. The GraphQL endpoint is conditionally compiled and mounted at `/graphql`.
 
 ## 1. Purpose
 

@@ -1,5 +1,78 @@
 # 14. Configuration
 
+> **Implementation Status:** This document is the design specification. The actual implementation differs in several ways listed below.
+
+## Actual Implementation
+
+### Config File Format
+
+**TOML only.** YAML and JSON config formats are not supported. The config file is `novad.toml`.
+
+### Config Loading
+
+The config is loaded at startup from the file path provided via `--config novad.toml` (or defaults to `./novad.toml`). There is **no layered resolution** (no system/user/env/flags cascade). The loading is:
+
+1. Compile-time defaults (16 sections, `Config::default()`)
+2. TOML file override (overrides defaults)
+3. No environment variable overrides
+4. No CLI flag overrides beyond `--config` path
+
+### Runtime Updates
+
+Config can be updated at runtime via the REST API:
+
+```bash
+GET  /admin/config    → returns full Config as JSON
+PUT  /admin/config    → accepts partial JSON, validates, applies in-memory
+```
+
+The CLI supports this:
+
+```bash
+novactl config get logging.level
+novactl config set logging.level debug
+```
+
+### Hot-Reload
+
+SIGHUP triggers a reload of the config file from disk. This is implemented in `novad/src/main.rs`. There is **no file-watching** — the file must be modified and then SIGHUP sent manually.
+
+### Validation
+
+`Config::validate()` enforces ~30 rules (page sizes, thresholds, port values, memory limits, etc.). Validation runs both at startup and on `PUT /admin/config`.
+
+### Actual Config Sections (16)
+
+```toml
+[general]       # data_dir, pid_file, max_connections, timeouts
+[storage]       # WAL, page cache, compression, bloom filter, compaction
+[memory]        # max_memory, pressure thresholds, GC
+[networking]    # listen address/port, TLS (struct exists, not wired), TCP, rate limiting
+[logging]       # level, format, file
+[subsystems]    # enable/disable flags for each subsystem
+[event]         # ordering shards, queue capacity, DLQ
+[execution]     # pipeline config, timeouts, rate limits, circuit breaker, audit, idempotency
+[auth]          # password policy, lockout, bcrypt cost, MFA, session config
+[security]      # encryption at rest (struct exists, not wired)
+[cache]         # max size, TTL, eviction policy, backend type
+[blob]          # chunk size, max blob size, GC intervals, data dir
+[search]        # BM25 parameters, fuzzy, highlight, refresh interval
+[sql]           # batch size, column limit, default limit
+[queue]         # max queues/messages, visibility timeout, DLQ, scanners
+[scheduler]     # time wheel, job limits, retry, recovery
+```
+
+### Not Implemented (from design)
+
+- Environment variable overrides (`NOVA_*` prefix)
+- CLI flag overrides for individual config keys
+- Config diff tool
+- Config migration tool
+- Config encryption
+- YAML/JSON config formats
+
+---
+
 ## 1. Purpose
 
 The Configuration subsystem provides a unified, hierarchical configuration system for Nova Runtime. It manages all configuration parameters — server settings, subsystem options, TLS certificates, storage paths, network interfaces, rate limits, and feature flags — through a consistent interface with multiple override layers: file (TOML/YAML), environment variables, command-line flags, and hot-reload via SIGHUP. The Configuration system ensures that every parameter has a validated default, every source of truth is clear, and every change is auditable.

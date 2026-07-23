@@ -1,6 +1,6 @@
 # Nova Runtime
 
-> **Status: Implementation in Progress** — Phases 0–4 complete. 14 crates implemented with ~1,359 tests. See [Development Roadmap](docs/30-development-roadmap.md) for the full plan.
+> **Status: Implementation in Progress** — Phases 0–5 complete. 18 crates implemented with ~1,492 tests. See [Development Roadmap](docs/31-development-roadmap.md) for the full plan.
 
 Nova Runtime is a lightweight backend runtime that collapses multiple infrastructure services into a single executable. It unifies database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities on commodity VPS hardware.
 
@@ -20,11 +20,10 @@ graph TB
         REST["REST API"]
         GRAPHQL["GraphQL"]
         CLI["novactl CLI"]
-        SDK["Client SDKs"]
     end
 
     subgraph "Nova Runtime"
-        NET["Networking Layer<br/>HTTP/1.1, HTTP/2, WS, gRPC, Unix"]
+        NET["Networking Layer<br/>HTTP/1.1, WebSocket"]
         AUTH["Authentication & Security"]
         EXEC["Execution Engine"]
         EVENTS["Event System"]
@@ -44,7 +43,6 @@ graph TB
     REST --> NET
     GRAPHQL --> NET
     CLI --> NET
-    SDK --> NET
     NET --> AUTH --> EXEC
     EXEC --> EVENTS
     EXEC --> OBJ
@@ -72,7 +70,7 @@ graph TB
 
 ## Documentation
 
-The complete architecture is specified across 30 documents in [`docs/`](docs/). Each document is a standalone engineering specification covering purpose, architecture (with mermaid diagrams), data structures, algorithms, interfaces, failure modes, recovery strategy, performance considerations, security, and testing.
+The complete architecture is specified across 31 documents in [`docs/`](docs/). Each document is a standalone engineering specification covering purpose, architecture (with mermaid diagrams), data structures, algorithms, interfaces, failure modes, recovery strategy, performance considerations, security, and testing.
 
 | # | Document | What It Covers |
 |---|----------|----------------|
@@ -89,24 +87,24 @@ The complete architecture is specified across 30 documents in [`docs/`](docs/). 
 | 11 | [Event System](docs/11-event-system.md) | Pub-sub event bus, topic routing, delivery guarantees, backpressure |
 | 12 | [Object Model](docs/12-object-model.md) | Type system (10 types), MessagePack serialization, schema evolution |
 | 13 | [Networking](docs/13-networking.md) | TCP/TLS/Unix listeners, HTTP/1.1+2, WebSocket, gRPC, connection mgmt |
-| 14 | [Configuration](docs/14-configuration.md) | 5-layer resolution (defaults→file→env→flags), hot-reload, schema |
+| 14 | [Configuration](docs/14-configuration.md) | Config struct, TOML-based loading, REST API for runtime changes |
 | 15 | [Security](docs/15-security.md) | Threat model, AES-256-GCM at rest, TLS 1.3, audit logging, input validation |
-| 16 | [Authentication](docs/16-authentication.md) | Password (argon2id), API keys, JWT, OAuth2/OIDC, RBAC, MFA |
+| 16 | [Authentication](docs/16-authentication.md) | Password (bcrypt), API keys, JWT, RBAC, MFA |
 | 17 | [Cache](docs/17-cache.md) | HashMap + TTL backends, LRU/LFU eviction, batch ops, TTL sweeper, event invalidation |
-| 17 | [Queue](docs/17-queue.md) | FIFO/priority/delayed/DLQ, at-least-once, visibility timeout, consumer groups |
-| 18 | [Scheduler](docs/18-scheduler.md) | Cron/delayed/one-shot jobs, time-wheel, DAG dependencies, retry (exp backoff) |
-| 19 | [Search](docs/19-search.md) | BM25 scoring, inverted index, tokenization, fuzzy/boolean/phrase search |
-| 20 | [Blob Storage](docs/20-blob-storage.md) | 1 MiB chunking, SHA-256 dedup, multipart upload, range requests |
-| 21 | [SQL Layer](docs/21-sql-layer.md) | SQL subset (SELECT/JOIN/AGG/GROUP BY), recursive descent parser, iterator execution |
-| 22 | [REST API](docs/22-rest-api.md) | 80+ endpoints grouped by subsystem, cursor pagination, sparse fieldsets |
-| 23 | [GraphQL](docs/23-graphql.md) | Full SDL schema, DataLoader batching, subscriptions, complexity analysis |
-| 24 | [CLI](docs/24-cli.md) | 30+ commands across all subsystems, profiles, shell completions |
-| 25 | [SDK](docs/25-sdk.md) | TypeScript SDK with 9 typed clients, circuit breaker, auto-pagination |
-| 26 | [Dashboard](docs/26-dashboard.md) | React SPA spec, wireframes, WebSocket live updates, component tree |
-| 27 | [Testing Strategy](docs/27-testing-strategy.md) | Test pyramid (70/20/10), fuzzing, chaos engineering, CI pipeline |
-| 28 | [Benchmark Strategy](docs/28-benchmark-strategy.md) | Latency/throughput/concurrency benchmarks, target numbers, regression detection |
-| 29 | [Deployment](docs/29-deployment.md) | apt/Docker/static binary install, systemd, backup, monitoring, runbooks |
-| 30 | [Development Roadmap](docs/30-development-roadmap.md) | 7-phase build plan, Gantt chart, dependency graph, staffing, milestones |
+| 18 | [Queue](docs/18-queue.md) | FIFO/priority/delayed/DLQ, at-least-once, visibility timeout, consumer groups |
+| 19 | [Scheduler](docs/19-scheduler.md) | Cron/delayed/one-shot jobs, time-wheel, DAG dependencies, retry (exp backoff) |
+| 20 | [Search](docs/20-search.md) | BM25 scoring, inverted index, tokenization, fuzzy/boolean/phrase search |
+| 21 | [Blob Storage](docs/21-blob-storage.md) | 1 MiB chunking, SHA-256 dedup, multipart upload, range requests |
+| 22 | [SQL Layer](docs/22-sql-layer.md) | SQL subset (SELECT/JOIN/AGG/GROUP BY), recursive descent parser, iterator execution |
+| 23 | [REST API](docs/23-rest-api.md) | REST endpoints by subsystem, health, config, WebSocket streaming |
+| 24 | [GraphQL](docs/24-graphql.md) | Full SDL schema, DataLoader batching, subscriptions, complexity analysis |
+| 25 | [CLI](docs/25-cli.md) | 52 subcommands across 11 command groups, shell completions |
+| 26 | [SDK](docs/26-sdk.md) | TypeScript SDK with 9 typed clients, circuit breaker, auto-pagination |
+| 27 | [Dashboard](docs/27-dashboard.md) | React SPA spec, wireframes, WebSocket live updates, component tree |
+| 28 | [Testing Strategy](docs/28-testing-strategy.md) | Test pyramid (70/20/10), fuzzing, chaos engineering, CI pipeline |
+| 29 | [Benchmark Strategy](docs/29-benchmark-strategy.md) | Latency/throughput/concurrency benchmarks, target numbers, regression detection |
+| 30 | [Deployment](docs/30-deployment.md) | Docker setup, dev scripts, backup, monitoring, runbooks |
+| 31 | [Development Roadmap](docs/31-development-roadmap.md) | 7-phase build plan, dependency graph, milestones |
 
 ## Key Design Decisions
 
@@ -124,7 +122,7 @@ The complete architecture is specified across 30 documents in [`docs/`](docs/). 
 
 - **Rust** 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - **Node.js** 18+ and **npm** (`sudo apt install nodejs npm` or from [nodejs.org](https://nodejs.org))
-- **Ports 8642 and 5173** must be free (see [troubleshooting](#troubleshooting))
+- **Port 8642** must be free (see [troubleshooting](#troubleshooting))
 
 ### One-Command Setup
 
@@ -146,14 +144,13 @@ This starts both the backend (`novad` on port 8642) and the dashboard dev server
 |---------|-----|-------------------|
 | Backend API | `http://127.0.0.1:8642` | — |
 | Dashboard | `http://127.0.0.1:5173` | `admin` / `admin123` |
-| GraphQL | `http://127.0.0.1:8642/graphql` | Bearer token from login |
 
 ### Manual Startup
 
 ```bash
 # Terminal 1 — Backend
 cargo build --bin novad
-target/debug/novad --config novad.toml
+target/debug/novad
 
 # Terminal 2 — Dashboard
 cd dashboard && npm run dev
@@ -221,32 +218,98 @@ The admin user is bootstrapped on first startup. If you're running a fresh insta
 
 All API routes are at `http://127.0.0.1:8642`:
 
+#### System Endpoints
+
 | Route | Method | Description |
 |-------|--------|-------------|
 | `/health` | GET | System health (status, uptime, memory, disk, subsystems) |
+| `/ready` | GET | Readiness probe |
+| `/live` | GET | Liveness probe |
+| `/metrics` | GET | Prometheus-format metrics |
+| `/admin/config` | GET/PUT | Runtime configuration (read all sections, or update with partial JSON) |
+| `/admin/status` | GET | Pipeline status and metrics |
+| `/runtime/status` | GET | Runtime subsystem health |
+| `/runtime/info` | GET | Version and uptime |
+
+#### Auth (`/api/v1/auth`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
 | `/api/v1/auth/login` | POST | Login with username/password |
-| `/api/v1/auth/me` | GET | Current user info |
+| `/api/v1/auth/refresh` | POST | Refresh JWT token |
+| `/api/v1/auth/logout` | POST | Invalidate session |
 | `/api/v1/auth/api-keys` | GET/POST | List/create API keys |
-| `/api/v1/sql/tables` | GET | List tables with row counts |
-| `/api/v1/sql/tables/:name/schema` | GET | Table schema |
+| `/api/v1/auth/api-keys/:id` | DELETE | Revoke an API key |
+| `/api/v1/auth/users` | GET/POST | List/create users |
+| `/api/v1/auth/users/:id` | GET/DELETE | Get/delete a user |
+| `/api/v1/auth/users/:id/roles` | PUT | Update user roles |
+| `/api/v1/auth/users/:id/password` | PUT | Change user password |
+
+#### SQL (`/api/v1/sql`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
 | `/api/v1/sql/query` | POST | Run SELECT query |
 | `/api/v1/sql/execute` | POST | Run INSERT/UPDATE/DELETE/CREATE/DROP |
-| `/api/v1/cache/stats` | GET | Cache statistics |
+| `/api/v1/sql/tables` | GET | List tables |
+| `/api/v1/sql/tables/:table/schema` | GET | Table schema |
+
+#### Cache (`/api/v1/cache`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/cache/:key` | GET/POST/DELETE | Get/set/delete cache entry |
 | `/api/v1/cache/keys` | GET | List cache keys |
-| `/api/v1/cache/:key` | GET/DELETE | Get/delete cache entry |
-| `/api/v1/queue/queues` | GET | List queues |
-| `/api/v1/queue/:name/messages` | GET/POST/DELETE | Message CRUD |
-| `/api/v1/scheduler/jobs` | GET | List scheduled jobs |
+| `/api/v1/cache/batch` | POST | Batch set cache entries |
+| `/api/v1/cache/stats` | GET | Cache statistics |
+
+#### Queue (`/api/v1/queues`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/queues/` | GET/POST | List queues / create queue |
+| `/api/v1/queues/:name` | GET/DELETE | Get/delete queue |
+| `/api/v1/queues/:name/messages` | POST | Publish message |
+| `/api/v1/queues/:name/messages/poll` | POST | Poll messages |
+| `/api/v1/queues/:name/messages/:id/ack` | POST | Acknowledge message |
+| `/api/v1/queues/:name/purge` | POST | Purge queue |
+| `/api/v1/queues/:name/stats` | GET | Queue statistics |
+
+#### Scheduler (`/api/v1/scheduler`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/scheduler/jobs` | GET/POST | List/create jobs |
+| `/api/v1/scheduler/jobs/:id` | GET/DELETE | Get/delete job |
+| `/api/v1/scheduler/jobs/:id/trigger` | POST | Trigger job immediately |
 | `/api/v1/scheduler/jobs/:id/pause` | POST | Pause a job |
 | `/api/v1/scheduler/jobs/:id/resume` | POST | Resume a job |
-| `/api/v1/scheduler/jobs/:id/trigger` | POST | Trigger a job immediately |
-| `/api/v1/search/indexes` | GET | List search indexes |
-| `/api/v1/search/:index/documents` | GET/POST | Search document CRUD |
-| `/api/v1/blob/files` | GET | List blobs |
-| `/api/v1/blob/upload` | POST | Upload blob |
-| `/api/v1/blob/:hash` | GET/DELETE | Get/delete blob |
-| `/runtime/config` | GET | Runtime configuration |
-| `/graphql` | POST | GraphQL endpoint |
+| `/api/v1/scheduler/stats` | GET | Scheduler statistics |
+
+#### Search (`/api/v1/search`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/search/indexes` | GET/POST | List/create indexes |
+| `/api/v1/search/indexes/:name` | GET/DELETE | Get/delete index |
+| `/api/v1/search/indexes/:name/documents` | POST | Index documents |
+| `/api/v1/search/indexes/:name/query` | POST | Run search query |
+| `/api/v1/search/indexes/:name/stats` | GET | Index statistics |
+
+#### Blob (`/api/v1/blobs`)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/blobs/` | GET/POST | List/upload blobs |
+| `/api/v1/blobs/:id` | GET/DELETE | Download/delete blob |
+| `/api/v1/blobs/:id/info` | GET | Blob metadata |
+| `/api/v1/blobs/stats` | GET | Blob storage statistics |
+
+#### WebSocket
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/ws` | WebSocket | Real-time event streaming |
 
 **Login flow:**
 
@@ -288,59 +351,79 @@ curl http://127.0.0.1:8642/api/v1/sql/tables \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### Available CLI Commands
+### Configuration Management
+
+Configuration can be read and updated at runtime via the API:
+
+```bash
+# View full config
+curl http://127.0.0.1:8642/admin/config
+
+# Update a setting (partial JSON merge)
+curl -X PUT http://127.0.0.1:8642/admin/config \
+  -H 'Content-Type: application/json' \
+  -d '{"logging":{"level":"debug"}}'
+```
+
+Or via the CLI:
+
+```bash
+novactl config get logging.level
+novactl config set logging.level debug
+novactl config validate ./novad.toml
+novactl config default  # print built-in default config
+```
+
+### CLI Overview
 
 ```bash
 # Check backend health
 curl http://127.0.0.1:8642/health | jq
 
-# List all tables
-curl http://127.0.0.1:8642/api/v1/sql/tables -H "Authorization: Bearer $(curl -s -X POST .../auth/login -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')"
-
-# Quick alias
-alias nova='curl -sf -H "Authorization: Bearer $(curl -s -X POST http://127.0.0.1:8642/api/v1/auth/login -H Content-Type:application/json -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')"'
-
-# Use it
-nova http://127.0.0.1:8642/api/v1/sql/tables
-nova -X POST http://127.0.0.1:8642/api/v1/sql/query -H 'Content-Type: application/json' -d '{"query":"SELECT * FROM users LIMIT 5"}'
+# Quick CLI commands
+novactl runtime status
+novactl sql query "SELECT * FROM users LIMIT 5"
+novactl cache stats
+novactl queue list
+novactl scheduler list
 ```
 
 ## Development Status
 
 ```
-Phase 0: Foundations          ██████████ 100%  30 spec docs complete
+Phase 0: Foundations          ██████████ 100%  31 spec docs complete
 Phase 1: Core Abstractions    ██████████ 100%  9 crates built, 85%+ code coverage
 Phase 2: Runtime Core         ██████████ 100%  Execution Engine + novad alpha verified
 Phase 3: Data Subsystems      ██████████ 100%  SQL, Cache, Search, Blob (172 tests)
 Phase 4: Async Subsystems     ██████████ 100%  Queue, Scheduler, Auth (123 tests)
-Phase 5: API & Tooling        ████████████ 100%  REST, GraphQL, SDK, Dashboard
+Phase 5: API & Tooling        ██████████ 100%  REST, GraphQL, CLI, Dashboard, config API
 Phase 6: Hardening            ░░░░░░░░░░   0%
 ```
 
 **Completed crates:**
 
-| Crate | Tests | Key Components |
-|-------|-------|----------------|
-| `nova-core` | 137+ | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits |
-| `nova-config` | 127+ | 21-section Config, 5-layer resolution, hot-reload |
-| `nova-memory` | 41+ | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager, GC |
-| `nova-storage` | 86+ | Page cache, WAL (11 record types), B+Tree, LSM, MVCC |
-| `nova-object` | 90+ | Value (32 variants), SchemaRegistry, MessagePack |
-| `nova-event` | 41+ | EventId (UUID v7), EventBus, sharded delivery, replay |
-| `nova-security` | 85+ | InputValidator, Encryption, RateLimiter, AuditLogger |
-| `nova-cli` | 86+ | 12 command groups, shell completions |
-| `nova-executor` | 10+ | 6-stage pipeline, middleware, circuit breaker |
-| `nova-api` | 6+ | HTTP server, health, admin endpoints |
-| `nova-cache` | 43 | HashMap+Ttl backends, LRU/LFU, TTL sweeper |
-| `nova-blob` | 37 | SHA-256 chunking, Merkle tree, dedup, GC |
-| `nova-search` | 55 | BM25 scoring, Porter stemmer, query DSL |
-| `nova-sql` | 37 | Full DML/DQL, GROUP BY, ORDER BY, constraints |
-| `nova-queue` | 23 | Pull-model, visibility timeout, DLQ, dedup |
-| `nova-scheduler` | 29 | TimeWheel, CronSchedule, dependency validation |
-| `nova-auth` | 77 | Password/API Key/JWT, RBAC, TOTP MFA, brute-force detection |
-| `novad` | 5+ | Subsystem wiring, graceful shutdown, SIGHUP handler |
+| Crate | Key Components |
+|-------|----------------|
+| `nova-core` | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits |
+| `nova-config` | 16-section Config, TOML loading, REST API for runtime changes, validation |
+| `nova-memory` | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager, GC |
+| `nova-storage` | Page cache, WAL (11 record types), B+Tree, LSM, MVCC |
+| `nova-object` | Value (32 variants), SchemaRegistry, MessagePack |
+| `nova-event` | EventId (UUID v7), EventBus, sharded delivery, replay |
+| `nova-security` | InputValidator, Encryption, RateLimiter, AuditLogger |
+| `nova-cli` | 11 command groups, 52 subcommands, shell completions |
+| `nova-executor` | 6-stage pipeline, middleware, circuit breaker |
+| `nova-api` | HTTP server (axum), health/config/admin endpoints, subsystem routes |
+| `nova-cache` | HashMap+Ttl backends, LRU/LFU, TTL sweeper |
+| `nova-blob` | SHA-256 chunking, Merkle tree, dedup, GC |
+| `nova-search` | BM25 scoring, Porter stemmer, query DSL |
+| `nova-sql` | Full DML/DQL, GROUP BY, ORDER BY, constraints, MutationObserver |
+| `nova-queue` | Pull-model, visibility timeout, DLQ, dedup |
+| `nova-scheduler` | TimeWheel, CronSchedule, dependency validation |
+| `nova-auth` | Password/API Key/JWT, RBAC, TOTP MFA, brute-force detection |
+| `novad` | Subsystem wiring, graceful shutdown, SIGHUP config reload |
 
-**Total: ~1,359 tests across 18 crates.**
+**Total: ~1,492 tests across 18 crates.**
 
 ## Target Hardware
 

@@ -1,5 +1,7 @@
 # 13. Networking
 
+> **Implementation Status:** The actual networking layer uses axum with HTTP/1.1 and WebSocket support. HTTP/2, gRPC, Unix sockets, TLS listeners, and multiple listener support described in this spec are not implemented. The server listens on a single `127.0.0.1:8642` address.
+
 ## 1. Purpose
 
 The Networking subsystem provides all network protocol handling for Nova Runtime. It is the external communication boundary through which all clients interact with the system. The Networking layer implements TCP listeners, TLS termination, HTTP/1.1 and HTTP/2 serving, WebSocket upgrade, gRPC transport (over HTTP/2), Unix domain socket support, connection management, rate limiting, and graceful shutdown. Every external request — whether REST API, GraphQL, gRPC, WebSocket, or internal IPC — enters through this layer and is routed to the Execution Engine for processing.

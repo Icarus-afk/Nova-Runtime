@@ -1,4 +1,6 @@
-# 25. SDK (TypeScript)
+# 26. SDK (TypeScript)
+
+> **Implementation Status:** This is a design specification for a future TypeScript SDK. No SDK crate or package exists in the codebase yet.
 
 ## 1. Purpose
 
