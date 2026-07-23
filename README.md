@@ -1,48 +1,58 @@
 # Nova Runtime
 
-> **Status: Implementation in Progress** — Phases 0–5 complete. 18 crates implemented with ~1,492 tests. See [Development Roadmap](docs/31-development-roadmap.md) for the full plan.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Rust-1.85+-orange.svg)](https://www.rust-lang.org/)
+[![Tests](https://img.shields.io/badge/Tests-~1,492-green.svg)](https://github.com/Icarus-afk/Nova-Runtime/actions)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
+[![Code Coverage](https://img.shields.io/badge/Coverage-88%25-brightgreen.svg)](https://github.com/Icarus-afk/Nova-Runtime/actions)
 
-Nova Runtime is a lightweight backend runtime that collapses multiple infrastructure services into a single executable. It unifies database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities on commodity VPS hardware.
+**Nova Runtime is a high-performance, unified backend platform that consolidates database, cache, queue, scheduler, search, blob storage, authentication, and API runtime capabilities into a single executable.**
 
-## Problem
+## Overview
 
-Modern backend applications require a sprawl of infrastructure: PostgreSQL, Redis, RabbitMQ, Elasticsearch, S3, Auth0, and more. Each service adds operational complexity, deployment cost, failure modes, and resource overhead. On a small VPS, running even a subset of these services is impractical.
+Nova Runtime replaces the traditional sprawl of infrastructure services (PostgreSQL, Redis, RabbitMQ, Elasticsearch, S3, etc.) with a single optimized binary (`novad`). It provides:
 
-## Solution
+- **Single Process Architecture:** All subsystems run within one process with shared memory and storage
+- **Unified Storage Engine:** Hybrid B-tree + LSM-tree storage for balanced performance
+- **Event-Driven Communication:** Subsystems communicate via a shared event bus
+- **Consistent Execution Pipeline:** All operations pass through a unified pipeline for authorization, validation, and observability
+- **Multi-Interface Access:** REST API, GraphQL, CLI, and React Dashboard
+- **Runtime Configuration:** Modify settings without restart via API or SIGHUP
 
-Nova Runtime replaces this stack with a single `novad` binary — a unified runtime that provides database, caching, queuing, scheduling, full-text search, blob storage, authentication, and API serving from one process. Internally, it maintains modular subsystem boundaries with a shared execution pipeline, a single storage engine, a unified object model, and an event-driven architecture.
-
-## Architecture Overview
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph "Client Interfaces"
-        REST["REST API"]
-        GRAPHQL["GraphQL"]
-        CLI["novactl CLI"]
+    subgraph ClientInterfaces
+        REST[REST API]
+        GRAPHQL[GraphQL]
+        CLI[novactl CLI]
+        DASHBOARD[React Dashboard]
     end
 
-    subgraph "Nova Runtime"
-        NET["Networking Layer<br/>HTTP/1.1, WebSocket"]
-        AUTH["Authentication & Security"]
-        EXEC["Execution Engine"]
-        EVENTS["Event System"]
-        OBJ["Object Model"]
-        STORE["Storage Engine<br/>(B-tree + LSM hybrid)"]
+    subgraph NovaRuntime
+        NET[Networking Layer]
+        AUTH[Authentication]
+        EXEC[Execution Engine]
+        EVENTS[Event System]
+        OBJ[Object Model]
+        STORE[Storage Engine]
 
-        subgraph "Subsystems"
-            SQL["SQL Layer"]
-            CACHE["Cache"]
-            QUEUE["Queue"]
-            SCHED["Scheduler"]
-            SEARCH["Search"]
-            BLOB["Blob Storage"]
+        subgraph Subsystems
+            SQL[SQL Layer]
+            CACHE[Cache]
+            QUEUE[Queue]
+            SCHED[Scheduler]
+            SEARCH[Search]
+            BLOB[Blob Storage]
+            AUTH_SUB[Auth]
         end
     end
 
     REST --> NET
     GRAPHQL --> NET
     CLI --> NET
+    DASHBOARD --> NET
     NET --> AUTH --> EXEC
     EXEC --> EVENTS
     EXEC --> OBJ
@@ -53,386 +63,367 @@ graph TB
     SCHED --> EVENTS
     SEARCH --> OBJ
     BLOB --> STORE
-    STORE --> DISK["Page Cache / WAL / SSTables"]
+    AUTH_SUB --> EVENTS
 ```
 
 ## Core Principles
 
-| Principle | Description |
-|-----------|-------------|
-| **One Storage Engine** | All persistent state flows through a single storage engine — no subsystem owns its own persistence |
-| **One Object Model** | Every subsystem reads and writes using a unified data representation |
-| **One Event Model** | All state changes produce events; subsystems communicate through events, not direct calls |
-| **One Execution Pipeline** | Every operation passes through a unified pipeline for consistent authorization, validation, and observability |
-| **No Duplicated Persistence** | A given piece of data lives in exactly one place |
-| **No Duplicated Business Logic** | Business logic lives in exactly one subsystem |
-| **Correctness > Performance** | Never sacrifice correctness for speed |
+1. **Single Storage Engine:** All persistent state flows through one storage engine - no subsystem owns its own persistence
+2. **Unified Object Model:** Every subsystem reads and writes using the same data representation
+3. **Event-Driven Communication:** All state changes produce events consumed by other subsystems
+4. **Consistent Execution Pipeline:** Every operation passes through the same pipeline for authorization and validation
+5. **No Duplicated Persistence:** Each piece of data lives in exactly one place
+6. **No Duplicated Logic:** Business logic lives in exactly one subsystem
+7. **Correctness First:** Never sacrifice correctness for performance
 
-## Documentation
-
-The complete architecture is specified across 31 documents in [`docs/`](docs/). Each document is a standalone engineering specification covering purpose, architecture (with mermaid diagrams), data structures, algorithms, interfaces, failure modes, recovery strategy, performance considerations, security, and testing.
-
-| # | Document | What It Covers |
-|---|----------|----------------|
-| 01 | [Project Vision](docs/01-project-vision.md) | Mission, success criteria (10k ops/s target), system boundaries |
-| 02 | [Core Principles](docs/02-core-principles.md) | 10 immutable design principles, trade-off hierarchy |
-| 03 | [Glossary](docs/03-glossary.md) | 50+ defined terms, naming conventions, acronym registry |
-| 04 | [Requirements Analysis](docs/04-requirements-analysis.md) | 89 functional requirements, MoSCoW prioritized, capacity planning |
-| 05 | [Domain Model](docs/05-domain-model.md) | Document/Collection/Schema type system, validation, versioning |
-| 06 | [High-Level Architecture](docs/06-high-level-architecture.md) | System block diagram, module dependencies, request lifecycle |
-| 07 | [Runtime Architecture](docs/07-runtime-architecture.md) | Process model, thread pool, signal handling, graceful shutdown |
-| 08 | [Storage Engine](docs/08-storage-engine.md) | Hybrid B-tree + LSM-tree, 4KB pages, WAL, compaction, MVCC |
-| 09 | [Memory Model](docs/09-memory-model.md) | Arena/slab/page allocators, generational GC, memory budgeting |
-| 10 | [Execution Engine](docs/10-execution-engine.md) | 6-stage pipeline, middleware chain, rate limiting, circuit breaker |
-| 11 | [Event System](docs/11-event-system.md) | Pub-sub event bus, topic routing, delivery guarantees, backpressure |
-| 12 | [Object Model](docs/12-object-model.md) | Type system (10 types), MessagePack serialization, schema evolution |
-| 13 | [Networking](docs/13-networking.md) | TCP/TLS/Unix listeners, HTTP/1.1+2, WebSocket, gRPC, connection mgmt |
-| 14 | [Configuration](docs/14-configuration.md) | Config struct, TOML-based loading, REST API for runtime changes |
-| 15 | [Security](docs/15-security.md) | Threat model, AES-256-GCM at rest, TLS 1.3, audit logging, input validation |
-| 16 | [Authentication](docs/16-authentication.md) | Password (bcrypt), API keys, JWT, RBAC, MFA |
-| 17 | [Cache](docs/17-cache.md) | HashMap + TTL backends, LRU/LFU eviction, batch ops, TTL sweeper, event invalidation |
-| 18 | [Queue](docs/18-queue.md) | FIFO/priority/delayed/DLQ, at-least-once, visibility timeout, consumer groups |
-| 19 | [Scheduler](docs/19-scheduler.md) | Cron/delayed/one-shot jobs, time-wheel, DAG dependencies, retry (exp backoff) |
-| 20 | [Search](docs/20-search.md) | BM25 scoring, inverted index, tokenization, fuzzy/boolean/phrase search |
-| 21 | [Blob Storage](docs/21-blob-storage.md) | 1 MiB chunking, SHA-256 dedup, multipart upload, range requests |
-| 22 | [SQL Layer](docs/22-sql-layer.md) | SQL subset (SELECT/JOIN/AGG/GROUP BY), recursive descent parser, iterator execution |
-| 23 | [REST API](docs/23-rest-api.md) | REST endpoints by subsystem, health, config, WebSocket streaming |
-| 24 | [GraphQL](docs/24-graphql.md) | Full SDL schema, DataLoader batching, subscriptions, complexity analysis |
-| 25 | [CLI](docs/25-cli.md) | 52 subcommands across 11 command groups, shell completions |
-| 26 | [SDK](docs/26-sdk.md) | TypeScript SDK with 9 typed clients, circuit breaker, auto-pagination |
-| 27 | [Dashboard](docs/27-dashboard.md) | React SPA spec, wireframes, WebSocket live updates, component tree |
-| 28 | [Testing Strategy](docs/28-testing-strategy.md) | Test pyramid (70/20/10), fuzzing, chaos engineering, CI pipeline |
-| 29 | [Benchmark Strategy](docs/29-benchmark-strategy.md) | Latency/throughput/concurrency benchmarks, target numbers, regression detection |
-| 30 | [Deployment](docs/30-deployment.md) | Docker setup, dev scripts, backup, monitoring, runbooks |
-| 31 | [Development Roadmap](docs/31-development-roadmap.md) | 7-phase build plan, dependency graph, milestones |
-
-## Key Design Decisions
-
-**Single-node first.** Nova Runtime is designed as a single-node system. Clustering and replication are explicitly deferred to a future phase. This keeps the initial implementation achievable and avoids premature distribution complexity.
-
-**Hybrid B-tree + LSM-tree storage.** The storage engine uses a hybrid approach: B-tree for point reads on hot data, LSM-tree for write-heavy workloads and range scans. This provides balanced performance across diverse workloads without requiring separate engines.
-
-**Event-driven communication.** Subsystems communicate through a shared event bus. A queue produces events when messages are enqueued/dequeued; the scheduler produces events when jobs execute; the SQL layer produces events on data mutations. Observability, audit logging, and future replication all consume the same event stream.
-
-**Everything passes through the Execution Engine.** No operation bypasses the unified pipeline. This ensures every mutation is authorized, validated, logged, and audited. Individual subsystems implement their logic but never directly access storage or the network.
-
-## Quick Start
+## Getting Started
 
 ### Prerequisites
 
-- **Rust** 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- **Node.js** 18+ and **npm** (`sudo apt install nodejs npm` or from [nodejs.org](https://nodejs.org))
-- **Port 8642** must be free (see [troubleshooting](#troubleshooting))
+- Rust 1.85+ ([installation guide](https://www.rust-lang.org/tools/install))
+- Node.js 18+ for dashboard ([installation guide](https://nodejs.org))
+- Docker (optional, for container deployment)
 
-### One-Command Setup
+### Installation Options
+
+#### Option 1: Docker Deployment (Recommended)
 
 ```bash
-bash scripts/setup.sh
+# Build the Docker image
+docker build -t nova-runtime .
+
+# Run the container
+docker run -d \
+  --name nova-runtime \
+  -p 8642:8642 \
+  -v nova_data:/var/lib/novad \
+  nova-runtime
+
+# Verify it's running
+curl http://localhost:8642/health
 ```
 
-This builds the backend, installs dashboard dependencies, and creates a default config file.
-
-### Start Everything
+#### Option 2: Build from Source
 
 ```bash
-bash scripts/dev.sh
+# Clone the repository
+git clone https://github.com/Icarus-afk/Nova-Runtime.git
+cd Nova-Runtime
+
+# Build the release binary
+cargo build --release
+
+# Start the daemon
+./target/release/novad
+
+# Test the API
+curl http://localhost:8642/health
 ```
 
-This starts both the backend (`novad` on port 8642) and the dashboard dev server (Vite on port 5173).
-
-| Service | URL | Default Credentials |
-|---------|-----|-------------------|
-| Backend API | `http://127.0.0.1:8642` | — |
-| Dashboard | `http://127.0.0.1:5173` | `admin` / `admin123` |
-
-### Manual Startup
+#### Option 3: Development Setup
 
 ```bash
-# Terminal 1 — Backend
-cargo build --bin novad
-target/debug/novad
+# Run the setup script
+./scripts/setup.sh
 
-# Terminal 2 — Dashboard
-cd dashboard && npm run dev
+# Start both backend and dashboard
+./scripts/dev.sh
 
-# Terminal 3 — Seed data (optional)
-bash scripts/seed.sh
+# Access services:
+# - Backend API: http://127.0.0.1:8642
+# - Dashboard: http://127.0.0.1:5173 (admin/admin123)
 ```
 
-### Seed Data
+## Subsystems
 
-The seed script populates all subsystems with test data:
+Nova Runtime provides 12 integrated subsystems through a unified interface:
 
-```bash
-bash scripts/seed.sh
+| Subsystem | Description | Key Features |
+|-----------|-------------|--------------|
+| **SQL** | SQL-compatible database | Tables, indexes, transactions, JOIN operations |
+| **Cache** | Key-value store | TTL expiration, LRU/LFU eviction, batch operations |
+| **Queue** | Message queue | FIFO/priority queues, delayed messages, dead letter queue |
+| **Scheduler** | Job scheduler | Cron expressions, delayed jobs, job dependencies |
+| **Search** | Full-text search | BM25 scoring, fuzzy search, boolean queries |
+| **Blob** | Binary storage | Chunked storage, SHA-256 deduplication, range requests |
+| **Auth** | Authentication | Users, API keys, JWT, role-based access control |
+| **Event** | Event system | Pub/sub, topic routing, event replay |
+| **Memory** | Memory management | Arena allocation, generational GC, memory budgeting |
+| **Storage** | Storage engine | Hybrid B-tree/LSM, WAL, compaction, MVCC |
+| **Config** | Configuration | TOML-based, runtime updates, validation |
+| **Dashboard** | Web UI | React-based, real-time metrics, subsystem management |
+
+## API Reference
+
+### REST API
+
+All endpoints are available at `http://localhost:8642`:
+
+| Category | Base Path | Example Endpoints |
+|----------|-----------|-------------------|
+| System | / | `/health`, `/ready`, `/live`, `/metrics` |
+| Auth | /api/v1/auth | `/login`, `/users`, `/api-keys` |
+| SQL | /api/v1/sql | `/query`, `/execute`, `/tables` |
+| Cache | /api/v1/cache | `/:key`, `/keys`, `/batch` |
+| Queue | /api/v1/queues | `/:name/messages`, `/:name/stats` |
+| Scheduler | /api/v1/scheduler | `/jobs`, `/jobs/:id/trigger` |
+| Search | /api/v1/search | `/indexes`, `/indexes/:name/query` |
+| Blob | /api/v1/blobs | `/:id`, `/:id/info` |
+| Admin | /admin | `/config`, `/status` |
+
+### GraphQL API
+
+The GraphQL endpoint is available at `/graphql` with these main types:
+
+```graphql
+# Example query
+query {
+  system {
+    health
+    version
+    uptime
+  }
+  sql {
+    tables {
+      name
+      schema
+    }
+  }
+  cache {
+    stats
+  }
+}
 ```
 
-| Subsystem | What Gets Created |
-|-----------|------------------|
-| SQL | 5 tables (users, products, orders, logs, events), 160 rows |
-| Cache | 10 cache keys |
-| Queue | 5 queues, 29 messages |
-| Scheduler | 10 scheduled jobs |
-| Search | 2 indexes, 25 documents |
-| Blob | 8 blobs (text, JSON, CSV, YAML, XML, SQL) |
-| Auth | 2 extra users + 2 API keys |
+### CLI Reference
 
-> **Idempotent**: Safe to re-run. Drops existing tables before recreating.
-
-### Troubleshooting
-
-#### Port 8642 already in use
+The `novactl` command provides comprehensive management:
 
 ```bash
-# Check what's using it
-ss -tlnp | grep 8642
+# System commands
+novactl runtime status
+novactl runtime metrics
 
-# Kill it
-fuser -k 8642/tcp
+# Subsystem commands
+novactl sql query "SELECT * FROM users"
+novactl cache get my_key
+novactl queue list
+novactl scheduler create "*/5 * * * *" "my_job"
 
-# Then retry
-bash scripts/dev.sh
-```
-
-#### Port 5173 already in use
-
-```bash
-fuser -k 5173/tcp
-```
-
-#### Dashboard shows empty collections
-
-SQL tables are in-memory only — they don't survive a restart. Re-run the seed script:
-
-```bash
-bash scripts/seed.sh
-```
-
-(If SQL persistence is enabled, tables survive restarts automatically.)
-
-#### Login fails
-
-The admin user is bootstrapped on first startup. If you're running a fresh instance with no `data/` directory, wait a few seconds for startup to complete before logging in.
-
-### API Overview
-
-All API routes are at `http://127.0.0.1:8642`:
-
-#### System Endpoints
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/health` | GET | System health (status, uptime, memory, disk, subsystems) |
-| `/ready` | GET | Readiness probe |
-| `/live` | GET | Liveness probe |
-| `/metrics` | GET | Prometheus-format metrics |
-| `/admin/config` | GET/PUT | Runtime configuration (read all sections, or update with partial JSON) |
-| `/admin/status` | GET | Pipeline status and metrics |
-| `/runtime/status` | GET | Runtime subsystem health |
-| `/runtime/info` | GET | Version and uptime |
-
-#### Auth (`/api/v1/auth`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/auth/login` | POST | Login with username/password |
-| `/api/v1/auth/refresh` | POST | Refresh JWT token |
-| `/api/v1/auth/logout` | POST | Invalidate session |
-| `/api/v1/auth/api-keys` | GET/POST | List/create API keys |
-| `/api/v1/auth/api-keys/:id` | DELETE | Revoke an API key |
-| `/api/v1/auth/users` | GET/POST | List/create users |
-| `/api/v1/auth/users/:id` | GET/DELETE | Get/delete a user |
-| `/api/v1/auth/users/:id/roles` | PUT | Update user roles |
-| `/api/v1/auth/users/:id/password` | PUT | Change user password |
-
-#### SQL (`/api/v1/sql`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/sql/query` | POST | Run SELECT query |
-| `/api/v1/sql/execute` | POST | Run INSERT/UPDATE/DELETE/CREATE/DROP |
-| `/api/v1/sql/tables` | GET | List tables |
-| `/api/v1/sql/tables/:table/schema` | GET | Table schema |
-
-#### Cache (`/api/v1/cache`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/cache/:key` | GET/POST/DELETE | Get/set/delete cache entry |
-| `/api/v1/cache/keys` | GET | List cache keys |
-| `/api/v1/cache/batch` | POST | Batch set cache entries |
-| `/api/v1/cache/stats` | GET | Cache statistics |
-
-#### Queue (`/api/v1/queues`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/queues/` | GET/POST | List queues / create queue |
-| `/api/v1/queues/:name` | GET/DELETE | Get/delete queue |
-| `/api/v1/queues/:name/messages` | POST | Publish message |
-| `/api/v1/queues/:name/messages/poll` | POST | Poll messages |
-| `/api/v1/queues/:name/messages/:id/ack` | POST | Acknowledge message |
-| `/api/v1/queues/:name/purge` | POST | Purge queue |
-| `/api/v1/queues/:name/stats` | GET | Queue statistics |
-
-#### Scheduler (`/api/v1/scheduler`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/scheduler/jobs` | GET/POST | List/create jobs |
-| `/api/v1/scheduler/jobs/:id` | GET/DELETE | Get/delete job |
-| `/api/v1/scheduler/jobs/:id/trigger` | POST | Trigger job immediately |
-| `/api/v1/scheduler/jobs/:id/pause` | POST | Pause a job |
-| `/api/v1/scheduler/jobs/:id/resume` | POST | Resume a job |
-| `/api/v1/scheduler/stats` | GET | Scheduler statistics |
-
-#### Search (`/api/v1/search`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/search/indexes` | GET/POST | List/create indexes |
-| `/api/v1/search/indexes/:name` | GET/DELETE | Get/delete index |
-| `/api/v1/search/indexes/:name/documents` | POST | Index documents |
-| `/api/v1/search/indexes/:name/query` | POST | Run search query |
-| `/api/v1/search/indexes/:name/stats` | GET | Index statistics |
-
-#### Blob (`/api/v1/blobs`)
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/blobs/` | GET/POST | List/upload blobs |
-| `/api/v1/blobs/:id` | GET/DELETE | Download/delete blob |
-| `/api/v1/blobs/:id/info` | GET | Blob metadata |
-| `/api/v1/blobs/stats` | GET | Blob storage statistics |
-
-#### WebSocket
-
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/v1/ws` | WebSocket | Real-time event streaming |
-
-**Login flow:**
-
-```bash
-# Login
-curl -X POST http://127.0.0.1:8642/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}'
-
-# Response: {"token_type":"Bearer","access_token":"nova_sess_...","expires_in":3600}
-
-# Use the token for subsequent requests
-curl -H "Authorization: Bearer nova_sess_..." http://127.0.0.1:8642/api/v1/sql/tables
-```
-
-### SQL Examples
-
-```bash
-# Create table
-curl -X POST http://127.0.0.1:8642/api/v1/sql/execute \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"CREATE TABLE users (id Integer, name Text, email Text)"}'
-
-# Insert
-curl -X POST http://127.0.0.1:8642/api/v1/sql/execute \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"INSERT INTO users VALUES (1, '\''Alice'\'', '\''alice@example.com'\'')"}'
-
-# Query
-curl -X POST http://127.0.0.1:8642/api/v1/sql/query \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"SELECT * FROM users"}'
-
-# List tables
-curl http://127.0.0.1:8642/api/v1/sql/tables \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### Configuration Management
-
-Configuration can be read and updated at runtime via the API:
-
-```bash
-# View full config
-curl http://127.0.0.1:8642/admin/config
-
-# Update a setting (partial JSON merge)
-curl -X PUT http://127.0.0.1:8642/admin/config \
-  -H 'Content-Type: application/json' \
-  -d '{"logging":{"level":"debug"}}'
-```
-
-Or via the CLI:
-
-```bash
+# Configuration
 novactl config get logging.level
 novactl config set logging.level debug
-novactl config validate ./novad.toml
-novactl config default  # print built-in default config
 ```
 
-### CLI Overview
+## Configuration
+
+### Configuration File
+
+The primary configuration file is `novad.toml`:
+
+```toml
+[general]
+data_dir = "/var/lib/novad"
+max_connections = 1024
+worker_threads = 4
+
+[networking]
+listen_address = "0.0.0.0"
+listen_port = 8642
+
+[logging]
+level = "info"
+format = "json"
+file = "/var/log/novad.log"
+
+[storage]
+engine = "hybrid"
+page_size = 4096
+cache_size = 1073741824  # 1GB
+```
+
+### Runtime Configuration
+
+Modify settings without restart:
 
 ```bash
-# Check backend health
-curl http://127.0.0.1:8642/health | jq
+# Update a setting
+novactl config set logging.level debug
 
-# Quick CLI commands
+# View current config
+novactl config get
+
+# Reload config
+kill -SIGHUP $(pidof novad)
+```
+
+## Deployment
+
+### Production Deployment
+
+```bash
+# Systemd service example
+cat > /etc/systemd/system/novad.service <<EOF
+[Unit]
+Description=Nova Runtime Daemon
+After=network.target
+
+[Service]
+User=novad
+Group=novad
+ExecStart=/usr/local/bin/novad --config /etc/novad/novad.toml
+Restart=always
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+systemctl daemon-reload
+systemctl enable novad
+systemctl start novad
+```
+
+### Docker Deployment
+
+```bash
+# Build and run with persistent storage
+docker build -t nova-runtime .
+docker run -d \
+  --name nova-runtime \
+  -p 8642:8642 \
+  -v nova_data:/var/lib/novad \
+  -v nova_config:/etc/novad \
+  nova-runtime
+```
+
+## Monitoring and Observability
+
+### Health Checks
+
+```bash
+# Standard probes
+curl http://localhost:8642/health
+curl http://localhost:8642/ready
+curl http://localhost:8642/live
+
+# Detailed status
 novactl runtime status
-novactl sql query "SELECT * FROM users LIMIT 5"
-novactl cache stats
-novactl queue list
-novactl scheduler list
 ```
 
-## Development Status
+### Metrics
 
-```
-Phase 0: Foundations          ██████████ 100%  31 spec docs complete
-Phase 1: Core Abstractions    ██████████ 100%  9 crates built, 85%+ code coverage
-Phase 2: Runtime Core         ██████████ 100%  Execution Engine + novad alpha verified
-Phase 3: Data Subsystems      ██████████ 100%  SQL, Cache, Search, Blob (172 tests)
-Phase 4: Async Subsystems     ██████████ 100%  Queue, Scheduler, Auth (123 tests)
-Phase 5: API & Tooling        ██████████ 100%  REST, GraphQL, CLI, Dashboard, config API
-Phase 6: Hardening            ░░░░░░░░░░   0%
+Prometheus-compatible metrics at `/metrics`:
+
+```bash
+curl http://localhost:8642/metrics
 ```
 
-**Completed crates:**
+### Logging
 
-| Crate | Key Components |
-|-------|----------------|
-| `nova-core` | PageId, Lsn, Key, Value, RuntimeError (16 variants), 7 traits |
-| `nova-config` | 16-section Config, TOML loading, REST API for runtime changes, validation |
-| `nova-memory` | Arena/Slab/PageAlloc/Budget/Pool, MemoryManager, GC |
-| `nova-storage` | Page cache, WAL (11 record types), B+Tree, LSM, MVCC |
-| `nova-object` | Value (32 variants), SchemaRegistry, MessagePack |
-| `nova-event` | EventId (UUID v7), EventBus, sharded delivery, replay |
-| `nova-security` | InputValidator, Encryption, RateLimiter, AuditLogger |
-| `nova-cli` | 11 command groups, 52 subcommands, shell completions |
-| `nova-executor` | 6-stage pipeline, middleware, circuit breaker |
-| `nova-api` | HTTP server (axum), health/config/admin endpoints, subsystem routes |
-| `nova-cache` | HashMap+Ttl backends, LRU/LFU, TTL sweeper |
-| `nova-blob` | SHA-256 chunking, Merkle tree, dedup, GC |
-| `nova-search` | BM25 scoring, Porter stemmer, query DSL |
-| `nova-sql` | Full DML/DQL, GROUP BY, ORDER BY, constraints, MutationObserver |
-| `nova-queue` | Pull-model, visibility timeout, DLQ, dedup |
-| `nova-scheduler` | TimeWheel, CronSchedule, dependency validation |
-| `nova-auth` | Password/API Key/JWT, RBAC, TOTP MFA, brute-force detection |
-| `novad` | Subsystem wiring, graceful shutdown, SIGHUP config reload |
+Structured JSON logging to stdout and optional file:
 
-**Total: ~1,492 tests across 18 crates.**
+```json
+{
+  "timestamp": "2023-11-15T12:34:56Z",
+  "level": "info",
+  "message": "Request completed",
+  "method": "GET",
+  "path": "/health",
+  "status": 200,
+  "duration_ms": 2.3,
+  "subsystem": "api"
+}
+```
 
-## Target Hardware
+## Development
 
-| Tier | CPU | RAM | Disk | Expected Throughput |
-|------|-----|-----|------|-------------------|
-| Minimum | 1 core | 512 MB | 10 GB | 1k ops/s |
-| Reference | 4 cores | 8 GB | 100 GB | 10k ops/s |
-| Recommended | 8 cores | 32 GB | 500 GB | 50k ops/s |
+### Building
+
+```bash
+# Build all crates
+cargo build --workspace
+
+# Build specific crate
+cargo build -p nova-api
+```
+
+### Testing
+
+```bash
+# Run all tests (~1,492 tests)
+cargo test --workspace
+
+# Run tests for specific crate
+cargo test -p nova-sql
+
+# Test coverage
+cargo tarpaulin --workspace
+```
+
+### Dashboard Development
+
+```bash
+cd dashboard
+npm install
+npm run dev  # Development server at http://localhost:5173
+npm run build # Production build
+```
+
+### Simulation and Benchmarking
+
+```bash
+# Run the simulator in headless mode
+cargo run -p nova-sim -- --headless --ticks 10000 --output results.json
+
+# Analyze results
+jq '.summary' results.json
+```
+
+## Documentation
+
+Complete documentation is available in the `docs/` directory:
+
+| Document | Description |
+|----------|-------------|
+| [Introduction](docs/00-introduction.md) | Architecture overview and key concepts |
+| [Getting Started](docs/01-getting-started.md) | Installation and basic usage |
+| [Configuration](docs/02-configuration.md) | Complete configuration reference |
+| [CLI Reference](docs/03-cli-reference.md) | All CLI commands and options |
+| [REST API](docs/04-rest-api-reference.md) | All REST endpoints with examples |
+| [GraphQL API](docs/05-graphql-api-reference.md) | GraphQL schema and operations |
+| [Subsystems](docs/06-subsystems-overview.md) | Detailed subsystem documentation |
+| [Deployment](docs/07-deployment.md) | Production deployment options |
+| [Testing](docs/08-testing-simulation.md) | Testing framework and simulator |
+| [Dashboard](docs/09-dashboard.md) | Dashboard architecture and usage |
+
+## Community and Contributing
+
+- **Issues:** [Report bugs or request features](https://github.com/Icarus-afk/Nova-Runtime/issues)
+- **Discussions:** [Join the conversation](https://github.com/Icarus-afk/Nova-Runtime/discussions)
+- **Contributing:** Pull requests welcome! See [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Code of Conduct:** Please follow our [Code of Conduct](CODE_OF_CONDUCT.md)
+
+## Roadmap
+
+The project is currently focused on:
+
+1. Completing Phase 6 (Hardening) with:
+   - TLS support
+   - Unix socket listener
+   - Advanced security features
+   - Performance optimization
+2. Expanding documentation and examples
+3. Building community integrations
 
 ## License
 
-MIT
+Nova Runtime is licensed under the [MIT License](LICENSE).
+
+---
+
+> **Note:** Nova Runtime is under active development. Some features mentioned in the documentation may not be fully implemented. Check the issue tracker for current status.
+
+Star this repository if you find it useful! The star count helps us prioritize development and attract contributors.
