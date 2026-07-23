@@ -1,4 +1,131 @@
-# 22. REST API
+# 23. REST API
+
+> **Implementation Status:** This document is the design specification written before implementation. The actual implemented endpoints are listed below. Design sections may contain aspirational features not yet implemented (e.g. cursor pagination, rate limiting at HTTP level, TLS).
+
+## Actual Implemented Endpoints
+
+**Base URL:** `http://127.0.0.1:8642`
+
+### System (admin.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/health` | GET | System health with subsystem status, memory, disk |
+| `/ready` | GET | Readiness probe |
+| `/live` | GET | Liveness probe |
+| `/metrics` | GET | Prometheus-format metrics |
+| `/admin/config` | GET | Full runtime configuration (all 16 sections) |
+| `/admin/config` | PUT | Update config at runtime (partial JSON merge with validation) |
+| `/admin/status` | GET | Pipeline status and metrics |
+| `/openapi.json` | GET | OpenAPI 3.0.3 spec stub |
+| `/runtime/status` | GET | Subsystem health status |
+| `/runtime/info` | GET | Version and uptime |
+| `/runtime/config` | GET | Alias for `/admin/config` |
+
+### Auth (`/api/v1/auth` — auth.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/auth/login` | POST | Login with username/password → JWT |
+| `/api/v1/auth/refresh` | POST | Refresh JWT token |
+| `/api/v1/auth/logout` | POST | Invalidate session |
+| `/api/v1/auth/api-keys` | GET | List API keys |
+| `/api/v1/auth/api-keys` | POST | Create API key |
+| `/api/v1/auth/api-keys/:id` | DELETE | Revoke API key |
+| `/api/v1/auth/users` | GET | List users |
+| `/api/v1/auth/users` | POST | Create user |
+| `/api/v1/auth/users/:id` | GET | Get user |
+| `/api/v1/auth/users/:id` | DELETE | Delete user |
+| `/api/v1/auth/users/:id/roles` | PUT | Update user roles |
+| `/api/v1/auth/users/:id/password` | PUT | Change password |
+
+### SQL (`/api/v1/sql` — sql.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/sql/query` | POST | Run SELECT query |
+| `/api/v1/sql/execute` | POST | Run INSERT/UPDATE/DELETE/CREATE/DROP |
+| `/api/v1/sql/tables` | GET | List tables |
+| `/api/v1/sql/tables/:table/schema` | GET | Get table schema |
+
+### Cache (`/api/v1/cache` — cache.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/cache/:key` | GET | Get cache entry |
+| `/api/v1/cache/:key` | POST | Set cache entry |
+| `/api/v1/cache/:key` | DELETE | Delete cache entry |
+| `/api/v1/cache/keys` | GET | List cache keys |
+| `/api/v1/cache/batch` | POST | Batch set |
+| `/api/v1/cache/stats` | GET | Cache statistics |
+
+### Queue (`/api/v1/queues` — queue.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/queues/` | GET | List queues |
+| `/api/v1/queues/` | POST | Create queue |
+| `/api/v1/queues/:name` | GET | Get queue |
+| `/api/v1/queues/:name` | DELETE | Delete queue |
+| `/api/v1/queues/:name/messages` | POST | Publish message |
+| `/api/v1/queues/:name/messages/poll` | POST | Poll messages |
+| `/api/v1/queues/:name/messages/:id/ack` | POST | Acknowledge message |
+| `/api/v1/queues/:name/purge` | POST | Purge queue |
+| `/api/v1/queues/:name/stats` | GET | Queue statistics |
+
+### Scheduler (`/api/v1/scheduler` — scheduler.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/scheduler/jobs` | GET | List jobs |
+| `/api/v1/scheduler/jobs` | POST | Create job |
+| `/api/v1/scheduler/jobs/:id` | GET | Get job |
+| `/api/v1/scheduler/jobs/:id` | DELETE | Delete job |
+| `/api/v1/scheduler/jobs/:id/trigger` | POST | Trigger job |
+| `/api/v1/scheduler/jobs/:id/pause` | POST | Pause job |
+| `/api/v1/scheduler/jobs/:id/resume` | POST | Resume job |
+| `/api/v1/scheduler/stats` | GET | Scheduler statistics |
+
+### Search (`/api/v1/search` — search.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/search/indexes` | GET | List indexes |
+| `/api/v1/search/indexes` | POST | Create index |
+| `/api/v1/search/indexes/:name` | GET | Get index |
+| `/api/v1/search/indexes/:name` | DELETE | Delete index |
+| `/api/v1/search/indexes/:name/documents` | POST | Index documents |
+| `/api/v1/search/indexes/:name/query` | POST | Search query |
+| `/api/v1/search/indexes/:name/stats` | GET | Index statistics |
+
+### Blob (`/api/v1/blobs` — blob.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/blobs/` | GET | List blobs |
+| `/api/v1/blobs/` | POST | Upload blob |
+| `/api/v1/blobs/:id` | GET | Download blob |
+| `/api/v1/blobs/:id` | DELETE | Delete blob |
+| `/api/v1/blobs/:id/info` | GET | Blob metadata |
+| `/api/v1/blobs/stats` | GET | Blob statistics |
+
+### WebSocket (ws.rs)
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/v1/ws` | WebSocket | Real-time event streaming |
+
+### Not Yet Implemented
+
+The following features from the design spec are not yet implemented at the HTTP layer:
+- **Rate limiting** — exists in pipeline middleware only, not at axum level
+- **TLS** — config struct exists but listener is not wired
+- **Cursor-based pagination** — list endpoints return flat arrays
+- **Dashboard-specific routes** (`/api/v1/dashboard/*`) — never implemented
+- **HTTP-level auth middleware** — auth is handled per-route, not as axum middleware
+- **`POST /admin/reload`** — SIGHUP is used for config reload instead
+
+---
 
 ## 1. Purpose
 

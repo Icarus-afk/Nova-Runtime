@@ -1,4 +1,79 @@
-# 24. CLI (novactl)
+# 25. CLI (novactl)
+
+> **Implementation Status:** This document is the design specification written before implementation. The actual CLI implementation is documented below. Design sections may contain aspirational features not yet implemented.
+
+## Actual Implementation
+
+### Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config <PATH>` | Config file path |
+| `-o, --output <FORMAT>` | Output format: `table` (default), `json`, `yaml` |
+| `-a, --address <URL>` | Server address (default: `http://127.0.0.1:8642`) |
+| `--api-key <KEY>` | API key for authentication |
+
+### Implemented Commands
+
+| Group | Command | Description |
+|-------|---------|-------------|
+| **runtime** | `status` | Show runtime status |
+| | `start [--daemonize]` | Start the runtime (prints help — use `novad` binary instead) |
+| | `stop [--force]` | Stop the runtime (prints help — use `kill` instead) |
+| | `restart` | Restart the runtime (prints help) |
+| | `reload` | Reload runtime configuration |
+| **config** | `show [SECTION]` | Show config (optionally filtered to a section) |
+| | `get <KEY>` | Get a config value by dot-separated key (e.g. `logging.level`) |
+| | `set <KEY> <VALUE>` | Set a config value via API (e.g. `config set logging.level debug`) |
+| | `validate <PATH>` | Validate a TOML config file |
+| | `default` | Print built-in default config |
+| **auth** | `create-user <USERNAME> [ROLE]` | Create a user with optional role |
+| | `delete-user <USERNAME>` | Delete a user |
+| | `list-users` | List all users |
+| | `create-api-key <NAME>` | Create a new API key |
+| | `revoke-api-key <KEY_ID>` | Revoke an API key |
+| **queue** | `list` | List all queues |
+| | `create <NAME> [--durable]` | Create a queue |
+| | `delete <NAME>` | Delete a queue |
+| | `publish <QUEUE> <MESSAGE>` | Publish a message |
+| | `consume <QUEUE> [--count N]` | Consume messages |
+| | `stats <NAME>` | Show queue statistics |
+| **scheduler** | `list` | List all jobs |
+| | `create <NAME> <SCHEDULE> <COMMAND>` | Create a cron job |
+| | `delete <NAME>` | Delete a job |
+| | `pause <NAME>` | Pause a job |
+| | `resume <NAME>` | Resume a job |
+| **search** | `query <QUERY> [--collection C] [--limit N]` | Run search query |
+| | `create-index <NAME> <COLLECTION> <FIELD>...` | Create a search index |
+| | `drop-index <NAME>` | Drop a search index |
+| | `list-indexes` | List all search indexes |
+| **blob** | `list [--prefix P]` | List blobs |
+| | `put <KEY> <FILE>` | Upload a file as a blob |
+| | `get <KEY> [OUTPUT_FILE]` | Download a blob |
+| | `delete <KEY>` | Delete a blob |
+| **sql** | `query <SQL> [--format FMT]` | Execute a SQL query |
+| | `execute <FILE>` | Execute a SQL file |
+| | `schema [TABLE]` | Show schema |
+| **db** | `list` | List all databases |
+| | `create <NAME>` | Create a database |
+| | `drop <NAME>` | Drop a database |
+| | `collections <DATABASE>` | List collections |
+| | `create-collection <DB> <COL>` | Create a collection |
+| | `drop-collection <DB> <COL>` | Drop a collection |
+| | `stats [DATABASE]` | Show statistics |
+| **cache** | `stats` | Show cache statistics |
+| | `clear` | Clear the cache |
+| | `flush` | Flush cache to disk |
+| | `list [--pattern P]` | List cache keys |
+| **completion** | `bash` / `zsh` / `fish` / `power-shell` | Generate shell completions |
+
+**Total: 12 top-level commands, 52 subcommands.**
+
+### Design Notes
+
+The design specification below describes the original vision for the CLI. Some features are implemented differently than described, and some are aspirational (not yet implemented). The `runtime start/stop/restart` commands print informational messages rather than performing the action — use the `novad` binary directly for server lifecycle.
+
+---
 
 ## 1. Purpose
 

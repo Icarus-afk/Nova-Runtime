@@ -1,5 +1,7 @@
 # 16. Authentication Subsystem
 
+> **Implementation Status:** The actual implementation uses bcrypt for password hashing, not argon2id as described in this spec. JWT with HMAC-SHA256 is implemented. Argon2id, MFA/TOTP, WebAuthn, and API key prefixes are not implemented. Session management exists in-memory only (no Redis/SQLite backend).
+
 ## 1. Purpose
 
 The Authentication subsystem provides identity verification, session management, authorization enforcement, and credential security for Nova Runtime. It ensures that every request reaching the Execution Engine can be attributed to a verified principal and that the principal possesses the required permissions for the requested operation. The subsystem acts as the security gateway between the network layer (inbound requests) and the Execution Engine, preventing unauthenticated or unauthorized access to any runtime resource.

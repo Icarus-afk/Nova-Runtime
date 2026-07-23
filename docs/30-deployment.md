@@ -1,4 +1,29 @@
-# Document 29: Deployment
+# 30. Deployment
+
+> **Implementation Status:** This document is the design specification. The actual implemented deployment features are listed below.
+
+## Actual Implementation
+
+### Available
+
+- **Binary build:** `cargo build --release` produces a single `novad` binary
+- **Docker:** `Dockerfile` and `docker-compose.yml` exist in the repo root
+- **Dev scripts:** `scripts/setup.sh` (build + deps), `scripts/dev.sh` (start server + dashboard), `scripts/seed.sh` (populate test data)
+- **Config file:** `novad.toml` for all runtime settings
+- **SIGHUP:** Hot-reload config without restart
+
+### Not Implemented
+
+- systemd service file
+- apt/rpm package building
+- HAProxy/nginx load balancer configs
+- Log rotation configuration
+- Grafana/Prometheus dashboards
+- Backup scripts
+- Upgrade migration scripts
+- Health check scripts for monitoring
+
+---
 
 ## 1. Purpose
 

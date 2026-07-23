@@ -1,4 +1,6 @@
-# Document 26: Dashboard
+# 27. Dashboard
+
+> **Implementation Status:** A basic React dashboard exists in `dashboard/` with login page, auth context, and protected routes. The design spec below describes the full vision which is largely not implemented. The dashboard does NOT have dedicated API routes (`/api/v1/dashboard/*`); it calls the main API endpoints directly. State management uses React useState/useEffect (not Zustand). No alert management, log streaming, or metrics timeseries exist.
 
 ## 1. Purpose
 
