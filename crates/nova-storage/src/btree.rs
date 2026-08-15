@@ -1,7 +1,7 @@
+use nova_core::error::*;
+use nova_core::types::*;
 use std::ops::Range;
 use xxhash_rust::xxh3::xxh3_64;
-use nova_core::types::*;
-use nova_core::error::*;
 
 const INTERNAL_NODE: u16 = 0;
 const LEAF_NODE: u16 = 1;
@@ -95,11 +95,7 @@ fn get_int_child_index(data: &[u8], hash: u64) -> usize {
             break;
         }
     }
-    if idx > 0 {
-        idx - 1
-    } else {
-        0
-    }
+    if idx > 0 { idx - 1 } else { 0 }
 }
 
 pub struct BTree {
@@ -128,11 +124,18 @@ impl BTree {
             Some(id) => id,
             None => return Ok(None),
         };
-        let page = cache.get(root_id)?.ok_or_else(|| RuntimeError::Internal("BTree root not found".into()))?;
+        let page = cache
+            .get(root_id)?
+            .ok_or_else(|| RuntimeError::Internal("BTree root not found".into()))?;
         self.get_from_page(cache, &page.data, key)
     }
 
-    fn get_from_page(&self, cache: &super::page_cache::PageCache, data: &[u8; 4096], key: &Key) -> Result<Option<Value>> {
+    fn get_from_page(
+        &self,
+        cache: &super::page_cache::PageCache,
+        data: &[u8; 4096],
+        key: &Key,
+    ) -> Result<Option<Value>> {
         let node_type = read_u16(data, NODE_TYPE_OFF);
         if node_type == LEAF_NODE {
             let hash = key_hash(key);
@@ -145,12 +148,20 @@ impl BTree {
                 if entry.key_len as usize != key.len() {
                     continue;
                 }
-                let stored_key = read_key_from_data(data, entry.val_off as usize - entry.key_len as usize, entry.key_len as usize);
+                let stored_key = read_key_from_data(
+                    data,
+                    entry.val_off as usize - entry.key_len as usize,
+                    entry.key_len as usize,
+                );
                 if stored_key.as_bytes() == key.as_bytes() {
                     if entry.flags & 0x01 != 0 {
-                        return Ok(None);
+                        continue;
                     }
-                    return Ok(Some(read_value_from_data(data, entry.val_off as usize, entry.val_len as usize)));
+                    return Ok(Some(read_value_from_data(
+                        data,
+                        entry.val_off as usize,
+                        entry.val_len as usize,
+                    )));
                 }
             }
             Ok(None)
@@ -159,12 +170,19 @@ impl BTree {
             let idx = get_int_child_index(data, hash);
             let entry = read_int_entry(data, idx);
             let child_id = PageId::new(entry.child_id);
-            let child_page = cache.get(child_id)?.ok_or_else(|| RuntimeError::Internal("BTree child not found".into()))?;
+            let child_page = cache
+                .get(child_id)?
+                .ok_or_else(|| RuntimeError::Internal("BTree child not found".into()))?;
             self.get_from_page(cache, &child_page.data, key)
         }
     }
 
-    pub fn insert(&self, cache: &super::page_cache::PageCache, key: Key, value: Value) -> Result<()> {
+    pub fn insert(
+        &self,
+        cache: &super::page_cache::PageCache,
+        key: Key,
+        value: Value,
+    ) -> Result<()> {
         let root_id = self.root_id.get();
         let root_id = match root_id {
             Some(id) => id,
@@ -223,7 +241,9 @@ impl BTree {
         key: Key,
         value: Value,
     ) -> Result<Option<(Key, PageId)>> {
-        let page = cache.get(page_id)?.ok_or_else(|| RuntimeError::Internal("BTree page not found".into()))?;
+        let page = cache
+            .get(page_id)?
+            .ok_or_else(|| RuntimeError::Internal("BTree page not found".into()))?;
         let is_leaf = read_u16(&page.data, NODE_TYPE_OFF) == LEAF_NODE;
         if is_leaf {
             self.insert_into_leaf(cache, page, key, value)
@@ -234,7 +254,9 @@ impl BTree {
             let child_id = PageId::new(entry.child_id);
             let result = self.insert_into(cache, child_id, key, value)?;
             if let Some((sep_key, new_child_id)) = result {
-                let updated = cache.get(page_id)?.ok_or_else(|| RuntimeError::Internal("BTree page gone".into()))?;
+                let updated = cache
+                    .get(page_id)?
+                    .ok_or_else(|| RuntimeError::Internal("BTree page gone".into()))?;
                 self.insert_into_internal(cache, updated, sep_key, new_child_id)
             } else {
                 Ok(None)
@@ -252,9 +274,47 @@ impl BTree {
         let count = read_u16(&page.data, COUNT_OFF) as usize;
         let order = self.order;
 
+        // Check for existing key to overwrite (handles updates and delete->reinsert)
+        let hash = key_hash(&key);
+        for i in 0..count {
+            let entry = read_leaf_entry(&page.data, i);
+            if entry.key_hash != hash {
+                continue;
+            }
+            let stored_key = read_key_from_data(
+                &page.data,
+                entry.val_off as usize - entry.key_len as usize,
+                entry.key_len as usize,
+            );
+            if stored_key.as_bytes() == key.as_bytes() {
+                // Overwrite value in place if same length, else allocate new slot
+                if entry.key_len as usize == key.as_bytes().len()
+                    && entry.val_len as usize == value.as_bytes().len()
+                {
+                    let val_off = entry.val_off as usize;
+                    page.data[val_off..val_off + value.as_bytes().len()]
+                        .copy_from_slice(value.as_bytes());
+                    let entry_off = LEAF_ENTRIES_OFF + i * LEAF_ENTRY_SIZE;
+                    page.data[entry_off + 22] = 0; // clear tombstone
+                    page.mark_dirty();
+                    cache.insert(page)?;
+                    return Ok(None);
+                } else {
+                    // Different size: mark old as tombstone and fall through to insert new
+                    let entry_off = LEAF_ENTRIES_OFF + i * LEAF_ENTRY_SIZE;
+                    page.data[entry_off + 22] |= 0x01;
+                    // continue to insert new entry below (will increase count)
+                    break;
+                }
+            }
+        }
+
         if count < order * 2 {
-            insert_leaf_entry(&mut page.data, count, &key, &value)?;
-            write_u16(&mut page.data, COUNT_OFF, (count + 1) as u16);
+            // re-read count after possible tombstone marking (still same count)
+            let c = read_u16(&page.data, COUNT_OFF) as usize;
+            // if we marked tombstone, we have a tombstone to reuse: just append
+            insert_leaf_entry(&mut page.data, c, &key, &value)?;
+            write_u16(&mut page.data, COUNT_OFF, (c + 1) as u16);
             page.mark_dirty();
             cache.insert(page)?;
             return Ok(None);
@@ -264,13 +324,20 @@ impl BTree {
         let mut entries: Vec<(Key, Value, u8)> = Vec::new();
         for i in 0..count {
             let entry = read_leaf_entry(&page.data, i);
-            let k = read_key_from_data(&page.data, entry.val_off as usize - entry.key_len as usize, entry.key_len as usize);
-            let v = read_value_from_data(&page.data, entry.val_off as usize, entry.val_len as usize);
+            let k = read_key_from_data(
+                &page.data,
+                entry.val_off as usize - entry.key_len as usize,
+                entry.key_len as usize,
+            );
+            let v =
+                read_value_from_data(&page.data, entry.val_off as usize, entry.val_len as usize);
             entries.push((k, v, entry.flags));
         }
 
         let insert_hash = key_hash(&key);
-        let insert_pos = entries.iter().position(|(k, _, _)| key_hash(k) >= insert_hash)
+        let insert_pos = entries
+            .iter()
+            .position(|(k, _, _)| key_hash(k) >= insert_hash)
             .unwrap_or(entries.len());
         entries.insert(insert_pos, (key.clone(), value.clone(), 0));
 
@@ -279,8 +346,16 @@ impl BTree {
         let mut new_page = Page::new(new_page_id);
         write_u16(&mut new_page.data, NODE_TYPE_OFF, LEAF_NODE);
         write_u16(&mut new_page.data, COUNT_OFF, 0);
-        write_u64(&mut new_page.data, PARENT_OFF, read_u64(&page.data, PARENT_OFF));
-        write_u64(&mut new_page.data, NEXT_LEAF_OFF, read_u64(&page.data, NEXT_LEAF_OFF));
+        write_u64(
+            &mut new_page.data,
+            PARENT_OFF,
+            read_u64(&page.data, PARENT_OFF),
+        );
+        write_u64(
+            &mut new_page.data,
+            NEXT_LEAF_OFF,
+            read_u64(&page.data, NEXT_LEAF_OFF),
+        );
         write_u64(&mut new_page.data, PREV_LEAF_OFF, page.id.value());
 
         let mut new_count = 0usize;
@@ -333,7 +408,13 @@ impl BTree {
         let order = self.order;
 
         if count < order * 2 {
-            push_int_entry(&mut page.data, count, key_hash(&sep_key), new_child_id.value(), &sep_key);
+            push_int_entry(
+                &mut page.data,
+                count,
+                key_hash(&sep_key),
+                new_child_id.value(),
+                &sep_key,
+            );
             write_u16(&mut page.data, COUNT_OFF, (count + 1) as u16);
             page.mark_dirty();
             cache.insert(page)?;
@@ -355,11 +436,21 @@ impl BTree {
         let mut new_page = Page::new(new_page_id);
         write_u16(&mut new_page.data, NODE_TYPE_OFF, INTERNAL_NODE);
         write_u16(&mut new_page.data, COUNT_OFF, 0);
-        write_u64(&mut new_page.data, PARENT_OFF, read_u64(&page.data, PARENT_OFF));
+        write_u64(
+            &mut new_page.data,
+            PARENT_OFF,
+            read_u64(&page.data, PARENT_OFF),
+        );
 
         let mut new_count = 0usize;
         for i in mid + 1..entries.len() {
-            push_int_entry(&mut new_page.data, new_count, entries[i].0, entries[i].1, &entries[i].2);
+            push_int_entry(
+                &mut new_page.data,
+                new_count,
+                entries[i].0,
+                entries[i].1,
+                &entries[i].2,
+            );
             new_count += 1;
         }
         write_u16(&mut new_page.data, COUNT_OFF, new_count as u16);
@@ -394,8 +485,15 @@ impl BTree {
         self.delete_from(cache, root_id, key)
     }
 
-    fn delete_from(&self, cache: &super::page_cache::PageCache, page_id: PageId, key: &Key) -> Result<bool> {
-        let page = cache.get(page_id)?.ok_or_else(|| RuntimeError::Internal("BTree page not found".into()))?;
+    fn delete_from(
+        &self,
+        cache: &super::page_cache::PageCache,
+        page_id: PageId,
+        key: &Key,
+    ) -> Result<bool> {
+        let page = cache
+            .get(page_id)?
+            .ok_or_else(|| RuntimeError::Internal("BTree page not found".into()))?;
         let is_leaf = read_u16(&page.data, NODE_TYPE_OFF) == LEAF_NODE;
         if is_leaf {
             let hash = key_hash(key);
@@ -405,7 +503,11 @@ impl BTree {
                 if entry.key_hash != hash {
                     continue;
                 }
-                let stored_key = read_key_from_data(&page.data, entry.val_off as usize - entry.key_len as usize, entry.key_len as usize);
+                let stored_key = read_key_from_data(
+                    &page.data,
+                    entry.val_off as usize - entry.key_len as usize,
+                    entry.key_len as usize,
+                );
                 if stored_key.as_bytes() == key.as_bytes() {
                     let mut page = page;
                     let entry_off = LEAF_ENTRIES_OFF + i * LEAF_ENTRY_SIZE;
@@ -425,7 +527,11 @@ impl BTree {
         }
     }
 
-    pub fn scan(&self, cache: &super::page_cache::PageCache, range: Range<Key>) -> Result<Vec<(Key, Value)>> {
+    pub fn scan(
+        &self,
+        cache: &super::page_cache::PageCache,
+        range: Range<Key>,
+    ) -> Result<Vec<(Key, Value)>> {
         let root_id = match self.root_id.get() {
             Some(id) => id,
             None => return Ok(vec![]),
@@ -435,21 +541,31 @@ impl BTree {
         if let Some(start_id) = start_leaf {
             let mut current_id = start_id;
             loop {
-                let page = cache.get(current_id)?.ok_or_else(|| RuntimeError::Internal("leaf not found".into()))?;
+                let page = cache
+                    .get(current_id)?
+                    .ok_or_else(|| RuntimeError::Internal("leaf not found".into()))?;
                 let count = read_u16(&page.data, COUNT_OFF) as usize;
                 for i in 0..count {
                     let entry = read_leaf_entry(&page.data, i);
                     if entry.flags & 0x01 != 0 {
                         continue;
                     }
-                    let k = read_key_from_data(&page.data, entry.val_off as usize - entry.key_len as usize, entry.key_len as usize);
+                    let k = read_key_from_data(
+                        &page.data,
+                        entry.val_off as usize - entry.key_len as usize,
+                        entry.key_len as usize,
+                    );
                     if k.as_bytes() < range.start.as_bytes() {
                         continue;
                     }
                     if k.as_bytes() >= range.end.as_bytes() {
                         return Ok(results);
                     }
-                    let v = read_value_from_data(&page.data, entry.val_off as usize, entry.val_len as usize);
+                    let v = read_value_from_data(
+                        &page.data,
+                        entry.val_off as usize,
+                        entry.val_len as usize,
+                    );
                     results.push((k, v));
                 }
                 let next_id = read_u64(&page.data, NEXT_LEAF_OFF);
@@ -462,8 +578,15 @@ impl BTree {
         Ok(results)
     }
 
-    fn find_start_leaf(&self, cache: &super::page_cache::PageCache, page_id: PageId, key: &Key) -> Result<Option<PageId>> {
-        let page = cache.get(page_id)?.ok_or_else(|| RuntimeError::Internal("page not found".into()))?;
+    fn find_start_leaf(
+        &self,
+        cache: &super::page_cache::PageCache,
+        page_id: PageId,
+        key: &Key,
+    ) -> Result<Option<PageId>> {
+        let page = cache
+            .get(page_id)?
+            .ok_or_else(|| RuntimeError::Internal("page not found".into()))?;
         let is_leaf = read_u16(&page.data, NODE_TYPE_OFF) == LEAF_NODE;
         if is_leaf {
             return Ok(Some(page_id));
@@ -540,7 +663,9 @@ mod tests {
     #[test]
     fn test_btree_insert_and_get() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("hello"), Value::new(b"world".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("hello"), Value::new(b"world".to_vec()))
+            .unwrap();
         let result = btree.get(&cache, &Key::from("hello")).unwrap();
         assert_eq!(result, Some(Value::new(b"world".to_vec())));
     }
@@ -563,7 +688,9 @@ mod tests {
     #[test]
     fn test_btree_delete_marks_tombstone() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("hello"), Value::new(b"world".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("hello"), Value::new(b"world".to_vec()))
+            .unwrap();
         let deleted = btree.delete(&cache, &Key::from("hello")).unwrap();
         assert!(deleted);
         let result = btree.get(&cache, &Key::from("hello")).unwrap();
@@ -588,8 +715,12 @@ mod tests {
     #[test]
     fn test_btree_update_overwrites() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("key"), Value::new(b"val1".to_vec())).unwrap();
-        btree.insert(&cache, Key::from("key"), Value::new(b"val2".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("key"), Value::new(b"val1".to_vec()))
+            .unwrap();
+        btree
+            .insert(&cache, Key::from("key"), Value::new(b"val2".to_vec()))
+            .unwrap();
         let result = btree.get(&cache, &Key::from("key")).unwrap();
         assert_eq!(result, Some(Value::new(b"val2".to_vec())));
     }
@@ -623,9 +754,15 @@ mod tests {
     #[test]
     fn test_btree_scan_excludes_tombstones() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("a"), Value::new(b"1".to_vec())).unwrap();
-        btree.insert(&cache, Key::from("b"), Value::new(b"2".to_vec())).unwrap();
-        btree.insert(&cache, Key::from("c"), Value::new(b"3".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("a"), Value::new(b"1".to_vec()))
+            .unwrap();
+        btree
+            .insert(&cache, Key::from("b"), Value::new(b"2".to_vec()))
+            .unwrap();
+        btree
+            .insert(&cache, Key::from("c"), Value::new(b"3".to_vec()))
+            .unwrap();
         btree.delete(&cache, &Key::from("b")).unwrap();
         let results = btree.scan(&cache, Key::from("a")..Key::from("d")).unwrap();
         assert_eq!(results.len(), 2);
@@ -650,7 +787,9 @@ mod tests {
     fn test_btree_insert_get_large_value() {
         let (btree, cache) = setup();
         let large_val = Value::new(vec![0xAB; 2000]);
-        btree.insert(&cache, Key::from("large"), large_val.clone()).unwrap();
+        btree
+            .insert(&cache, Key::from("large"), large_val.clone())
+            .unwrap();
         let result = btree.get(&cache, &Key::from("large")).unwrap();
         assert_eq!(result, Some(large_val));
     }
@@ -658,10 +797,14 @@ mod tests {
     #[test]
     fn test_btree_get_after_delete_then_reinsert() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("x"), Value::new(b"first".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("x"), Value::new(b"first".to_vec()))
+            .unwrap();
         btree.delete(&cache, &Key::from("x")).unwrap();
         assert!(btree.get(&cache, &Key::from("x")).unwrap().is_none());
-        btree.insert(&cache, Key::from("x"), Value::new(b"second".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("x"), Value::new(b"second".to_vec()))
+            .unwrap();
         let result = btree.get(&cache, &Key::from("x")).unwrap();
         assert_eq!(result, Some(Value::new(b"second".to_vec())));
     }
@@ -679,7 +822,9 @@ mod tests {
     #[test]
     fn test_btree_single_key_then_delete_then_get() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("only"), Value::new(b"one".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("only"), Value::new(b"one".to_vec()))
+            .unwrap();
         assert!(btree.get(&cache, &Key::from("only")).unwrap().is_some());
         btree.delete(&cache, &Key::from("only")).unwrap();
         assert!(btree.get(&cache, &Key::from("only")).unwrap().is_none());
@@ -688,9 +833,15 @@ mod tests {
     #[test]
     fn test_btree_scan_exact_boundary() {
         let (btree, cache) = setup();
-        btree.insert(&cache, Key::from("a"), Value::new(b"1".to_vec())).unwrap();
-        btree.insert(&cache, Key::from("b"), Value::new(b"2".to_vec())).unwrap();
-        btree.insert(&cache, Key::from("c"), Value::new(b"3".to_vec())).unwrap();
+        btree
+            .insert(&cache, Key::from("a"), Value::new(b"1".to_vec()))
+            .unwrap();
+        btree
+            .insert(&cache, Key::from("b"), Value::new(b"2".to_vec()))
+            .unwrap();
+        btree
+            .insert(&cache, Key::from("c"), Value::new(b"3".to_vec()))
+            .unwrap();
         let results = btree.scan(&cache, Key::from("a")..Key::from("b")).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, Key::from("a"));
