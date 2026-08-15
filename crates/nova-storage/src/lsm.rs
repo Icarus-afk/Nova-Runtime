@@ -1,11 +1,11 @@
+use nova_core::error::*;
+use nova_core::types::*;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xxhash_rust::xxh3::xxh3_64;
-use nova_core::types::*;
-use nova_core::error::*;
 
 const SSTABLE_MAGIC: u32 = 0x53535442;
 const SSTABLE_VERSION: u32 = 1;
@@ -109,9 +109,18 @@ pub struct BloomFilter {
 
 impl BloomFilter {
     pub fn new(num_keys: u32, bits_per_key: u32) -> Self {
-        let bits_per = if bits_per_key == 0 { DEFAULT_BLOOM_BITS_PER_KEY } else { bits_per_key };
+        let bits_per = if bits_per_key == 0 {
+            DEFAULT_BLOOM_BITS_PER_KEY
+        } else {
+            bits_per_key
+        };
+        let num_keys = num_keys.max(1);
         let raw_bits = num_keys as u64 * bits_per as u64;
-        let num_bits = if raw_bits < 64 { 64 } else { raw_bits.next_power_of_two() };
+        let num_bits = if raw_bits < 64 {
+            64
+        } else {
+            raw_bits.next_power_of_two()
+        };
         let num_hashes = ((num_bits as f64 / num_keys as f64) * 0.69) as u32;
         let num_hashes = num_hashes.max(1).min(30);
         let bit_len = (num_bits / 64).max(1) as usize;
@@ -127,7 +136,9 @@ impl BloomFilter {
         let h1 = xxh3_64(key);
         let h2 = xxh3_64(&Self::flip_bit(key));
         for i in 0..self.num_hashes {
-            let idx = (h1.wrapping_add(i as u64 * h2)) % self.num_bits;
+            let idx = h1
+                .wrapping_add((i as u64).wrapping_mul(h2))
+                .wrapping_rem(self.num_bits);
             let word = (idx / 64) as usize;
             let bit = idx % 64;
             if word < self.bits.len() {
@@ -140,10 +151,15 @@ impl BloomFilter {
         if self.bits.is_empty() {
             return true;
         }
+        if self.num_bits == 0 {
+            return true;
+        }
         let h1 = xxh3_64(key);
         let h2 = xxh3_64(&Self::flip_bit(key));
         for i in 0..self.num_hashes {
-            let idx = (h1.wrapping_add(i as u64 * h2)) % self.num_bits;
+            let idx = h1
+                .wrapping_add((i as u64).wrapping_mul(h2))
+                .wrapping_rem(self.num_bits);
             let word = (idx / 64) as usize;
             let bit = idx % 64;
             if word >= self.bits.len() {
@@ -174,7 +190,9 @@ impl BloomFilter {
 
     pub fn decode(data: &[u8]) -> Result<Self> {
         if data.len() < 20 {
-            return Err(RuntimeError::CorruptData("Bloom filter data too short".into()));
+            return Err(RuntimeError::CorruptData(
+                "Bloom filter data too short".into(),
+            ));
         }
         let mut off = 0;
         let num_hashes = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
@@ -185,6 +203,16 @@ impl BloomFilter {
         off += 4;
         let bit_len = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
         off += 4;
+        if num_hashes == 0 || num_bits == 0 {
+            return Err(RuntimeError::CorruptData(
+                "Bloom filter corrupt: zero hashes/bits".into(),
+            ));
+        }
+        if bit_len == 0 || bit_len > 1024 * 1024 {
+            return Err(RuntimeError::CorruptData(
+                "Bloom filter corrupt: invalid bit_len".into(),
+            ));
+        }
         let expected = off + bit_len * 8;
         if data.len() < expected {
             return Err(RuntimeError::CorruptData("Bloom filter truncated".into()));
@@ -194,7 +222,12 @@ impl BloomFilter {
             bits.push(u64::from_le_bytes(data[off..off + 8].try_into().unwrap()));
             off += 8;
         }
-        Ok(BloomFilter { bits, num_hashes, num_bits, num_keys })
+        Ok(BloomFilter {
+            bits,
+            num_hashes,
+            num_bits,
+            num_keys,
+        })
     }
 }
 
@@ -235,13 +268,21 @@ impl SSTable {
         let mut current_block_size = 0usize;
         let mut data_offset = 0u64;
 
-        let key_min = entries.first().map(|(k, _)| k.clone()).unwrap_or_else(|| Key::new(vec![]));
-        let key_max = entries.last().map(|(k, _)| k.clone()).unwrap_or_else(|| Key::new(vec![]));
+        let key_min = entries
+            .first()
+            .map(|(k, _)| k.clone())
+            .unwrap_or_else(|| Key::new(vec![]));
+        let key_max = entries
+            .last()
+            .map(|(k, _)| k.clone())
+            .unwrap_or_else(|| Key::new(vec![]));
 
         for (key, value) in &entries {
             bloom.insert(key.as_bytes());
             let entry_len = 4 + key.len() + 4 + value.len();
-            if current_block_size + entry_len > DATA_BLOCK_TARGET_SIZE && !current_block_data.is_empty() {
+            if current_block_size + entry_len > DATA_BLOCK_TARGET_SIZE
+                && !current_block_data.is_empty()
+            {
                 let first_k = current_block_data.first().unwrap().0.clone();
                 let last_k = current_block_data.last().unwrap().0.clone();
                 let compressed = Self::compress_block(&current_block_data)?;
@@ -446,12 +487,19 @@ impl SSTable {
             key_max = Some(Key::new(lk));
         }
 
-        let filename = path.file_stem()
+        let filename = path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("0")
             .to_string();
-        let id = filename.split('_').nth(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let level = filename.split('_').nth(2)
+        let id = filename
+            .split('_')
+            .nth(1)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let level = filename
+            .split('_')
+            .nth(2)
             .and_then(|s| s.strip_prefix('l'))
             .and_then(|s| s.parse::<u8>().ok())
             .unwrap_or(0);
@@ -622,12 +670,12 @@ pub fn compress_data(data: &[u8], codec: CompressionCodec) -> Result<Vec<u8>> {
         CompressionCodec::None => Ok(data.to_vec()),
         CompressionCodec::Snappy => {
             let mut encoder = snap::raw::Encoder::new();
-            encoder.compress_vec(data).map_err(|e| RuntimeError::Io(e.to_string()))
-        }
-        CompressionCodec::Zstd { level } => {
-            zstd::encode_all(std::io::Cursor::new(data), level)
+            encoder
+                .compress_vec(data)
                 .map_err(|e| RuntimeError::Io(e.to_string()))
         }
+        CompressionCodec::Zstd { level } => zstd::encode_all(std::io::Cursor::new(data), level)
+            .map_err(|e| RuntimeError::Io(e.to_string())),
     }
 }
 
@@ -636,12 +684,12 @@ pub fn decompress_data(data: &[u8], codec: CompressionCodec) -> Result<Vec<u8>> 
         CompressionCodec::None => Ok(data.to_vec()),
         CompressionCodec::Snappy => {
             let mut decoder = snap::raw::Decoder::new();
-            decoder.decompress_vec(data).map_err(|e| RuntimeError::Io(e.to_string()))
-        }
-        CompressionCodec::Zstd { level: _ } => {
-            zstd::decode_all(std::io::Cursor::new(data))
+            decoder
+                .decompress_vec(data)
                 .map_err(|e| RuntimeError::Io(e.to_string()))
         }
+        CompressionCodec::Zstd { level: _ } => zstd::decode_all(std::io::Cursor::new(data))
+            .map_err(|e| RuntimeError::Io(e.to_string())),
     }
 }
 
@@ -828,7 +876,8 @@ mod tests {
         let data = b"zstd compression test data for nova storage";
         let compressed = compress_data(data, CompressionCodec::Zstd { level: 3 }).unwrap();
         assert_ne!(compressed, data);
-        let decompressed = decompress_data(&compressed, CompressionCodec::Zstd { level: 3 }).unwrap();
+        let decompressed =
+            decompress_data(&compressed, CompressionCodec::Zstd { level: 3 }).unwrap();
         assert_eq!(decompressed, data);
     }
 
@@ -845,10 +894,22 @@ mod tests {
         assert_eq!(compression_for_level(0), CompressionCodec::Snappy);
         assert_eq!(compression_for_level(1), CompressionCodec::Snappy);
         assert_eq!(compression_for_level(2), CompressionCodec::Snappy);
-        assert_eq!(compression_for_level(3), CompressionCodec::Zstd { level: 3 });
-        assert_eq!(compression_for_level(4), CompressionCodec::Zstd { level: 5 });
-        assert_eq!(compression_for_level(5), CompressionCodec::Zstd { level: 10 });
-        assert_eq!(compression_for_level(10), CompressionCodec::Zstd { level: 16 });
+        assert_eq!(
+            compression_for_level(3),
+            CompressionCodec::Zstd { level: 3 }
+        );
+        assert_eq!(
+            compression_for_level(4),
+            CompressionCodec::Zstd { level: 5 }
+        );
+        assert_eq!(
+            compression_for_level(5),
+            CompressionCodec::Zstd { level: 10 }
+        );
+        assert_eq!(
+            compression_for_level(10),
+            CompressionCodec::Zstd { level: 16 }
+        );
     }
 
     #[test]
@@ -862,7 +923,18 @@ mod tests {
     // ── SSTable tests (with temp dirs) ──
 
     fn temp_sst_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("nova_lsm_test_{}", std::process::id()));
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tid = format!("{:?}", std::thread::current().id());
+        let sanitized = tid.replace(|c: char| !c.is_alphanumeric(), "_");
+        let dir = std::env::temp_dir().join(format!(
+            "nova_lsm_test_{}_{}_{}",
+            std::process::id(),
+            sanitized,
+            nanos
+        ));
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -903,18 +975,25 @@ mod tests {
             (Key::from("gamma"), Value::new(b"g_value".to_vec())),
         ];
         let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
-        assert_eq!(sst.get(&Key::from("alpha")).unwrap(), Some(Value::new(b"a_value".to_vec())));
-        assert_eq!(sst.get(&Key::from("beta")).unwrap(), Some(Value::new(b"b_value".to_vec())));
-        assert_eq!(sst.get(&Key::from("gamma")).unwrap(), Some(Value::new(b"g_value".to_vec())));
+        assert_eq!(
+            sst.get(&Key::from("alpha")).unwrap(),
+            Some(Value::new(b"a_value".to_vec()))
+        );
+        assert_eq!(
+            sst.get(&Key::from("beta")).unwrap(),
+            Some(Value::new(b"b_value".to_vec()))
+        );
+        assert_eq!(
+            sst.get(&Key::from("gamma")).unwrap(),
+            Some(Value::new(b"g_value".to_vec()))
+        );
         cleanup(&dir);
     }
 
     #[test]
     fn test_sstable_get_missing_key() {
         let dir = temp_sst_dir();
-        let entries = vec![
-            (Key::from("key1"), Value::new(b"val1".to_vec())),
-        ];
+        let entries = vec![(Key::from("key1"), Value::new(b"val1".to_vec()))];
         let sst = SSTable::create(&dir, 1, 0, entries).unwrap();
         assert_eq!(sst.get(&Key::from("nonexistent")).unwrap(), None);
         cleanup(&dir);
