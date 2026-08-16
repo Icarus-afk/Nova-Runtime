@@ -1,15 +1,15 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::{RwLock, Mutex};
-use nova_core::types::*;
-use nova_core::error::*;
-use crate::page_cache::PageCache;
-use crate::wal::{self, WalWriter, WalReader, WalRecordType};
 use crate::btree::BTree;
 use crate::lsm::{MemTable, SSTable};
-use crate::txn::{self, TransactionManager, LockMode};
+use crate::page_cache::PageCache;
+use crate::txn::{self, LockMode, TransactionManager};
+use crate::wal::{self, WalReader, WalRecordType, WalWriter};
+use nova_core::error::*;
+use nova_core::types::*;
+use parking_lot::{Mutex, RwLock};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
@@ -99,11 +99,13 @@ impl Store {
 
         let current_lsn = {
             let wal_guard = wal.lock();
-            wal_guard.as_ref().map(|w| w.current_lsn().value()).unwrap_or(0)
+            wal_guard
+                .as_ref()
+                .map(|w| w.current_lsn().value())
+                .unwrap_or(0)
         };
 
-        let checkpoint_lsn = Self::find_latest_checkpoint(data_dir)?
-            .unwrap_or(0);
+        let checkpoint_lsn = Self::find_latest_checkpoint(data_dir)?.unwrap_or(0);
 
         Self::recover(wal_dir, &memtable, &sstables, current_lsn, checkpoint_lsn)?;
 
@@ -148,7 +150,10 @@ impl Store {
                     match record.record_type {
                         WalRecordType::Insert | WalRecordType::Update => {
                             let mt = &mut *memtable.write();
-                            mt.insert(record.key, record.value.unwrap_or_else(|| Value::new(vec![])));
+                            mt.insert(
+                                record.key,
+                                record.value.unwrap_or_else(|| Value::new(vec![])),
+                            );
                             recovered += 1;
                         }
                         WalRecordType::Delete => {
@@ -162,7 +167,11 @@ impl Store {
                 None => break,
             }
         }
-        tracing::info!("WAL recovery complete: {} operations replayed (after LSN {})", recovered, after_lsn);
+        tracing::info!(
+            "WAL recovery complete: {} operations replayed (after LSN {})",
+            recovered,
+            after_lsn
+        );
         Ok(())
     }
 
@@ -220,10 +229,17 @@ impl Store {
     }
 
     pub fn set(&self, key: Key, value: Value) -> Result<()> {
-        let record = wal::make_record(WalRecordType::Insert, TransactionId::ZERO, key.clone(), Some(value.clone()));
+        let record = wal::make_record(
+            WalRecordType::Insert,
+            TransactionId::ZERO,
+            key.clone(),
+            Some(value.clone()),
+        );
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+            let wal = wal_guard
+                .as_mut()
+                .expect("WAL not initialized - call init() before using store");
             wal.append(&record)?;
         }
 
@@ -238,10 +254,17 @@ impl Store {
     }
 
     pub fn delete(&self, key: &Key) -> Result<bool> {
-        let record = wal::make_record(WalRecordType::Delete, TransactionId::ZERO, key.clone(), None);
+        let record = wal::make_record(
+            WalRecordType::Delete,
+            TransactionId::ZERO,
+            key.clone(),
+            None,
+        );
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+            let wal = wal_guard
+                .as_mut()
+                .expect("WAL not initialized - call init() before using store");
             wal.append(&record)?;
         }
 
@@ -297,17 +320,31 @@ impl Store {
 
     pub fn commit_txn(&self, tx_id: u64) -> Result<Lsn> {
         self.txn_manager.commit(tx_id)?;
-        let record = wal::make_record(WalRecordType::Commit, TransactionId::new(tx_id), Key::new(vec![]), None);
+        let record = wal::make_record(
+            WalRecordType::Commit,
+            TransactionId::new(tx_id),
+            Key::new(vec![]),
+            None,
+        );
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+        let wal = wal_guard
+            .as_mut()
+            .expect("WAL not initialized - call init() before using store");
         wal.append(&record)
     }
 
     pub fn rollback_txn(&self, tx_id: u64) -> Result<()> {
         self.txn_manager.rollback(tx_id)?;
-        let record = wal::make_record(WalRecordType::Rollback, TransactionId::new(tx_id), Key::new(vec![]), None);
+        let record = wal::make_record(
+            WalRecordType::Rollback,
+            TransactionId::new(tx_id),
+            Key::new(vec![]),
+            None,
+        );
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+        let wal = wal_guard
+            .as_mut()
+            .expect("WAL not initialized - call init() before using store");
         wal.append(&record)?;
         Ok(())
     }
@@ -315,14 +352,18 @@ impl Store {
     pub fn commit(&self, tx_id: TransactionId) -> Result<Lsn> {
         let record = wal::make_record(WalRecordType::Commit, tx_id, Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+        let wal = wal_guard
+            .as_mut()
+            .expect("WAL not initialized - call init() before using store");
         wal.append(&record)
     }
 
     pub fn rollback(&self, tx_id: TransactionId) -> Result<()> {
         let record = wal::make_record(WalRecordType::Rollback, tx_id, Key::new(vec![]), None);
         let mut wal_guard = self.wal.lock();
-        let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+        let wal = wal_guard
+            .as_mut()
+            .expect("WAL not initialized - call init() before using store");
         wal.append(&record)?;
         Ok(())
     }
@@ -353,7 +394,9 @@ impl Store {
 
         let current_lsn = {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+            let wal = wal_guard
+                .as_mut()
+                .expect("WAL not initialized - call init() before using store");
             wal.flush()?;
             wal.current_lsn()
         };
@@ -366,7 +409,9 @@ impl Store {
         );
         {
             let mut wal_guard = self.wal.lock();
-            let wal = wal_guard.as_mut().expect("WAL not initialized - call init() before using store");
+            let wal = wal_guard
+                .as_mut()
+                .expect("WAL not initialized - call init() before using store");
             wal.append(&checkpoint_record)?;
             wal.flush()?;
         }
@@ -482,15 +527,21 @@ impl nova_core::StorageEngine for StorageEngineStore {
         Ok(self.inner.delete(key)?)
     }
 
-    fn scan(&self, range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+    fn scan(
+        &self,
+        range: std::ops::Range<nova_core::Key>,
+    ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
         Ok(self.inner.scan(range)?)
     }
 
     fn batch(&self, ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {
-        let store_ops: Vec<WriteOperation> = ops.into_iter().map(|op| match op {
-            nova_core::WriteOperation::Set { key, value } => WriteOperation::Set { key, value },
-            nova_core::WriteOperation::Delete { key } => WriteOperation::Delete { key },
-        }).collect();
+        let store_ops: Vec<WriteOperation> = ops
+            .into_iter()
+            .map(|op| match op {
+                nova_core::WriteOperation::Set { key, value } => WriteOperation::Set { key, value },
+                nova_core::WriteOperation::Delete { key } => WriteOperation::Delete { key },
+            })
+            .collect();
         Ok(self.inner.batch(store_ops)?)
     }
 
@@ -546,7 +597,9 @@ mod tests {
 
     #[test]
     fn test_write_operation_delete() {
-        let op = WriteOperation::Delete { key: Key::from("k") };
+        let op = WriteOperation::Delete {
+            key: Key::from("k"),
+        };
         match op {
             WriteOperation::Delete { ref key } => {
                 assert_eq!(key.as_bytes(), b"k");

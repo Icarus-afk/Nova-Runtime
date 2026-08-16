@@ -1,8 +1,8 @@
+use nova_core::error::*;
+use nova_core::types::*;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::RwLock;
-use nova_core::types::*;
-use nova_core::error::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxnStatus {
@@ -101,12 +101,7 @@ impl TransactionManager {
         Ok(())
     }
 
-    pub fn snapshot_read<F>(
-        &self,
-        txn_id: u64,
-        key: &Key,
-        store_read: F,
-    ) -> Result<Option<Value>>
+    pub fn snapshot_read<F>(&self, txn_id: u64, key: &Key, store_read: F) -> Result<Option<Value>>
     where
         F: Fn(&Key) -> Result<Option<Value>>,
     {
@@ -123,9 +118,9 @@ impl TransactionManager {
 
         match txn.isolation {
             IsolationLevel::ReadCommitted => store_read(key),
-            IsolationLevel::RepeatableRead | IsolationLevel::Snapshot | IsolationLevel::Serializable => {
-                store_read(key)
-            }
+            IsolationLevel::RepeatableRead
+            | IsolationLevel::Snapshot
+            | IsolationLevel::Serializable => store_read(key),
         }
     }
 }
@@ -181,7 +176,12 @@ mod tests {
     fn test_register_write_adds_to_write_set() {
         let tm = setup();
         let txn = tm.begin(IsolationLevel::ReadCommitted, LockMode::Optimistic);
-        tm.register_write(txn.id, Key::from("key1"), Some(Value::new(b"val1".to_vec()))).unwrap();
+        tm.register_write(
+            txn.id,
+            Key::from("key1"),
+            Some(Value::new(b"val1".to_vec())),
+        )
+        .unwrap();
         tm.register_write(txn.id, Key::from("key2"), None).unwrap();
         let stored = tm.get(txn.id).unwrap();
         assert_eq!(stored.write_set.len(), 2);
@@ -206,8 +206,11 @@ mod tests {
     fn test_snapshot_read_sees_own_writes() {
         let tm = setup();
         let txn = tm.begin(IsolationLevel::ReadCommitted, LockMode::Optimistic);
-        tm.register_write(txn.id, Key::from("key"), Some(Value::new(b"own".to_vec()))).unwrap();
-        let result = tm.snapshot_read(txn.id, &Key::from("key"), |_| Ok(None)).unwrap();
+        tm.register_write(txn.id, Key::from("key"), Some(Value::new(b"own".to_vec())))
+            .unwrap();
+        let result = tm
+            .snapshot_read(txn.id, &Key::from("key"), |_| Ok(None))
+            .unwrap();
         assert_eq!(result, Some(Value::new(b"own".to_vec())));
     }
 
@@ -215,10 +218,12 @@ mod tests {
     fn test_snapshot_read_delegates_to_store_for_unknown_key() {
         let tm = setup();
         let txn = tm.begin(IsolationLevel::ReadCommitted, LockMode::Optimistic);
-        let result = tm.snapshot_read(txn.id, &Key::from("store_key"), |k| {
-            assert_eq!(k.as_bytes(), b"store_key");
-            Ok(Some(Value::new(b"from_store".to_vec())))
-        }).unwrap();
+        let result = tm
+            .snapshot_read(txn.id, &Key::from("store_key"), |k| {
+                assert_eq!(k.as_bytes(), b"store_key");
+                Ok(Some(Value::new(b"from_store".to_vec())))
+            })
+            .unwrap();
         assert_eq!(result, Some(Value::new(b"from_store".to_vec())));
     }
 
@@ -226,10 +231,13 @@ mod tests {
     fn test_snapshot_read_own_write_overrides_store() {
         let tm = setup();
         let txn = tm.begin(IsolationLevel::ReadCommitted, LockMode::Optimistic);
-        tm.register_write(txn.id, Key::from("key"), Some(Value::new(b"own".to_vec()))).unwrap();
-        let result = tm.snapshot_read(txn.id, &Key::from("key"), |_| {
-            Ok(Some(Value::new(b"store".to_vec())))
-        }).unwrap();
+        tm.register_write(txn.id, Key::from("key"), Some(Value::new(b"own".to_vec())))
+            .unwrap();
+        let result = tm
+            .snapshot_read(txn.id, &Key::from("key"), |_| {
+                Ok(Some(Value::new(b"store".to_vec())))
+            })
+            .unwrap();
         assert_eq!(result, Some(Value::new(b"own".to_vec())));
     }
 

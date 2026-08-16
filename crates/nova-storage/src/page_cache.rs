@@ -1,10 +1,10 @@
+use lru::LruCache;
+use nova_core::error::*;
+use nova_core::types::*;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use lru::LruCache;
-use parking_lot::RwLock;
-use nova_core::types::*;
-use nova_core::error::*;
 
 struct PageCacheInner {
     clean: LruCache<PageId, Page>,
@@ -22,7 +22,9 @@ impl PageCache {
         let cap = if capacity == 0 { 1024 } else { capacity };
         PageCache {
             inner: RwLock::new(PageCacheInner {
-                clean: LruCache::new(NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::new(1024).unwrap())),
+                clean: LruCache::new(
+                    NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::new(1024).unwrap()),
+                ),
                 dirty: HashMap::new(),
                 capacity: cap,
             }),

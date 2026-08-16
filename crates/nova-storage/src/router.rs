@@ -56,7 +56,9 @@ impl KeyRouter {
     pub fn default() -> Self {
         let mut router = KeyRouter::new();
         let btree_prefixes = ["meta:", "schema:", "auth:", "sql:", "index:", "blob:"];
-        let lsm_prefixes = ["queue:", "event:", "log:", "cache:", "search:", "ts:", "session:"];
+        let lsm_prefixes = [
+            "queue:", "event:", "log:", "cache:", "search:", "ts:", "session:",
+        ];
         for p in &btree_prefixes {
             router.add_rule(RoutingRule {
                 prefix: p.as_bytes().to_vec(),
@@ -122,7 +124,10 @@ mod tests {
     #[test]
     fn test_route_fallback_to_btree() {
         let router = KeyRouter::default();
-        assert_eq!(router.route(&Key::from("unknown:prefix")), EngineType::BTree);
+        assert_eq!(
+            router.route(&Key::from("unknown:prefix")),
+            EngineType::BTree
+        );
         assert_eq!(router.route(&Key::from("random_key")), EngineType::BTree);
         assert_eq!(router.route(&Key::from("")), EngineType::BTree);
     }

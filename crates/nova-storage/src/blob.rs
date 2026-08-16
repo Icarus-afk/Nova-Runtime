@@ -1,8 +1,8 @@
+use nova_core::error::*;
+use nova_core::types::*;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::RwLock;
-use nova_core::types::*;
-use nova_core::error::*;
 
 pub const MIN_BLOB_SIZE: u64 = 1024 * 1024;
 pub const MAX_BLOB_SIZE: u64 = 5_497_558_138_880;
@@ -64,7 +64,9 @@ impl BlobStore {
         }
 
         let num_pages = ((size + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64) as u32;
-        let first_page = self.region_end.fetch_add(num_pages as u64 + 1, Ordering::SeqCst) as u32;
+        let first_page = self
+            .region_end
+            .fetch_add(num_pages as u64 + 1, Ordering::SeqCst) as u32;
 
         let blob_id = uuid::Uuid::now_v7().as_u128();
         let checksum = crc32c::crc32c(data);
@@ -253,7 +255,8 @@ mod tests {
         let data = vec![0xBB; MIN_BLOB_SIZE as usize + 500];
         let id = store.put(&data, None).unwrap();
         let meta = store.metadata(id).unwrap().unwrap();
-        let num_pages_expected = ((data.len() as u64 + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64) as u32;
+        let num_pages_expected =
+            ((data.len() as u64 + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64) as u32;
         assert_eq!(meta.num_pages, num_pages_expected);
         assert!(meta.first_page > 0);
     }
