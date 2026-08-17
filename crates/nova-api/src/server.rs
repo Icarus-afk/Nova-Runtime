@@ -1,8 +1,8 @@
 use crate::admin::{self, AdminState};
-use crate::middleware::{request_logger, cors_layer};
+use crate::middleware::{auth_layer, cors_layer, request_logger};
 use crate::routes;
 use axum::http::StatusCode;
-use axum::response::{Html, Json};
+use axum::response::Json;
 use axum::{Router, middleware};
 use serde_json::json;
 use std::sync::Arc;
@@ -17,17 +17,27 @@ pub async fn start_server(
     graphql_router: Option<Router>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fallback = || async {
-        (StatusCode::NOT_FOUND, Json(json!({
-            "error": "not_found",
-            "message": "The requested resource was not found"
-        })))
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "not_found",
+                "message": "The requested resource was not found"
+            })),
+        )
     };
 
     let mut app = Router::new()
         .nest("/", admin::routes(admin_state.clone()))
         .nest("/api/v1", routes::v1_routes(admin_state.clone()))
-        .nest("/api/v1", routes::ws_router().with_state(admin_state))
+        .nest(
+            "/api/v1",
+            routes::ws_router().with_state(admin_state.clone()),
+        )
         .fallback(fallback)
+        .layer(middleware::from_fn_with_state(
+            admin_state.clone(),
+            auth_layer,
+        ))
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))
         .layer(TraceLayer::new_for_http());

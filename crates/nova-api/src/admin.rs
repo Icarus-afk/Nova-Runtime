@@ -1,19 +1,24 @@
 use axum::extract::State;
 use axum::response::Json;
-use axum::{routing::get, routing::put, Router};
-use serde_json::{json, Value};
+use axum::{Router, routing::get};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
 
-use nova_executor::PipelineExecutor;
 use nova_config::Config;
+use nova_executor::PipelineExecutor;
 
 fn merge_json(base: &mut Value, patch: &Value) {
     match (base, patch) {
         (Value::Object(base_map), Value::Object(patch_map)) => {
             for (k, v) in patch_map {
                 if v.is_object() {
-                    merge_json(base_map.entry(k).or_insert(Value::Object(Default::default())), v);
+                    merge_json(
+                        base_map
+                            .entry(k)
+                            .or_insert(Value::Object(Default::default())),
+                        v,
+                    );
                 } else {
                     base_map.insert(k.clone(), v.clone());
                 }
@@ -60,7 +65,11 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let memory_ok = state.memory_mgr.as_ref().map(|_| true).unwrap_or(true);
     let healthy = storage_ok && memory_ok;
 
-    let mem_used_bytes = state.memory_mgr.as_ref().map(|m| m.total_used()).unwrap_or(0);
+    let mem_used_bytes = state
+        .memory_mgr
+        .as_ref()
+        .map(|m| m.total_used())
+        .unwrap_or(0);
     let mem_max_bytes = state.config.read().memory.max_memory;
 
     let disk_info = std::fs::metadata(state.config.read().general.data_dir.clone())
@@ -86,6 +95,10 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
         "status": if healthy { "healthy" } else { "degraded" },
         "uptime_secs": uptime,
         "version": env!("CARGO_PKG_VERSION"),
+        "checks": {
+            "storage": storage_ok,
+            "memory": memory_ok,
+        },
         "memory": {
             "total_bytes": mem_max_bytes,
             "used_bytes": mem_used_bytes,
@@ -182,24 +195,33 @@ async fn config_put(
     let mut current = {
         let c = state.config.read();
         serde_json::to_value(&*c).map_err(|e| {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
-                "error": "serialization_failed", "detail": e.to_string()
-            })))
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "serialization_failed", "detail": e.to_string()
+                })),
+            )
         })?
     };
 
     merge_json(&mut current, &patch);
 
     let new_config: Config = serde_json::from_value(current).map_err(|e| {
-        (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
-            "error": "validation_failed", "detail": format!("Invalid config: {}", e)
-        })))
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "validation_failed", "detail": format!("Invalid config: {}", e)
+            })),
+        )
     })?;
 
     if let Err(errors) = new_config.validate() {
-        return Err((axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
-            "error": "validation_failed", "detail": errors
-        }))));
+        return Err((
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "validation_failed", "detail": errors
+            })),
+        ));
     }
 
     {
@@ -295,6 +317,7 @@ mod tests {
             search_mgr: None,
             blob_mgr: None,
             auth_mgr: None,
+            event_bus: None,
             storage_ok: true,
         })
     }
