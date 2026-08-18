@@ -1,8 +1,8 @@
 use crate::backend::QueueBackend;
 use crate::config::QueueConfig;
+use crate::error::Result;
 use crate::scanner::QueueScanner;
 use crate::types::*;
-use crate::error::Result;
 use std::sync::Arc;
 
 /// Central manager for the queue subsystem.
@@ -56,11 +56,7 @@ impl QueueManager {
 
     /// Create a scanner for running background tasks.
     pub fn create_scanner(&self, shutdown_rx: tokio::sync::watch::Receiver<bool>) -> QueueScanner {
-        QueueScanner::new(
-            self.backend.clone(),
-            self.config.clone(),
-            shutdown_rx,
-        )
+        QueueScanner::new(self.backend.clone(), self.config.clone(), shutdown_rx)
     }
 }
 
@@ -82,7 +78,10 @@ mod tests {
         fn delete(&self, _key: &nova_core::Key) -> nova_core::Result<bool> {
             Ok(true)
         }
-        fn scan(&self, _range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+        fn scan(
+            &self,
+            _range: std::ops::Range<nova_core::Key>,
+        ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
             Ok(Vec::new())
         }
         fn batch(&self, _ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {

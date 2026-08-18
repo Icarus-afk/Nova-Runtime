@@ -57,13 +57,25 @@ impl QueueScanner {
 
         for summary in &queues {
             // 1. Release expired inflight messages
-            match self.backend.release_expired_messages(&summary.name, now_ms).await {
+            match self
+                .backend
+                .release_expired_messages(&summary.name, now_ms)
+                .await
+            {
                 Ok(count) => {
                     if count > 0 {
-                        tracing::debug!("Released {} expired messages from queue '{}'", count, summary.name);
+                        tracing::debug!(
+                            "Released {} expired messages from queue '{}'",
+                            count,
+                            summary.name
+                        );
                     }
                 }
-                Err(e) => tracing::error!("Failed to release expired messages for '{}': {}", summary.name, e),
+                Err(e) => tracing::error!(
+                    "Failed to release expired messages for '{}': {}",
+                    summary.name,
+                    e
+                ),
             }
 
             // 2. Move excess-receive messages to DLQ
@@ -71,21 +83,41 @@ impl QueueScanner {
                 match self.backend.move_to_dlq(&summary.name, now_ms).await {
                     Ok(count) => {
                         if count > 0 {
-                            tracing::debug!("Moved {} messages to DLQ from queue '{}'", count, summary.name);
+                            tracing::debug!(
+                                "Moved {} messages to DLQ from queue '{}'",
+                                count,
+                                summary.name
+                            );
                         }
                     }
-                    Err(e) => tracing::error!("Failed to move messages to DLQ for '{}': {}", summary.name, e),
+                    Err(e) => tracing::error!(
+                        "Failed to move messages to DLQ for '{}': {}",
+                        summary.name,
+                        e
+                    ),
                 }
             }
 
             // 3. Purge expired TTL messages
-            match self.backend.purge_expired_messages(&summary.name, now_ms).await {
+            match self
+                .backend
+                .purge_expired_messages(&summary.name, now_ms)
+                .await
+            {
                 Ok(count) => {
                     if count > 0 {
-                        tracing::debug!("Purged {} expired messages from queue '{}'", count, summary.name);
+                        tracing::debug!(
+                            "Purged {} expired messages from queue '{}'",
+                            count,
+                            summary.name
+                        );
                     }
                 }
-                Err(e) => tracing::error!("Failed to purge expired messages for '{}': {}", summary.name, e),
+                Err(e) => tracing::error!(
+                    "Failed to purge expired messages for '{}': {}",
+                    summary.name,
+                    e
+                ),
             }
         }
     }
@@ -112,7 +144,10 @@ mod tests {
         fn delete(&self, _key: &nova_core::Key) -> nova_core::Result<bool> {
             Ok(true)
         }
-        fn scan(&self, _range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+        fn scan(
+            &self,
+            _range: std::ops::Range<nova_core::Key>,
+        ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
             Ok(Vec::new())
         }
         fn batch(&self, _ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {

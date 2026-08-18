@@ -148,7 +148,12 @@ impl QueueBackend for StorageQueueBackend {
         }
 
         // Clean up indexes
-        for prefix in &["queue:available:", "queue:inflight:", "queue:delayed:", "queue:dlq:"] {
+        for prefix in &[
+            "queue:available:",
+            "queue:inflight:",
+            "queue:delayed:",
+            "queue:dlq:",
+        ] {
             let start = nova_core::Key::from(format!("{}{}:", prefix, name).into_bytes());
             let end = {
                 let mut b = start.as_bytes().to_vec();
@@ -171,7 +176,9 @@ impl QueueBackend for StorageQueueBackend {
 
     async fn get_queue(&self, name: &str) -> Result<IndividualQueueConfig> {
         let meta_key = Self::queue_meta_key(name);
-        let data = self.store.get(&meta_key)?
+        let data = self
+            .store
+            .get(&meta_key)?
             .ok_or_else(|| crate::error::QueueError::NotFound(name.to_string()))?;
         serde_json::from_slice(data.as_bytes())
             .map_err(|e| crate::error::QueueError::Internal(e.to_string()))
@@ -232,7 +239,8 @@ impl QueueBackend for StorageQueueBackend {
         if let Some(delay_until) = message.delay_until {
             if delay_until > now_ms {
                 let delayed_key = Self::queue_delayed_key(&message.queue_name, &message.id);
-                self.store.set(&delayed_key, nova_core::Value::new(vec![]))?;
+                self.store
+                    .set(&delayed_key, nova_core::Value::new(vec![]))?;
                 return Ok(());
             }
         }
@@ -293,7 +301,8 @@ impl QueueBackend for StorageQueueBackend {
                         // Move from available to in-flight
                         self.store.delete(&key.clone())?;
                         let inflight_key = Self::queue_inflight_key(queue_name, &msg_id);
-                        self.store.set(&inflight_key, nova_core::Value::new(vec![]))?;
+                        self.store
+                            .set(&inflight_key, nova_core::Value::new(vec![]))?;
 
                         messages.push(msg);
                     }
@@ -307,12 +316,15 @@ impl QueueBackend for StorageQueueBackend {
     async fn ack(&self, queue_name: &str, receipt_handle: &str) -> Result<()> {
         // Parse the receipt handle to find the message ID
         // Receipt handles are UUIDs stored on the message
-        let msg_id = uuid::Uuid::parse_str(receipt_handle)
-            .map_err(|_| crate::error::QueueError::InvalidReceiptHandle(receipt_handle.to_string()))?;
+        let msg_id = uuid::Uuid::parse_str(receipt_handle).map_err(|_| {
+            crate::error::QueueError::InvalidReceiptHandle(receipt_handle.to_string())
+        })?;
 
         let msg_key = Self::queue_msg_key(queue_name, &msg_id);
         if self.store.get(&msg_key)?.is_none() {
-            return Err(crate::error::QueueError::MessageNotFound(msg_id.to_string()));
+            return Err(crate::error::QueueError::MessageNotFound(
+                msg_id.to_string(),
+            ));
         }
 
         // Delete message data and inflight index
@@ -323,11 +335,14 @@ impl QueueBackend for StorageQueueBackend {
     }
 
     async fn nack(&self, queue_name: &str, receipt_handle: &str) -> Result<()> {
-        let msg_id = uuid::Uuid::parse_str(receipt_handle)
-            .map_err(|_| crate::error::QueueError::InvalidReceiptHandle(receipt_handle.to_string()))?;
+        let msg_id = uuid::Uuid::parse_str(receipt_handle).map_err(|_| {
+            crate::error::QueueError::InvalidReceiptHandle(receipt_handle.to_string())
+        })?;
 
         let msg_key = Self::queue_msg_key(queue_name, &msg_id);
-        let msg_data = self.store.get(&msg_key)?
+        let msg_data = self
+            .store
+            .get(&msg_key)?
             .ok_or_else(|| crate::error::QueueError::MessageNotFound(msg_id.to_string()))?;
 
         let mut msg: QueueMessage = serde_json::from_slice(msg_data.as_bytes())
@@ -385,7 +400,12 @@ impl QueueBackend for StorageQueueBackend {
         }
 
         // Also clean all indexes
-        for prefix in &["queue:available:", "queue:inflight:", "queue:delayed:", "queue:dlq:"] {
+        for prefix in &[
+            "queue:available:",
+            "queue:inflight:",
+            "queue:delayed:",
+            "queue:dlq:",
+        ] {
             let start = nova_core::Key::from(format!("{}{}:", prefix, queue_name).into_bytes());
             let end = {
                 let mut b = start.as_bytes().to_vec();
@@ -409,7 +429,8 @@ impl QueueBackend for StorageQueueBackend {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Count available messages
-        let avail_start = nova_core::Key::from(format!("queue:available:{}:", queue_name).into_bytes());
+        let avail_start =
+            nova_core::Key::from(format!("queue:available:{}:", queue_name).into_bytes());
         let avail_end = {
             let mut b = avail_start.as_bytes().to_vec();
             b.push(0xFFu8);
@@ -418,7 +439,8 @@ impl QueueBackend for StorageQueueBackend {
         let available = self.store.scan(avail_start..avail_end)?.len() as u64;
 
         // Count in-flight messages
-        let inflight_start = nova_core::Key::from(format!("queue:inflight:{}:", queue_name).into_bytes());
+        let inflight_start =
+            nova_core::Key::from(format!("queue:inflight:{}:", queue_name).into_bytes());
         let inflight_end = {
             let mut b = inflight_start.as_bytes().to_vec();
             b.push(0xFFu8);
@@ -427,7 +449,8 @@ impl QueueBackend for StorageQueueBackend {
         let in_flight = self.store.scan(inflight_start..inflight_end)?.len() as u64;
 
         // Count delayed messages
-        let delayed_start = nova_core::Key::from(format!("queue:delayed:{}:", queue_name).into_bytes());
+        let delayed_start =
+            nova_core::Key::from(format!("queue:delayed:{}:", queue_name).into_bytes());
         let delayed_end = {
             let mut b = delayed_start.as_bytes().to_vec();
             b.push(0xFFu8);
@@ -560,7 +583,8 @@ impl QueueBackend for StorageQueueBackend {
                         let dlq_data = serde_json::to_vec(&msg)
                             .map_err(|e| crate::error::QueueError::Internal(e.to_string()))?;
 
-                        self.store.set(&dlq_msg_key, nova_core::Value::new(dlq_data))?;
+                        self.store
+                            .set(&dlq_msg_key, nova_core::Value::new(dlq_data))?;
                         self.store.set(&dlq_key, nova_core::Value::new(vec![]))?;
 
                         // Remove from source
@@ -600,7 +624,8 @@ impl QueueBackend for StorageQueueBackend {
                         format!("queue:dlq:{}:", queue_name),
                     ];
                     for prefix in &prefixes {
-                        let idx_key = nova_core::Key::from(format!("{}{}", prefix, id).into_bytes());
+                        let idx_key =
+                            nova_core::Key::from(format!("{}{}", prefix, id).into_bytes());
                         ops.push(nova_core::WriteOperation::Delete { key: idx_key });
                     }
                     purged += 1;

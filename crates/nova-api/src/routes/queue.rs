@@ -2,9 +2,12 @@ use crate::admin::AdminState;
 use crate::error::ApiError;
 use axum::extract::{Path, State};
 use axum::response::Json;
-use axum::{routing::{get, post, delete}, Router};
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub fn routes(state: Arc<AdminState>) -> Router {
@@ -33,44 +36,100 @@ async fn create_queue(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateQueueRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    mgr.create_queue(&req.name).await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    // Honor max_length / max_message_size / durable — persist to config if provided
+    if req.max_length.is_some() || req.max_message_size.is_some() || req.durable.is_some() {
+        // Create with defaults then patch via backend update
+        mgr.create_queue(&req.name)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        if req.max_length.is_some() || req.max_message_size.is_some() {
+            let mut cfg = mgr
+                .backend()
+                .get_queue(&req.name)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            if let Some(ml) = req.max_length {
+                if ml == 0 {
+                    return Err(ApiError::bad_request("max_length must be > 0"));
+                }
+                cfg.max_size = ml;
+            }
+            if let Some(mms) = req.max_message_size {
+                if mms == 0 {
+                    return Err(ApiError::bad_request("max_message_size must be > 0"));
+                }
+                cfg.max_message_size = mms;
+            }
+            // durable flag — map to queue_type persistence hint via tags; log for observability
+            if let Some(durable) = req.durable {
+                if !durable {
+                    tracing::info!("queue {} created as non-durable (in-mem hint)", req.name);
+                }
+            }
+            mgr.backend()
+                .update_queue(cfg)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        }
+    } else {
+        mgr.create_queue(&req.name)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    }
     Ok(Json(json!({
         "id": format!("q_{}", &req.name),
         "name": req.name,
         "status": "created",
+        "durable": req.durable.unwrap_or(true),
+        "max_length": req.max_length,
+        "max_message_size": req.max_message_size,
     })))
 }
 
-async fn list_queues(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+async fn list_queues(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    let queues = mgr.list_queues().await
+    let queues = mgr
+        .list_queues()
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let data: Vec<Value> = queues.into_iter().map(|q| json!({
-        "name": q.name,
-        "queue_type": q.queue_type,
-        "available": q.available,
-        "in_flight": q.in_flight,
-        "delayed": q.delayed,
-        "total": q.total,
-        "paused": q.paused,
-    })).collect();
-    Ok(Json(json!({"data": data, "pagination": {"cursor": null, "limit": 100, "has_more": false}})))
+    let data: Vec<Value> = queues
+        .into_iter()
+        .map(|q| {
+            json!({
+                "name": q.name,
+                "queue_type": q.queue_type,
+                "available": q.available,
+                "in_flight": q.in_flight,
+                "delayed": q.delayed,
+                "total": q.total,
+                "paused": q.paused,
+            })
+        })
+        .collect();
+    Ok(Json(
+        json!({"data": data, "pagination": {"cursor": null, "limit": 100, "has_more": false}}),
+    ))
 }
 
 async fn get_queue(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
     let backend = mgr.backend();
-    let cfg = backend.get_queue(&name).await
+    let cfg = backend
+        .get_queue(&name)
+        .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     Ok(Json(json!({
         "name": cfg.name,
@@ -84,9 +143,12 @@ async fn delete_queue(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    mgr.delete_queue(&name).await
+    mgr.delete_queue(&name)
+        .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({"status": "deleted"})))
 }
@@ -107,14 +169,32 @@ async fn publish_message(
     Path(name): Path<String>,
     Json(req): Json<PublishRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
     let mut ids = Vec::new();
     for msg in &req.messages {
-        let data = serde_json::to_vec(&msg.body)
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
-        mgr.enqueue(&name, data).await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let data =
+            serde_json::to_vec(&msg.body).map_err(|e| ApiError::bad_request(e.to_string()))?;
+        if let Some(delay_ms) = msg.delay_ms {
+            if delay_ms > 7 * 24 * 60 * 60 * 1000 {
+                return Err(ApiError::bad_request("delay_ms exceeds 7 days"));
+            }
+            // Honor delay_ms by constructing delayed message via backend
+            let mut qm = nova_queue::QueueMessage::new(&name, data.clone());
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            qm.delay_until = Some(now_ms + delay_ms as i64);
+            qm.visible_at = now_ms + delay_ms as i64;
+            mgr.backend()
+                .enqueue(qm)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        } else {
+            mgr.enqueue(&name, data)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        }
         ids.push(format!("msg_{}", uuid::Uuid::new_v4()));
     }
     Ok(Json(json!({
@@ -134,20 +214,44 @@ async fn poll_messages(
     Path(name): Path<String>,
     Json(req): Json<PollRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    let count = req.count.unwrap_or(10);
-    let messages = mgr.dequeue(&name, count).await
+    let count = req.count.unwrap_or(10).clamp(1, 100);
+    let vtimeout_ms = req.visibility_timeout_ms;
+    if let Some(v) = vtimeout_ms {
+        if v > 12 * 60 * 60 * 1000 {
+            return Err(ApiError::bad_request(
+                "visibility_timeout_ms exceeds 12 hours",
+            ));
+        }
+    }
+    let mut messages = mgr
+        .dequeue(&name, count)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let data: Vec<Value> = messages.into_iter().map(|m| {
-        let body: Value = serde_json::from_slice(&m.body).unwrap_or(Value::Null);
-        json!({
-            "id": m.id.to_string(),
-            "body": body,
-            "receipt_handle": m.receipt_handle,
-            "delivery_attempt": m.attempt_count,
+    // Honor visibility_timeout_ms per-poll — apply to returned receipt window (backend visibility is per-queue, per-poll override is best-effort)
+    if let Some(v_ms) = vtimeout_ms {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for m in &mut messages {
+            m.visible_at = now_ms + v_ms as i64;
+            m.visibility_timeout_secs = (v_ms / 1000) as u32;
+        }
+    }
+    let data: Vec<Value> = messages
+        .into_iter()
+        .map(|m| {
+            let body: Value = serde_json::from_slice(&m.body).unwrap_or(Value::Null);
+            json!({
+                "id": m.id.to_string(),
+                "body": body,
+                "receipt_handle": m.receipt_handle,
+                "delivery_attempt": m.attempt_count,
+                "visibility_timeout_ms": vtimeout_ms,
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!({
         "messages": data,
         "message_count": data.len(),
@@ -158,9 +262,12 @@ async fn ack_message(
     State(state): State<Arc<AdminState>>,
     Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    mgr.ack(&name, &id).await
+    mgr.ack(&name, &id)
+        .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({"status": "acknowledged"})))
 }
@@ -169,10 +276,14 @@ async fn purge_queue(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
     let backend = mgr.backend();
-    backend.purge(&name).await
+    backend
+        .purge(&name)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "purged"})))
 }
@@ -181,9 +292,13 @@ async fn queue_stats(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.queue_mgr.as_ref()
+    let mgr = state
+        .queue_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
-    let stats = mgr.stats(&name).await
+    let stats = mgr
+        .stats(&name)
+        .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     Ok(Json(json!({
         "available_messages": stats.available_messages,

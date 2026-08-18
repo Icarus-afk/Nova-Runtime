@@ -92,8 +92,7 @@ impl QueueMessage {
     }
 
     pub fn is_visible(&self, now_ms: i64) -> bool {
-        self.visible_at <= now_ms
-            && self.expires_at.map(|e| e > now_ms).unwrap_or(true)
+        self.visible_at <= now_ms && self.expires_at.map(|e| e > now_ms).unwrap_or(true)
     }
 
     pub fn has_expired(&self, now_ms: i64) -> bool {
@@ -310,7 +309,10 @@ mod tests {
 
     #[test]
     fn test_message_priority_max_wait() {
-        assert_eq!(MessagePriority::Critical.max_wait(), Duration::from_millis(50));
+        assert_eq!(
+            MessagePriority::Critical.max_wait(),
+            Duration::from_millis(50)
+        );
         assert_eq!(MessagePriority::High.max_wait(), Duration::from_millis(200));
         assert_eq!(MessagePriority::Normal.max_wait(), Duration::from_secs(1));
         assert_eq!(MessagePriority::Low.max_wait(), Duration::from_secs(5));
