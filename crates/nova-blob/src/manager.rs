@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tracing::debug;
 
-use crate::backend::filesystem::FilesystemBackend;
 use crate::backend::BlobStore;
+use crate::backend::filesystem::FilesystemBackend;
 use crate::chunk::ChunkManager;
 use crate::config::BlobConfig;
 use crate::dedup::DeduplicationEngine;
@@ -140,7 +140,10 @@ impl BlobManager {
 
         debug!(
             "created blob {} in namespace {} ({} bytes, {} chunks)",
-            blob_id, namespace, meta.size, chunks.len()
+            blob_id,
+            namespace,
+            meta.size,
+            chunks.len()
         );
         Ok(meta)
     }
@@ -149,13 +152,10 @@ impl BlobManager {
         self.download_handler.download(blob_id).await
     }
 
-    pub async fn get_blob_range(
-        &self,
-        blob_id: &str,
-        offset: u64,
-        length: u64,
-    ) -> Result<Vec<u8>> {
-        self.download_handler.download_range(blob_id, offset, length).await
+    pub async fn get_blob_range(&self, blob_id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+        self.download_handler
+            .download_range(blob_id, offset, length)
+            .await
     }
 
     pub async fn delete_blob(&self, blob_id: &str) -> Result<()> {
@@ -182,9 +182,16 @@ impl BlobManager {
         self.store.list_blobs(namespace).await
     }
 
-    pub async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)> {
+    pub async fn list_blobs_paginated(
+        &self,
+        namespace: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize)> {
         crate::namespace::validate_namespace(namespace)?;
-        self.store.list_blobs_paginated(namespace, offset, limit).await
+        self.store
+            .list_blobs_paginated(namespace, offset, limit)
+            .await
     }
 
     pub async fn create_namespace(&self, namespace: &str) -> Result<()> {
@@ -209,7 +216,8 @@ impl BlobManager {
         crate::namespace::validate_namespace(namespace)?;
         self.ns_manager.ensure_namespace(namespace).await?;
         self.stats.increment_uploads();
-        self.upload_mgr.initiate(namespace, content_type, metadata, declared_total_size)
+        self.upload_mgr
+            .initiate(namespace, content_type, metadata, declared_total_size)
     }
 
     pub async fn upload_part(&self, upload_id: &str, data: Vec<u8>) -> Result<()> {
@@ -261,13 +269,9 @@ impl BlobManager {
         self.gc.run_once().await
     }
 
-    pub fn set_namespace_quota(
-        &self,
-        namespace: &str,
-        max_blobs: u64,
-        max_total_bytes: u64,
-    ) {
-        self.ns_manager.set_quota(namespace, max_blobs, max_total_bytes);
+    pub fn set_namespace_quota(&self, namespace: &str, max_blobs: u64, max_total_bytes: u64) {
+        self.ns_manager
+            .set_quota(namespace, max_blobs, max_total_bytes);
     }
 
     pub fn stats(&self) -> BlobStats {

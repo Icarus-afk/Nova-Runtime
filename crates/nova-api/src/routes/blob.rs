@@ -2,11 +2,14 @@ use crate::admin::AdminState;
 use crate::error::ApiError;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, header};
 use axum::response::{Json, Response};
-use axum::http::{header, HeaderValue};
-use axum::{routing::{get, post, delete}, Router};
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,19 +24,123 @@ pub fn routes(state: Arc<AdminState>) -> Router {
         .with_state(state)
 }
 
+#[derive(Deserialize)]
+struct UploadQuery {
+    namespace: Option<String>,
+    bucket: Option<String>,
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn extract_multipart_file(content_type: &str, body: &[u8]) -> Option<(Vec<u8>, String)> {
+    let boundary = content_type
+        .split("boundary=")
+        .nth(1)?
+        .trim()
+        .trim_matches('"')
+        .trim()
+        .to_string();
+    if boundary.is_empty() {
+        return None;
+    }
+    let boundary_bytes = format!("--{}", boundary).into_bytes();
+    let mut cursor = 0usize;
+    while cursor < body.len() {
+        let start = find_subslice(&body[cursor..], &boundary_bytes)? + cursor;
+        let mut part_start = start + boundary_bytes.len();
+        // Skip optional \r\n after boundary
+        if body.get(part_start..part_start + 2) == Some(b"\r\n") {
+            part_start += 2;
+        } else if body.get(part_start..part_start + 1) == Some(b"\n") {
+            part_start += 1;
+        } else if body.get(part_start..part_start + 2) == Some(b"--") {
+            break; // final boundary
+        }
+        // Find next boundary to delimit this part
+        let next = find_subslice(&body[part_start..], &boundary_bytes).map(|p| p + part_start);
+        let part_end = next.unwrap_or(body.len());
+        let part = &body[part_start..part_end];
+        // Header/body split is \r\n\r\n
+        let header_end = find_subslice(part, b"\r\n\r\n")?;
+        let header = &part[..header_end];
+        let header_str = String::from_utf8_lossy(header).to_ascii_lowercase();
+        if !header_str.contains("name=\"file\"") && !header_str.contains("name='file'") {
+            cursor = part_end;
+            continue;
+        }
+        let mut ct = "application/octet-stream".to_string();
+        for line in String::from_utf8_lossy(header).lines() {
+            if line.to_ascii_lowercase().starts_with("content-type:") {
+                let v = line.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+                if !v.is_empty() {
+                    ct = v;
+                }
+            }
+        }
+        let data_start = header_end + 4;
+        let mut data_end = part.len();
+        // Trim trailing \r\n that precedes boundary
+        if data_end >= 2 && &part[data_end - 2..] == b"\r\n" {
+            data_end -= 2;
+        }
+        if data_start <= data_end {
+            return Some((part[data_start..data_end].to_vec(), ct));
+        }
+        cursor = part_end;
+    }
+    None
+}
+
 async fn upload_blob(
     State(state): State<Arc<AdminState>>,
+    Query(q): Query<UploadQuery>,
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    let content_type = headers
+    let namespace = q
+        .namespace
+        .or(q.bucket)
+        .unwrap_or_else(|| "default".to_string());
+    // Validate namespace early for nicer error
+    if namespace.contains("..") || namespace.contains('/') || namespace.contains('\\') {
+        return Err(ApiError::bad_request(format!(
+            "invalid namespace: '{}'",
+            namespace
+        )));
+    }
+    let raw_ct = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let meta = mgr.create_blob("default", &body, &content_type, HashMap::new()).await
+
+    let (data, content_type) = if raw_ct.starts_with("multipart/form-data") {
+        if let Some((file_bytes, file_ct)) = extract_multipart_file(&raw_ct, &body) {
+            (file_bytes, file_ct)
+        } else {
+            // Fallback: if parsing fails but body likely contains file, try to use raw body minus multipart framing
+            // If we cannot parse, treat as error rather than storing corrupted data
+            return Err(ApiError::bad_request(
+                "failed to parse multipart file upload: expected field 'file'",
+            ));
+        }
+    } else {
+        (body.to_vec(), raw_ct)
+    };
+
+    if data.is_empty() {
+        return Err(ApiError::bad_request("empty file upload"));
+    }
+
+    let meta = mgr
+        .create_blob(&namespace, &data, &content_type, HashMap::new())
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({
         "id": meta.id,
@@ -52,17 +159,30 @@ async fn download_blob(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    let data = mgr.get_blob(&id).await
+    let data = mgr
+        .get_blob(&id)
+        .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     let meta = mgr.get_metadata(&id).await.ok();
     let body = axum::body::Body::from(data);
     let mut response = Response::new(body);
     if let Some(m) = meta {
-        response.headers_mut().insert("X-Blob-Size", m.size.to_string().parse().expect("valid header value"));
-        response.headers_mut().insert("X-Blob-Checksum-SHA256", hex_encode(m.sha256.as_bytes()).parse().expect("valid header value"));
-        response.headers_mut().insert(header::CONTENT_TYPE, m.content_type.parse().unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")));
+        if let Ok(v) = m.size.to_string().parse() {
+            response.headers_mut().insert("X-Blob-Size", v);
+        }
+        if let Ok(v) = hex_encode(m.sha256.as_bytes()).parse() {
+            response.headers_mut().insert("X-Blob-Checksum-SHA256", v);
+        }
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            m.content_type
+                .parse()
+                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        );
     }
     Ok(response)
 }
@@ -71,9 +191,12 @@ async fn delete_blob(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    mgr.delete_blob(&id).await
+    mgr.delete_blob(&id)
+        .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({"status": "deleted"})))
 }
@@ -82,9 +205,13 @@ async fn blob_info(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    let meta = mgr.get_metadata(&id).await
+    let meta = mgr
+        .get_metadata(&id)
+        .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     Ok(Json(json!({
         "id": meta.id,
@@ -100,16 +227,31 @@ async fn blob_info(
 struct ListBlobsParams {
     prefix: Option<String>,
     limit: Option<usize>,
+    namespace: Option<String>,
 }
 
 async fn list_blobs(
     State(state): State<Arc<AdminState>>,
     Query(params): Query<ListBlobsParams>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
-    let blob_ids = mgr.list_blobs("default").await
+    let ns = params.namespace.as_deref().unwrap_or("default");
+    let mut blob_ids = mgr
+        .list_blobs(ns)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Honor prefix filter
+    if let Some(prefix) = &params.prefix {
+        if !prefix.is_empty() {
+            blob_ids.retain(|id| id.starts_with(prefix.as_str()));
+        }
+    }
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = blob_ids.len() > limit;
+    blob_ids.truncate(limit);
     let mut data = Vec::new();
     for id in blob_ids {
         if let Ok(meta) = mgr.get_metadata(&id).await {
@@ -131,14 +273,14 @@ async fn list_blobs(
     }
     Ok(Json(json!({
         "data": data,
-        "pagination": {"cursor": null, "limit": params.limit.unwrap_or(50), "has_more": false}
+        "pagination": {"cursor": null, "limit": limit, "has_more": has_more}
     })))
 }
 
-async fn blob_stats(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<Value>, ApiError> {
-    let mgr = state.blob_mgr.as_ref()
+async fn blob_stats(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+    let mgr = state
+        .blob_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
     let stats = mgr.stats();
     Ok(Json(json!({

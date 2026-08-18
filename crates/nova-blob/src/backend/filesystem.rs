@@ -38,10 +38,19 @@ impl FilesystemBackend {
             return Err(BlobError::InvalidInput("blob_id is required".into()));
         }
         if id.contains("..") || id.contains('/') || id.contains('\\') {
-            return Err(BlobError::InvalidInput(format!("invalid blob_id: '{}'", id)));
+            return Err(BlobError::InvalidInput(format!(
+                "invalid blob_id: '{}'",
+                id
+            )));
         }
-        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
-            return Err(BlobError::InvalidInput(format!("invalid blob_id: '{}'", id)));
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return Err(BlobError::InvalidInput(format!(
+                "invalid blob_id: '{}'",
+                id
+            )));
         }
         Ok(())
     }
@@ -51,16 +60,28 @@ impl FilesystemBackend {
             return Err(BlobError::InvalidInput("namespace is required".into()));
         }
         if ns.contains("..") || ns.contains('/') || ns.contains('\\') {
-            return Err(BlobError::InvalidInput(format!("invalid namespace: '{}'", ns)));
+            return Err(BlobError::InvalidInput(format!(
+                "invalid namespace: '{}'",
+                ns
+            )));
         }
-        if !ns.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
-            return Err(BlobError::InvalidInput(format!("invalid namespace: '{}'", ns)));
+        if !ns
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return Err(BlobError::InvalidInput(format!(
+                "invalid namespace: '{}'",
+                ns
+            )));
         }
         Ok(())
     }
 
     fn metadata_path(&self, blob_id: &str) -> PathBuf {
-        self.data_dir.join("metadata").join(blob_id).with_extension("json")
+        self.data_dir
+            .join("metadata")
+            .join(blob_id)
+            .with_extension("json")
     }
 
     fn chunk_path(&self, hash: &str) -> PathBuf {
@@ -87,8 +108,7 @@ impl BlobStore for FilesystemBackend {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        let data = serde_json::to_vec(metadata)
-            .map_err(|e| BlobError::Internal(e.to_string()))?;
+        let data = serde_json::to_vec(metadata).map_err(|e| BlobError::Internal(e.to_string()))?;
         let mut file = fs::File::create(&path).await?;
         file.write_all(&data).await?;
         file.sync_all().await?;
@@ -98,10 +118,10 @@ impl BlobStore for FilesystemBackend {
     async fn get_metadata(&self, blob_id: &str) -> Result<BlobMetadata> {
         Self::validate_blob_id(blob_id)?;
         let path = self.metadata_path(blob_id);
-        let data = fs::read(&path).await
+        let data = fs::read(&path)
+            .await
             .map_err(|_| BlobError::NotFound(blob_id.to_string()))?;
-        serde_json::from_slice(&data)
-            .map_err(|e| BlobError::Internal(e.to_string()))
+        serde_json::from_slice(&data).map_err(|e| BlobError::Internal(e.to_string()))
     }
 
     async fn delete_metadata(&self, blob_id: &str) -> Result<()> {
@@ -126,7 +146,8 @@ impl BlobStore for FilesystemBackend {
 
     async fn get_chunk(&self, hash: &str) -> Result<Vec<u8>> {
         let path = self.chunk_path(hash);
-        fs::read(&path).await
+        fs::read(&path)
+            .await
             .map_err(|_| BlobError::NotFound(format!("chunk {}", hash)))
     }
 
@@ -154,11 +175,17 @@ impl BlobStore for FilesystemBackend {
         if !meta_dir.exists() {
             return Ok(Vec::new());
         }
-        let mut entries = fs::read_dir(&meta_dir).await
+        let mut entries = fs::read_dir(&meta_dir)
+            .await
             .map_err(|e| BlobError::Internal(e.to_string()))?;
         let mut blobs = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
-            if entry.file_type().await.map(|t| t.is_file()).unwrap_or(false) {
+            if entry
+                .file_type()
+                .await
+                .map(|t| t.is_file())
+                .unwrap_or(false)
+            {
                 if let Some(name) = entry.file_name().to_str() {
                     if let Some(blob_id) = name.strip_suffix(".json") {
                         let data = fs::read(entry.path()).await?;
@@ -174,7 +201,12 @@ impl BlobStore for FilesystemBackend {
         Ok(blobs)
     }
 
-    async fn list_blobs_paginated(&self, namespace: &str, offset: usize, limit: usize) -> Result<(Vec<String>, usize)> {
+    async fn list_blobs_paginated(
+        &self,
+        namespace: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<String>, usize)> {
         Self::validate_namespace(namespace)?;
         let all = self.list_blobs(namespace).await?;
         let total = all.len();
@@ -216,7 +248,8 @@ impl BlobStore for FilesystemBackend {
         if !ns_path.exists() {
             return Ok(Vec::new());
         }
-        let mut entries = fs::read_dir(&ns_path).await
+        let mut entries = fs::read_dir(&ns_path)
+            .await
             .map_err(|e| BlobError::Internal(e.to_string()))?;
         let mut namespaces = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
