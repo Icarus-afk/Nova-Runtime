@@ -1,12 +1,12 @@
 use crate::backend::SchedulerBackend;
 use crate::error::{Result, SchedulerError};
-use crate::time_wheel::{TimeWheel, PriorityQueue};
+use crate::time_wheel::{PriorityQueue, TimeWheel};
 use crate::types::*;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 /// The main scheduler manager. Drives both the time wheel and priority queue.
@@ -101,8 +101,11 @@ impl SchedulerManager {
 
     /// Start the main scheduler loop.
     pub async fn run(&mut self) {
-        tracing::info!("Scheduler starting (tick={}ms, slots={})",
-            self.config.time_wheel_tick_ms, self.config.time_wheel_slots);
+        tracing::info!(
+            "Scheduler starting (tick={}ms, slots={})",
+            self.config.time_wheel_tick_ms,
+            self.config.time_wheel_slots
+        );
 
         // Startup recovery
         if self.config.enable_startup_recovery {
@@ -203,7 +206,11 @@ impl SchedulerManager {
                 match self.backend.get_job(dep_id).await {
                     Ok(dep_job) => {
                         if dep_job.state != JobState::Completed {
-                            tracing::debug!("Job {} waiting on dependency {}", job.name, dep_job.name);
+                            tracing::debug!(
+                                "Job {} waiting on dependency {}",
+                                job.name,
+                                dep_job.name
+                            );
                             // Re-schedule to check later
                             let retry_ms = chrono::Utc::now().timestamp_millis() + 5000;
                             self.priority_queue.schedule(job.id, retry_ms);
@@ -247,7 +254,11 @@ impl SchedulerManager {
                             if job.is_recurring() {
                                 if let Some(next_run) = compute_next_run(&job) {
                                     if let Err(e) = backend.reschedule(&job, next_run).await {
-                                        tracing::error!("Failed to reschedule job {}: {}", job.id, e);
+                                        tracing::error!(
+                                            "Failed to reschedule job {}: {}",
+                                            job.id,
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -258,14 +269,28 @@ impl SchedulerManager {
                                 let retry_at = chrono::Utc::now().timestamp_millis()
                                     + (job.retry_delay_secs as i64) * 1000;
                                 if let Err(e) = backend.reschedule(&job, retry_at).await {
-                                    tracing::error!("Failed to reschedule job {} for retry: {}", job.id, e);
+                                    tracing::error!(
+                                        "Failed to reschedule job {} for retry: {}",
+                                        job.id,
+                                        e
+                                    );
                                 }
-                                tracing::warn!("Job {} failed, retry {}/{}", job.name, job.retry_count + 1, job.max_retries);
+                                tracing::warn!(
+                                    "Job {} failed, retry {}/{}",
+                                    job.name,
+                                    job.retry_count + 1,
+                                    job.max_retries
+                                );
                             } else {
                                 if let Err(e) = backend.mark_failed(&job.id).await {
                                     tracing::error!("Failed to mark job {} failed: {}", job.id, e);
                                 }
-                                tracing::error!("Job {} failed after {} retries: {}", job.name, job.max_retries, e);
+                                tracing::error!(
+                                    "Job {} failed after {} retries: {}",
+                                    job.name,
+                                    job.max_retries,
+                                    e
+                                );
                             }
                         }
                     }
@@ -289,9 +314,10 @@ impl SchedulerManager {
 
         while let Some(dep_id) = stack.pop() {
             if dep_id == job.id {
-                return Err(SchedulerError::DependencyCycle(
-                    format!("Job {} depends on itself", job.name),
-                ));
+                return Err(SchedulerError::DependencyCycle(format!(
+                    "Job {} depends on itself",
+                    job.name
+                )));
             }
             if !visited.insert(dep_id) {
                 continue;
@@ -384,7 +410,11 @@ impl SchedulerManager {
 /// In production, this would invoke a registered handler via the executor.
 async fn execute_job(job: &Job, _config: &SchedulerConfig) -> std::result::Result<(), String> {
     // Placeholder: actual job execution will use nova-executor pipeline
-    tracing::debug!("Executing job {} ({} bytes payload)", job.name, job.payload.len());
+    tracing::debug!(
+        "Executing job {} ({} bytes payload)",
+        job.name,
+        job.payload.len()
+    );
     Ok(())
 }
 
@@ -435,7 +465,10 @@ mod tests {
             let mut data = self.data.write();
             Ok(data.remove(key.as_bytes()).is_some())
         }
-        fn scan(&self, range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+        fn scan(
+            &self,
+            range: std::ops::Range<nova_core::Key>,
+        ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
             let data = self.data.read();
             let mut results = Vec::new();
             let start = range.start.as_bytes().to_vec();
@@ -472,7 +505,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_scheduler_manager_new() {
-        let backend = Arc::new(StorageSchedulerBackend::new(Arc::new(MockStorage { data: parking_lot::RwLock::new(HashMap::new()) })));
+        let backend = Arc::new(StorageSchedulerBackend::new(Arc::new(MockStorage {
+            data: parking_lot::RwLock::new(HashMap::new()),
+        })));
         let config = SchedulerConfig::default();
         let (_tx, rx) = watch::channel(false);
         let manager = SchedulerManager::new(backend, config, rx);
@@ -482,7 +517,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_schedule_and_cancel_job() {
-        let backend = Arc::new(StorageSchedulerBackend::new(Arc::new(MockStorage { data: parking_lot::RwLock::new(HashMap::new()) })));
+        let backend = Arc::new(StorageSchedulerBackend::new(Arc::new(MockStorage {
+            data: parking_lot::RwLock::new(HashMap::new()),
+        })));
         let config = SchedulerConfig::default();
         let (_tx, rx) = watch::channel(false);
         let manager = SchedulerManager::new(backend, config, rx);

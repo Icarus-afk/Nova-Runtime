@@ -1,6 +1,6 @@
+use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{Datelike, Timelike};
 use uuid::Uuid;
 
 /// How a job is triggered.
@@ -93,7 +93,10 @@ impl Job {
     }
 
     pub fn is_recurring(&self) -> bool {
-        matches!(self.schedule_type, ScheduleType::Interval | ScheduleType::Cron)
+        matches!(
+            self.schedule_type,
+            ScheduleType::Interval | ScheduleType::Cron
+        )
     }
 }
 
@@ -112,7 +115,10 @@ impl CronSchedule {
     pub fn parse(expr: &str) -> Result<Self, String> {
         let parts: Vec<&str> = expr.split_whitespace().collect();
         if parts.len() != 5 {
-            return Err(format!("cron expression must have 5 fields, got {}", parts.len()));
+            return Err(format!(
+                "cron expression must have 5 fields, got {}",
+                parts.len()
+            ));
         }
 
         let minute = Self::parse_field(parts[0], 0, 59)?;
@@ -153,14 +159,22 @@ impl CronSchedule {
                     if range_parts.len() != 2 {
                         return Err(format!("Invalid range: {}", parts[0]));
                     }
-                    let lo: u8 = range_parts[0].parse().map_err(|_| format!("Invalid number: {}", range_parts[0]))?;
-                    let hi: u8 = range_parts[1].parse().map_err(|_| format!("Invalid number: {}", range_parts[1]))?;
+                    let lo: u8 = range_parts[0]
+                        .parse()
+                        .map_err(|_| format!("Invalid number: {}", range_parts[0]))?;
+                    let hi: u8 = range_parts[1]
+                        .parse()
+                        .map_err(|_| format!("Invalid number: {}", range_parts[1]))?;
                     lo..=hi
                 } else {
-                    let val: u8 = parts[0].parse().map_err(|_| format!("Invalid number: {}", parts[0]))?;
+                    let val: u8 = parts[0]
+                        .parse()
+                        .map_err(|_| format!("Invalid number: {}", parts[0]))?;
                     val..=max
                 };
-                let step: u8 = parts[1].parse().map_err(|_| format!("Invalid step: {}", parts[1]))?;
+                let step: u8 = parts[1]
+                    .parse()
+                    .map_err(|_| format!("Invalid step: {}", parts[1]))?;
                 if step == 0 {
                     return Err("Step cannot be zero".to_string());
                 }
@@ -174,15 +188,21 @@ impl CronSchedule {
                 if range_parts.len() != 2 {
                     return Err(format!("Invalid range: {}", part));
                 }
-                let lo: u8 = range_parts[0].parse().map_err(|_| format!("Invalid number: {}", range_parts[0]))?;
-                let hi: u8 = range_parts[1].parse().map_err(|_| format!("Invalid number: {}", range_parts[1]))?;
+                let lo: u8 = range_parts[0]
+                    .parse()
+                    .map_err(|_| format!("Invalid number: {}", range_parts[0]))?;
+                let hi: u8 = range_parts[1]
+                    .parse()
+                    .map_err(|_| format!("Invalid number: {}", range_parts[1]))?;
                 for v in lo..=hi {
                     if v >= min && v <= max {
                         values.push(v);
                     }
                 }
             } else {
-                let val: u8 = part.parse().map_err(|_| format!("Invalid number: {}", part))?;
+                let val: u8 = part
+                    .parse()
+                    .map_err(|_| format!("Invalid number: {}", part))?;
                 if val < min || val > max {
                     return Err(format!("Value {} out of range ({}-{})", val, min, max));
                 }
@@ -208,7 +228,9 @@ impl CronSchedule {
             if part == "*" {
                 return Ok((min..=max).collect());
             }
-            let val: i8 = part.parse().map_err(|_| format!("Invalid number: {}", part))?;
+            let val: i8 = part
+                .parse()
+                .map_err(|_| format!("Invalid number: {}", part))?;
             if val < min || val > max {
                 return Err(format!("Value {} out of range ({}-{})", val, min, max));
             }
