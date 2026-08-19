@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tracing::instrument;
 
-use super::{matches_glob, CacheBackend, CacheEntry, CacheKey, CacheValue};
+use super::{CacheBackend, CacheEntry, CacheKey, CacheValue, matches_glob};
 use crate::error::{CacheError, Result};
 use crate::metrics::CacheMetrics;
 
@@ -114,7 +114,8 @@ impl CacheBackend for HashMapBackend {
             match cache.pop_lru() {
                 Some((evicted_key, evicted_entry)) => {
                     let evicted_size = Self::entry_size(&evicted_key, &evicted_entry.value);
-                    self.current_bytes.fetch_sub(evicted_size, Ordering::Relaxed);
+                    self.current_bytes
+                        .fetch_sub(evicted_size, Ordering::Relaxed);
                     self.metrics.evictions.fetch_add(1, Ordering::Relaxed);
                 }
                 None => break,
@@ -200,7 +201,10 @@ impl CacheBackend for HashMapBackend {
             let cache = self.cache.read();
             cache.iter().map(|(k, _)| k.clone()).collect()
         };
-        let matched: Vec<CacheKey> = all.into_iter().filter(|k| matches_glob(pattern, k)).collect();
+        let matched: Vec<CacheKey> = all
+            .into_iter()
+            .filter(|k| matches_glob(pattern, k))
+            .collect();
         let mut count = 0;
         for k in matched {
             if self.delete(&k).await? {
@@ -230,7 +234,10 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
-        backend.set("key1".into(), b"value1".to_vec(), None).await.unwrap();
+        backend
+            .set("key1".into(), b"value1".to_vec(), None)
+            .await
+            .unwrap();
         let result = backend.get(&"key1".into()).await.unwrap();
         assert_eq!(result, Some(b"value1".to_vec()));
     }
@@ -249,7 +256,10 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
-        backend.set("key1".into(), b"value1".to_vec(), None).await.unwrap();
+        backend
+            .set("key1".into(), b"value1".to_vec(), None)
+            .await
+            .unwrap();
         assert!(backend.delete(&"key1".into()).await.unwrap());
         assert!(!backend.delete(&"key1".into()).await.unwrap());
         let result = backend.get(&"key1".into()).await.unwrap();
@@ -261,7 +271,14 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
-        backend.set("key1".into(), b"value1".to_vec(), Some(Duration::from_millis(10))).await.unwrap();
+        backend
+            .set(
+                "key1".into(),
+                b"value1".to_vec(),
+                Some(Duration::from_millis(10)),
+            )
+            .await
+            .unwrap();
         assert!(backend.get(&"key1".into()).await.unwrap().is_some());
         tokio::time::sleep(Duration::from_millis(50)).await;
         let result = backend.get(&"key1".into()).await.unwrap();
@@ -273,9 +290,18 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(10, metrics).unwrap();
 
-        backend.set("key1".into(), b"xxxxx".to_vec(), None).await.unwrap();
-        backend.set("key2".into(), b"yyyyy".to_vec(), None).await.unwrap();
-        backend.set("key3".into(), b"zzzzz".to_vec(), None).await.unwrap();
+        backend
+            .set("key1".into(), b"xxxxx".to_vec(), None)
+            .await
+            .unwrap();
+        backend
+            .set("key2".into(), b"yyyyy".to_vec(), None)
+            .await
+            .unwrap();
+        backend
+            .set("key3".into(), b"zzzzz".to_vec(), None)
+            .await
+            .unwrap();
 
         let result = backend.get(&"key1".into()).await.unwrap();
         assert_eq!(result, None);
@@ -286,8 +312,14 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
-        backend.set("key1".into(), b"v1".to_vec(), None).await.unwrap();
-        backend.set("key2".into(), b"v2".to_vec(), None).await.unwrap();
+        backend
+            .set("key1".into(), b"v1".to_vec(), None)
+            .await
+            .unwrap();
+        backend
+            .set("key2".into(), b"v2".to_vec(), None)
+            .await
+            .unwrap();
         assert_eq!(backend.len().await.unwrap(), 2);
 
         backend.flush().await.unwrap();
@@ -300,8 +332,14 @@ mod tests {
         let metrics = Arc::new(CacheMetrics::default());
         let backend = HashMapBackend::new(1024 * 1024, metrics).unwrap();
 
-        backend.set("key1".into(), b"old".to_vec(), None).await.unwrap();
-        backend.set("key1".into(), b"new".to_vec(), None).await.unwrap();
+        backend
+            .set("key1".into(), b"old".to_vec(), None)
+            .await
+            .unwrap();
+        backend
+            .set("key1".into(), b"new".to_vec(), None)
+            .await
+            .unwrap();
         let result = backend.get(&"key1".into()).await.unwrap();
         assert_eq!(result, Some(b"new".to_vec()));
     }
@@ -336,7 +374,10 @@ mod tests {
         backend.get(&"miss".into()).await.unwrap();
         assert_eq!(metrics.misses(), 1);
 
-        backend.set("hit".into(), b"v".to_vec(), None).await.unwrap();
+        backend
+            .set("hit".into(), b"v".to_vec(), None)
+            .await
+            .unwrap();
         backend.get(&"hit".into()).await.unwrap();
         assert_eq!(metrics.hits(), 1);
         assert_eq!(metrics.sets(), 1);

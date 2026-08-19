@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 
-use super::{matches_glob, CacheBackend, CacheKey, CacheValue};
+use super::{CacheBackend, CacheKey, CacheValue, matches_glob};
 use crate::error::Result;
 
 pub struct TtlBackend {
@@ -52,7 +52,9 @@ impl CacheBackend for TtlBackend {
     async fn get(&self, key: &CacheKey) -> Result<Option<CacheValue>> {
         let expired = {
             let map = self.expires.read();
-            map.get(key).map(|expiry| *expiry <= Instant::now()).unwrap_or(false)
+            map.get(key)
+                .map(|expiry| *expiry <= Instant::now())
+                .unwrap_or(false)
         };
         if expired {
             let _ = self.inner.delete(key).await;
@@ -85,7 +87,9 @@ impl CacheBackend for TtlBackend {
     async fn exists(&self, key: &CacheKey) -> Result<bool> {
         let expired = {
             let map = self.expires.read();
-            map.get(key).map(|expiry| *expiry <= Instant::now()).unwrap_or(false)
+            map.get(key)
+                .map(|expiry| *expiry <= Instant::now())
+                .unwrap_or(false)
         };
         if expired {
             let _ = self.inner.delete(key).await;

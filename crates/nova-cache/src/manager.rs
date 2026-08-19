@@ -55,7 +55,12 @@ impl CacheManager {
     }
 
     #[instrument(skip(self, key))]
-    pub async fn set(&self, key: impl Into<CacheKey> + std::fmt::Debug, value: CacheValue, ttl: Option<Duration>) -> Result<()> {
+    pub async fn set(
+        &self,
+        key: impl Into<CacheKey> + std::fmt::Debug,
+        value: CacheValue,
+        ttl: Option<Duration>,
+    ) -> Result<()> {
         let ttl = ttl.or_else(|| {
             if self.config.default_ttl_secs > 0 {
                 Some(Duration::from_secs(self.config.default_ttl_secs))
@@ -94,7 +99,11 @@ impl CacheManager {
     pub async fn get_or_insert_with(
         &self,
         key: CacheKey,
-        f: Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<CacheValue>> + Send>> + Send>,
+        f: Box<
+            dyn FnOnce() -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<CacheValue>> + Send>,
+                > + Send,
+        >,
         ttl: Option<Duration>,
     ) -> Result<CacheValue> {
         self.backend.get_or_insert_with(key, f, ttl).await
@@ -104,7 +113,10 @@ impl CacheManager {
         self.backend.get_many(keys).await
     }
 
-    pub async fn set_many(&self, items: Vec<(CacheKey, CacheValue, Option<Duration>)>) -> Result<()> {
+    pub async fn set_many(
+        &self,
+        items: Vec<(CacheKey, CacheValue, Option<Duration>)>,
+    ) -> Result<()> {
         self.backend.set_many(items).await
     }
 
@@ -196,10 +208,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_basic_operations() {
-        let backend = Arc::new(HashMapBackend::new(
-            1024 * 1024,
-            Arc::new(CacheMetrics::default()),
-        ).unwrap());
+        let backend =
+            Arc::new(HashMapBackend::new(1024 * 1024, Arc::new(CacheMetrics::default())).unwrap());
         let config = CacheConfig::default();
         let manager = CacheManager::new(backend, config);
 
@@ -217,11 +227,9 @@ mod tests {
     #[tokio::test]
     async fn test_manager_metrics() {
         let metrics = Arc::new(CacheMetrics::default());
-        let backend = Arc::new(HashMapBackend::new(
-            1024 * 1024,
-            Arc::clone(&metrics),
-        ).unwrap());
-        let manager = CacheManager::with_metrics(backend, CacheConfig::default(), Arc::clone(&metrics));
+        let backend = Arc::new(HashMapBackend::new(1024 * 1024, Arc::clone(&metrics)).unwrap());
+        let manager =
+            CacheManager::with_metrics(backend, CacheConfig::default(), Arc::clone(&metrics));
 
         manager.get("miss").await.unwrap();
         manager.set("hit", b"v".to_vec(), None).await.unwrap();
@@ -233,10 +241,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_default_ttl() {
-        let backend = Arc::new(HashMapBackend::new(
-            1024 * 1024,
-            Arc::new(CacheMetrics::default()),
-        ).unwrap());
+        let backend =
+            Arc::new(HashMapBackend::new(1024 * 1024, Arc::new(CacheMetrics::default())).unwrap());
         let mut config = CacheConfig::default();
         config.default_ttl_secs = 0;
         let manager = CacheManager::new(backend, config);

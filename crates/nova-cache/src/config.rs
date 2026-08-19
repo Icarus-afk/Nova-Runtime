@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::policy::EvictionPolicy;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendType {
@@ -22,8 +22,12 @@ pub struct CacheConfig {
     pub redis_url: Option<String>,
 }
 
-fn default_max_size() -> usize { 128 * 1024 * 1024 }
-fn default_ttl_secs() -> u64 { 300 }
+fn default_max_size() -> usize {
+    128 * 1024 * 1024
+}
+fn default_ttl_secs() -> u64 {
+    300
+}
 
 impl Default for CacheConfig {
     fn default() -> Self {

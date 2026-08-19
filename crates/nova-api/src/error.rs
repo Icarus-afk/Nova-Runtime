@@ -49,11 +49,7 @@ impl ApiError {
     }
 
     pub fn too_many_requests(detail: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too Many Requests",
-            detail,
-        )
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests", detail)
     }
 
     pub fn with_instance(mut self, instance: &str) -> Self {
@@ -115,7 +111,11 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let err = ApiError::new(StatusCode::BAD_REQUEST, "Bad Request", "something went wrong");
+        let err = ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Bad Request",
+            "something went wrong",
+        );
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert_eq!(err.title, "Bad Request");
         assert_eq!(err.detail, "something went wrong");
@@ -213,10 +213,8 @@ mod tests {
 
     #[test]
     fn test_from_pipeline_error_cancelled() {
-        let perr = nova_executor::PipelineError::new(
-            nova_executor::ErrorCode::Cancelled,
-            "cancelled",
-        );
+        let perr =
+            nova_executor::PipelineError::new(nova_executor::ErrorCode::Cancelled, "cancelled");
         let aerr = ApiError::from(&perr);
         assert_eq!(aerr.status.as_u16(), 499);
     }
@@ -232,15 +230,24 @@ mod tests {
             (ErrorCode::NotFound, StatusCode::NOT_FOUND),
             (ErrorCode::Conflict, StatusCode::CONFLICT),
             (ErrorCode::RateLimited, StatusCode::TOO_MANY_REQUESTS),
-            (ErrorCode::CircuitBreakerOpen, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                ErrorCode::CircuitBreakerOpen,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
             (ErrorCode::DeadlineExceeded, StatusCode::GATEWAY_TIMEOUT),
             (ErrorCode::Cancelled, StatusCode::from_u16(499).unwrap()),
             (ErrorCode::PayloadTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
             (ErrorCode::Unprocessable, StatusCode::UNPROCESSABLE_ENTITY),
             (ErrorCode::InternalError, StatusCode::INTERNAL_SERVER_ERROR),
-            (ErrorCode::ServiceUnavailable, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                ErrorCode::ServiceUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
             (ErrorCode::NotImplemented, StatusCode::NOT_IMPLEMENTED),
-            (ErrorCode::InsufficientStorage, StatusCode::INSUFFICIENT_STORAGE),
+            (
+                ErrorCode::InsufficientStorage,
+                StatusCode::INSUFFICIENT_STORAGE,
+            ),
         ];
         for (code, expected) in cases {
             let perr = nova_executor::PipelineError::new(code, "test");

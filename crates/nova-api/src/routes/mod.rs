@@ -1,15 +1,15 @@
-pub mod sql;
+pub mod auth;
+pub mod blob;
 pub mod cache;
 pub mod queue;
 pub mod scheduler;
 pub mod search;
-pub mod blob;
-pub mod auth;
+pub mod sql;
 
 use crate::admin::AdminState;
 use crate::ws;
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use std::sync::Arc;
 
 pub fn v1_routes(state: Arc<AdminState>) -> Router {
@@ -24,6 +24,5 @@ pub fn v1_routes(state: Arc<AdminState>) -> Router {
 }
 
 pub fn ws_router() -> Router<Arc<AdminState>> {
-    Router::new()
-        .route("/ws", get(ws::ws_handler))
+    Router::new().route("/ws", get(ws::ws_handler))
 }

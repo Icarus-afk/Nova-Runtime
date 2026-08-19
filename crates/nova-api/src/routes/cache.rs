@@ -2,9 +2,12 @@ use crate::admin::AdminState;
 use crate::error::ApiError;
 use axum::extract::{Path, Query, State};
 use axum::response::Json;
-use axum::{routing::{get, post, delete}, Router};
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,14 +26,22 @@ async fn cache_get(
     State(state): State<Arc<AdminState>>,
     Path(key): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
-    let value = mgr.get(&key).await
+    let value = mgr
+        .get(&key)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     match value {
         Some(data) => {
-            let parsed: Value = serde_json::from_slice(&data)
-                .unwrap_or_else(|_| json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data)));
+            let parsed: Value = serde_json::from_slice(&data).unwrap_or_else(|_| {
+                json!(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &data
+                ))
+            });
             Ok(Json(json!({
                 "key": key,
                 "value": parsed,
@@ -52,12 +63,14 @@ async fn cache_set(
     Path(key): Path<String>,
     Json(req): Json<CacheSetRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
-    let data = serde_json::to_vec(&req.value)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let data = serde_json::to_vec(&req.value).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let ttl = req.ttl_ms.map(Duration::from_millis);
-    mgr.set(key, data, ttl).await
+    mgr.set(key, data, ttl)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "set"})))
 }
@@ -66,9 +79,12 @@ async fn cache_delete(
     State(state): State<Arc<AdminState>>,
     Path(key): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
-    mgr.delete(&key).await
+    mgr.delete(&key)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "deleted"})))
 }
@@ -84,10 +100,16 @@ async fn cache_batch_set(
     State(state): State<Arc<AdminState>>,
     Json(items): Json<Vec<BatchSetItem>>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
     let count = items.len();
-    let entries: Vec<(nova_cache::CacheKey, nova_cache::CacheValue, Option<Duration>)> = items
+    let entries: Vec<(
+        nova_cache::CacheKey,
+        nova_cache::CacheValue,
+        Option<Duration>,
+    )> = items
         .into_iter()
         .map(|item| {
             let data = serde_json::to_vec(&item.value).unwrap_or_default();
@@ -96,7 +118,8 @@ async fn cache_batch_set(
             (key, data, ttl)
         })
         .collect();
-    mgr.set_many(entries).await
+    mgr.set_many(entries)
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({"status": "set", "count": count})))
 }
@@ -110,10 +133,26 @@ async fn cache_list_keys(
     State(state): State<Arc<AdminState>>,
     Query(params): Query<ListKeysParams>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
-    let keys = mgr.keys().await
+    let mut keys = mgr
+        .keys()
+        .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Honor pattern filtering (glob-like * and ?)
+    if let Some(pat) = &params.pattern {
+        if !pat.is_empty() && pat != "*" {
+            let regex_str = format!(
+                "^{}$",
+                regex::escape(pat).replace("\\*", ".*").replace("\\?", ".")
+            );
+            if let Ok(re) = regex::Regex::new(&regex_str) {
+                keys.retain(|k| re.is_match(k));
+            }
+        }
+    }
     Ok(Json(json!({
         "data": keys,
         "total": keys.len(),
@@ -121,10 +160,10 @@ async fn cache_list_keys(
     })))
 }
 
-async fn cache_stats(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<Value>, ApiError> {
-    let mgr = state.cache_mgr.as_ref()
+async fn cache_stats(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+    let mgr = state
+        .cache_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Cache not available"))?;
     let metrics = mgr.metrics();
     let count = mgr.len().await.unwrap_or(0);
