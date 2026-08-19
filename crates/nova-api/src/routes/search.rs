@@ -2,10 +2,15 @@ use crate::admin::AdminState;
 use crate::error::ApiError;
 use axum::extract::{Path, State};
 use axum::response::Json;
-use axum::{routing::{get, post, delete}, Router};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use std::sync::Arc;
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 pub fn routes(state: Arc<AdminState>) -> Router {
     Router::new()
@@ -19,13 +24,25 @@ pub fn routes(state: Arc<AdminState>) -> Router {
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexMeta {
+    name: String,
+    fields: Vec<IndexFieldDef>,
+    created_at: i64,
+}
+
+static REGISTRY: OnceLock<RwLock<HashMap<String, IndexMeta>>> = OnceLock::new();
+fn registry() -> &'static RwLock<HashMap<String, IndexMeta>> {
+    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CreateIndexRequest {
     name: String,
     fields: Option<Vec<IndexFieldDef>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct IndexFieldDef {
     name: String,
     #[serde(rename = "type")]
@@ -38,22 +55,79 @@ async fn create_index(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateIndexRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.search_mgr.as_ref()
+    let _mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
+    if req.name.trim().is_empty() {
+        return Err(ApiError::bad_request("index name required"));
+    }
+    if req.name.contains("..") || req.name.contains('/') {
+        return Err(ApiError::bad_request("invalid index name"));
+    }
+    let fields = req.fields.clone().unwrap_or_default();
+    // Validate fields
+    for f in &fields {
+        if f.name.trim().is_empty() {
+            return Err(ApiError::bad_request("field name required"));
+        }
+        let allowed = ["text", "keyword", "integer", "float", "boolean"];
+        if !allowed.contains(&f.field_type.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "unsupported field type: {}",
+                f.field_type
+            )));
+        }
+    }
+    let meta = IndexMeta {
+        name: req.name.clone(),
+        fields: fields.clone(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+    };
+    {
+        let mut reg = registry().write();
+        if reg.contains_key(&req.name) {
+            return Err(ApiError::bad_request(format!(
+                "index {} already exists",
+                req.name
+            )));
+        }
+        reg.insert(req.name.clone(), meta);
+    }
+    tracing::info!(
+        "search index {} created with {} fields",
+        req.name,
+        fields.len()
+    );
     Ok(Json(json!({
         "id": format!("idx_{}", &req.name),
         "name": req.name,
+        "fields": fields,
         "status": "created",
     })))
 }
 
-async fn list_indexes(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.search_mgr.as_ref()
+async fn list_indexes(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+    let _mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
+    let reg = registry().read();
+    let data: Vec<Value> = reg
+        .values()
+        .map(|m| {
+            let stats = _mgr.stats();
+            json!({
+                "name": m.name,
+                "fields": m.fields,
+                "doc_count": stats.num_docs,
+                "field_count": m.fields.len(),
+                "created_at": m.created_at,
+            })
+        })
+        .collect();
     Ok(Json(json!({
-        "data": [],
+        "data": data,
         "pagination": {"cursor": null, "limit": 50, "has_more": false}
     })))
 }
@@ -62,25 +136,45 @@ async fn get_index(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.search_mgr.as_ref()
+    let mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
-    let name = name;
+    let reg = registry().read();
+    let meta = reg.get(&name).cloned();
     let stats = mgr.stats();
-    Ok(Json(json!({
-        "name": name,
-        "num_docs": stats.num_docs,
-        "num_terms": stats.num_terms,
-        "field_count": stats.field_count,
-    })))
+    if let Some(m) = meta {
+        Ok(Json(json!({
+            "name": name,
+            "fields": m.fields,
+            "num_docs": stats.num_docs,
+            "num_terms": stats.num_terms,
+            "field_count": m.fields.len(),
+            "created_at": m.created_at,
+        })))
+    } else {
+        Ok(Json(json!({
+            "name": name,
+            "num_docs": stats.num_docs,
+            "num_terms": stats.num_terms,
+            "field_count": stats.field_count,
+        })))
+    }
 }
 
 async fn delete_index(
     State(state): State<Arc<AdminState>>,
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _mgr = state.search_mgr.as_ref()
+    let _mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
-    Ok(Json(json!({"status": "deleted"})))
+    let mut reg = registry().write();
+    if reg.remove(&name).is_none() {
+        return Err(ApiError::not_found(format!("index {name} not found")));
+    }
+    Ok(Json(json!({"status": "deleted", "name": name})))
 }
 
 #[derive(Deserialize)]
@@ -90,39 +184,59 @@ struct IndexDocumentsRequest {
 
 async fn index_documents(
     State(state): State<Arc<AdminState>>,
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
     Json(req): Json<IndexDocumentsRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.search_mgr.as_ref()
+    let mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
+    if !registry().read().contains_key(&name) {
+        return Err(ApiError::not_found(format!(
+            "index {name} not found — create it first"
+        )));
+    }
     for doc_val in &req.documents {
-        let doc_id = doc_val.get("id")
+        let doc_id = doc_val
+            .get("id")
             .and_then(|v| v.as_str())
-            .unwrap_or("doc");
-        let doc = nova_search::IndexedDocument::new(doc_id);
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let mut doc = nova_search::IndexedDocument::new(&doc_id);
         if let Some(obj) = doc_val.as_object() {
             for (field_name, field_val) in obj {
-                if field_name == "id" { continue; }
-                let doc = match field_val {
-                    Value::String(s) => doc.clone().add_text(field_name, s.clone()),
+                if field_name == "id" {
+                    continue;
+                }
+                match field_val {
+                    Value::String(s) => doc = doc.add_text(field_name, s.clone()),
                     Value::Number(n) => {
-                        if let Some(f) = n.as_f64() {
-                            doc.clone().add_float(field_name, f)
-                        } else if let Some(i) = n.as_i64() {
-                            doc.clone().add_integer(field_name, i)
-                        } else { continue; }
+                        if let Some(i) = n.as_i64() {
+                            doc = doc.add_integer(field_name, i);
+                        } else if let Some(f) = n.as_f64() {
+                            doc = doc.add_float(field_name, f);
+                        }
                     }
-                    Value::Bool(b) => doc.clone().add_text(field_name, b.to_string()),
+                    Value::Bool(b) => doc = doc.add_text(field_name, b.to_string()),
+                    Value::Array(arr) => {
+                        // array of strings/numbers — join as text
+                        let txt = arr
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        doc = doc.add_text(field_name, txt);
+                    }
                     _ => continue,
-                };
-                if let Err(e) = mgr.index_document(doc) {
-                    return Err(ApiError::internal(e.to_string()));
                 }
             }
         }
+        mgr.index_document(doc)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     }
     Ok(Json(json!({
         "status": "indexed",
+        "index": name,
         "count": req.documents.len(),
     })))
 }
@@ -136,25 +250,58 @@ struct SearchQueryRequest {
 
 async fn search_query(
     State(state): State<Arc<AdminState>>,
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
     Json(req): Json<SearchQueryRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.search_mgr.as_ref()
+    let mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
-    let limit = req.limit.unwrap_or(10);
-    let result = mgr.search(&req.query, limit)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let hits: Vec<Value> = result.into_iter().map(|h| {
-        let source = h.document.as_ref().map(|d| d.stored_fields());
-        json!({
-            "id": h.doc_id.to_string(),
-            "score": h.score,
-            "source": source,
+    if !registry().read().contains_key(&name) {
+        return Err(ApiError::not_found(format!("index {name} not found")));
+    }
+    if req.query.trim().is_empty() {
+        return Err(ApiError::bad_request("query must not be empty"));
+    }
+    let limit = req.limit.unwrap_or(10).clamp(1, 100);
+    let offset = req.offset.unwrap_or(0);
+    // Use pagination-aware search when offset is requested
+    let (hits_raw, total_hits) = if offset > 0 {
+        let resp = mgr
+            .search_with_pagination(&req.query, limit + offset, None)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let total = resp.total_hits as usize;
+        let paged = resp
+            .hits
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        (paged, total)
+    } else {
+        let r = mgr
+            .search(&req.query, limit)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let len = r.len();
+        (r, len)
+    };
+    let hits: Vec<Value> = hits_raw
+        .into_iter()
+        .map(|h| {
+            let source = h.document.as_ref().map(|d| d.stored_fields());
+            json!({
+                "id": h.doc_id.to_string(),
+                "score": h.score,
+                "source": source,
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!({
+        "index": name,
         "hits": hits,
-        "total_hits": hits.len(),
+        "total_hits": total_hits,
+        "offset": offset,
+        "limit": limit,
         "execution_time_ms": 0,
     })))
 }
@@ -163,7 +310,9 @@ async fn index_stats(
     State(state): State<Arc<AdminState>>,
     Path(_name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mgr = state.search_mgr.as_ref()
+    let mgr = state
+        .search_mgr
+        .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
     let stats = mgr.stats();
     Ok(Json(json!({

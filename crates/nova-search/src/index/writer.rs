@@ -44,7 +44,8 @@ impl IndexWriter {
                     let field_name = field.name.clone();
                     let doc_id_str = doc_id.to_string();
 
-                    let field_len = self.segment
+                    let field_len = self
+                        .segment
                         .field_lengths
                         .entry(field_name.clone())
                         .or_default();
@@ -101,7 +102,9 @@ impl IndexWriter {
             }
         }
 
-        self.segment.stored_documents.insert(doc_id.to_string(), doc);
+        self.segment
+            .stored_documents
+            .insert(doc_id.to_string(), doc);
         self.segment.doc_count += 1;
 
         Ok(())

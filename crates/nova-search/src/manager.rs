@@ -55,7 +55,11 @@ impl SearchManager {
     pub fn with_config(config: SearchConfig) -> Self {
         let analyzer = AnalyzerPipeline::default();
         let writer = Arc::new(RwLock::new(IndexWriter::new(analyzer)));
-        SearchManager { writer, config, shutdown: Arc::new(AtomicBool::new(false)) }
+        SearchManager {
+            writer,
+            config,
+            shutdown: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn shutdown(&self) {
@@ -102,7 +106,9 @@ impl SearchManager {
         let hits: Vec<ScoredDocument> = if let Some((after_score, after_id)) = search_after {
             results
                 .into_iter()
-                .filter(|r| r.score < after_score || (r.score == after_score && r.doc_id > after_id))
+                .filter(|r| {
+                    r.score < after_score || (r.score == after_score && r.doc_id > after_id)
+                })
                 .take(limit)
                 .collect()
         } else {
@@ -137,8 +143,11 @@ impl SearchManager {
                     let mut all_snippets = Vec::new();
                     for field in &doc.fields {
                         if let crate::document::FieldValue::Text(text) = &field.value {
-                            let field_snippets =
-                                Highlighter::highlight(text, &query_tokens, self.config.highlight_snippet_len);
+                            let field_snippets = Highlighter::highlight(
+                                text,
+                                &query_tokens,
+                                self.config.highlight_snippet_len,
+                            );
                             all_snippets.extend(field_snippets);
                         }
                     }
