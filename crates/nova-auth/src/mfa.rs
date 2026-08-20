@@ -29,10 +29,8 @@ impl MfaProvider {
 
     /// Generate a TOTP URI for QR code provisioning (otpauth:// protocol).
     pub fn generate_otpauth_uri(&self, username: &str, secret: &[u8]) -> String {
-        let encoded_secret = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD_NO_PAD,
-            secret,
-        );
+        let encoded_secret =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD_NO_PAD, secret);
         format!(
             "otpauth://totp/{}:{}?secret={}&issuer={}",
             self.issuer, username, encoded_secret, self.issuer
@@ -43,7 +41,7 @@ impl MfaProvider {
     pub fn generate_code(secret: &[u8], time_step: i64) -> String {
         // Simplified TOTP implementation
         // In production, use a proper TOTP library (e.g., oath, totp-rs)
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         let time_bytes = time_step.to_be_bytes();
         let mut hasher = Sha256::new();

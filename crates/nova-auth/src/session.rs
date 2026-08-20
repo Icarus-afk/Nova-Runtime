@@ -28,7 +28,9 @@ impl SessionManager {
 
     /// Validate and retrieve a session by token.
     pub fn get_session(&self, token: &str) -> Result<Session> {
-        let session = self.sessions.get(token)
+        let session = self
+            .sessions
+            .get(token)
             .ok_or_else(|| AuthError::SessionNotFound("session not found".into()))?;
 
         if session.is_expired() {
@@ -36,7 +38,9 @@ impl SessionManager {
         }
 
         if session.revoked {
-            return Err(AuthError::SessionNotFound("session has been revoked".into()));
+            return Err(AuthError::SessionNotFound(
+                "session has been revoked".into(),
+            ));
         }
 
         Ok(session.clone())
@@ -44,7 +48,9 @@ impl SessionManager {
 
     /// Revoke a session by token.
     pub fn revoke_session(&self, token: &str) -> Result<()> {
-        let mut session = self.sessions.get_mut(token)
+        let mut session = self
+            .sessions
+            .get_mut(token)
             .ok_or_else(|| AuthError::SessionNotFound("session not found".into()))?;
         session.revoked = true;
         Ok(())
@@ -71,7 +77,9 @@ impl SessionManager {
 
     /// Refresh a session's TTL.
     pub fn touch_session(&self, token: &str) -> Result<()> {
-        let mut session = self.sessions.get_mut(token)
+        let mut session = self
+            .sessions
+            .get_mut(token)
             .ok_or_else(|| AuthError::SessionNotFound("session not found".into()))?;
         session.last_activity_at = chrono::Utc::now().timestamp_millis();
         Ok(())
@@ -79,7 +87,10 @@ impl SessionManager {
 
     /// Get the number of active sessions for a user.
     pub fn active_session_count(&self, user_id: Uuid) -> usize {
-        self.sessions.iter().filter(|s| s.user_id == user_id && s.is_valid()).count()
+        self.sessions
+            .iter()
+            .filter(|s| s.user_id == user_id && s.is_valid())
+            .count()
     }
 
     /// Remove expired sessions (cleanup).

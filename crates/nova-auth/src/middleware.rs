@@ -78,9 +78,10 @@ impl Middleware for AuthMiddleware {
                 let token = match Self::extract_token(req) {
                     Some(t) => t,
                     None => {
-                        return PipelineResult::ShortCircuit(
-                            OperationResponse::error(ErrorCode::AuthenticationError, "missing authentication token")
-                        );
+                        return PipelineResult::ShortCircuit(OperationResponse::error(
+                            ErrorCode::AuthenticationError,
+                            "missing authentication token",
+                        ));
                     }
                 };
 
@@ -99,9 +100,10 @@ impl Middleware for AuthMiddleware {
                         ctx.metadata.insert("auth_method".into(), "session".into());
                     }
                     Err(_) => {
-                        return PipelineResult::ShortCircuit(
-                            OperationResponse::error(ErrorCode::AuthenticationError, "invalid or expired session")
-                        );
+                        return PipelineResult::ShortCircuit(OperationResponse::error(
+                            ErrorCode::AuthenticationError,
+                            "invalid or expired session",
+                        ));
                     }
                 }
             }
@@ -132,7 +134,10 @@ mod tests {
     #[test]
     fn test_extract_token_from_authorization_header() {
         let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
-        req.params.insert("authorization".into(), serde_json::Value::String("Bearer test_token".into()));
+        req.params.insert(
+            "authorization".into(),
+            serde_json::Value::String("Bearer test_token".into()),
+        );
         let token = AuthMiddleware::extract_token(&req);
         assert_eq!(token, Some("test_token".to_string()));
     }
@@ -140,7 +145,10 @@ mod tests {
     #[test]
     fn test_extract_token_from_token_param() {
         let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
-        req.params.insert("token".into(), serde_json::Value::String("direct_token".into()));
+        req.params.insert(
+            "token".into(),
+            serde_json::Value::String("direct_token".into()),
+        );
         let token = AuthMiddleware::extract_token(&req);
         assert_eq!(token, Some("direct_token".to_string()));
     }

@@ -30,7 +30,8 @@ impl BruteForceDetector {
         let window = Duration::from_secs(self.window_secs);
 
         // Add attempt
-        self.attempts.entry(identifier.to_string())
+        self.attempts
+            .entry(identifier.to_string())
             .or_insert_with(VecDeque::new)
             .push_back(now);
 

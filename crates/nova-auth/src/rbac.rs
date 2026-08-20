@@ -33,7 +33,10 @@ impl RbacEngine {
         if !self.roles.contains_key(role_name) {
             return Err(format!("Role '{}' not defined", role_name));
         }
-        self.user_roles.entry(user_id).or_default().push(role_name.to_string());
+        self.user_roles
+            .entry(user_id)
+            .or_default()
+            .push(role_name.to_string());
         Ok(())
     }
 
@@ -81,26 +84,34 @@ impl RbacEngine {
     /// Check if a user has a specific permission (supports wildcard matching).
     pub fn has_permission(&self, user_id: &uuid::Uuid, permission: &str) -> bool {
         let user_perms = self.user_permissions(user_id);
-        user_perms.iter().any(|p| Self::permission_matches(p, permission))
+        user_perms
+            .iter()
+            .any(|p| Self::permission_matches(p, permission))
     }
 
     /// Check if a user has any of the given permissions.
     pub fn has_any_permission(&self, user_id: &uuid::Uuid, permissions: &[&str]) -> bool {
         let user_perms = self.user_permissions(user_id);
-        permissions.iter().any(|p| user_perms.iter().any(|up| Self::permission_matches(up, p)))
+        permissions
+            .iter()
+            .any(|p| user_perms.iter().any(|up| Self::permission_matches(up, p)))
     }
 
     /// Check if a user has all of the given permissions.
     pub fn has_all_permissions(&self, user_id: &uuid::Uuid, permissions: &[&str]) -> bool {
         let user_perms = self.user_permissions(user_id);
-        permissions.iter().all(|p| user_perms.iter().any(|up| Self::permission_matches(up, p)))
+        permissions
+            .iter()
+            .all(|p| user_perms.iter().any(|up| Self::permission_matches(up, p)))
     }
 
     /// Evaluate a permission request against the RBAC policy.
     pub fn evaluate(&self, request: &PermissionRequest) -> bool {
         let user_perms = self.user_permissions(&request.user_id);
         let required = format!("{}:{}", request.action, request.resource);
-        user_perms.iter().any(|p| Self::permission_matches(p, &required))
+        user_perms
+            .iter()
+            .any(|p| Self::permission_matches(p, &required))
     }
 
     pub fn role_names(&self) -> Vec<String> {

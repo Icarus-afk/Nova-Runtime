@@ -83,10 +83,10 @@ pub struct Credential {
     pub id: Uuid,
     pub user_id: Uuid,
     pub credential_type: CredentialType,
-    pub identifier: String,      // username, email, etc.
-    pub secret_hash: String,     // hashed password, API key hash, etc.
+    pub identifier: String,  // username, email, etc.
+    pub secret_hash: String, // hashed password, API key hash, etc.
     pub salt: Option<String>,
-    pub algorithm: String,       // "bcrypt", "argon2", "sha256" etc.
+    pub algorithm: String, // "bcrypt", "argon2", "sha256" etc.
     pub created_at: i64,
     pub expires_at: Option<i64>,
     pub locked_until: Option<i64>,
@@ -236,10 +236,16 @@ pub fn validate_password(password: &str, config: &AuthConfig) -> Result<(), Vec<
     let len = password.len() as u8;
 
     if len < config.password_min_length {
-        errors.push(format!("Password must be at least {} characters", config.password_min_length));
+        errors.push(format!(
+            "Password must be at least {} characters",
+            config.password_min_length
+        ));
     }
     if len > config.password_max_length {
-        errors.push(format!("Password must be at most {} characters", config.password_max_length));
+        errors.push(format!(
+            "Password must be at most {} characters",
+            config.password_max_length
+        ));
     }
 
     let lowercase = password.chars().filter(|c| c.is_lowercase()).count() as u8;
@@ -248,19 +254,35 @@ pub fn validate_password(password: &str, config: &AuthConfig) -> Result<(), Vec<
     let special = password.chars().filter(|c| !c.is_alphanumeric()).count() as u8;
 
     if lowercase < config.password_min_lowercase {
-        errors.push(format!("Password must have at least {} lowercase character(s)", config.password_min_lowercase));
+        errors.push(format!(
+            "Password must have at least {} lowercase character(s)",
+            config.password_min_lowercase
+        ));
     }
     if uppercase < config.password_min_uppercase {
-        errors.push(format!("Password must have at least {} uppercase character(s)", config.password_min_uppercase));
+        errors.push(format!(
+            "Password must have at least {} uppercase character(s)",
+            config.password_min_uppercase
+        ));
     }
     if digits < config.password_min_digits {
-        errors.push(format!("Password must have at least {} digit(s)", config.password_min_digits));
+        errors.push(format!(
+            "Password must have at least {} digit(s)",
+            config.password_min_digits
+        ));
     }
     if special < config.password_min_special {
-        errors.push(format!("Password must have at least {} special character(s)", config.password_min_special));
+        errors.push(format!(
+            "Password must have at least {} special character(s)",
+            config.password_min_special
+        ));
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
