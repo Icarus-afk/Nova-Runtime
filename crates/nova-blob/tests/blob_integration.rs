@@ -216,26 +216,40 @@ async fn test_namespace_validation() {
     let config = test_config(&dir);
     let mgr = BlobManager::new(config).await.unwrap();
 
-    let err = mgr.create_blob("", b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob("", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "empty namespace should be rejected");
 
-    let err = mgr.create_blob("/slash", b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob("/slash", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "namespace with '/' should be rejected");
 
-    let err = mgr.create_blob("\\backslash", b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob("\\backslash", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "namespace with '\\' should be rejected");
 
-    let err = mgr.create_blob("..", b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob("..", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "namespace with '..' should be rejected");
 
-    let err = mgr.create_blob("a\0b", b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob("a\0b", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "namespace with null byte should be rejected");
 
     let long_name = "a".repeat(256);
-    let err = mgr.create_blob(&long_name, b"data", "text/plain", HashMap::new()).await;
+    let err = mgr
+        .create_blob(&long_name, b"data", "text/plain", HashMap::new())
+        .await;
     assert!(err.is_err(), "namespace >255 chars should be rejected");
 
-    let result = mgr.create_blob("valid-ns_1.0", b"data", "text/plain", HashMap::new()).await;
+    let result = mgr
+        .create_blob("valid-ns_1.0", b"data", "text/plain", HashMap::new())
+        .await;
     assert!(result.is_ok(), "valid namespace should be accepted");
 
     validate_namespace("").unwrap_err();
@@ -308,13 +322,16 @@ async fn test_gc_shutdown() {
     config.gc_interval_secs = 1;
     let config_for_store = config.clone();
 
-    let store = Arc::new(nova_blob::backend::filesystem::FilesystemBackend::new(&config_for_store));
+    let store = Arc::new(nova_blob::backend::filesystem::FilesystemBackend::new(
+        &config_for_store,
+    ));
     store.init().await.unwrap();
     let dedup = Arc::new(nova_blob::dedup::DeduplicationEngine::new());
     let gc = Arc::new(GarbageCollector::new(store, dedup, &config_for_store));
 
     let cancel = CancellationToken::new();
-    let handle = GarbageCollector::start_background(gc.clone(), Duration::from_millis(100), cancel.clone());
+    let handle =
+        GarbageCollector::start_background(gc.clone(), Duration::from_millis(100), cancel.clone());
 
     cancel.cancel();
 
@@ -352,7 +369,11 @@ async fn test_dedup_persistence() {
         ..Default::default()
     };
     let mgr3 = BlobManager::new(config3).await.unwrap();
-    assert_eq!(mgr3.dedup().get_ref_count(&shared_hash), 2, "dedup state should persist across manager instances");
+    assert_eq!(
+        mgr3.dedup().get_ref_count(&shared_hash),
+        2,
+        "dedup state should persist across manager instances"
+    );
 }
 
 #[tokio::test]
@@ -366,9 +387,15 @@ async fn test_upload_part_listing() {
         .await
         .unwrap();
 
-    mgr.upload_part(&session.upload_id, b"hello ".to_vec()).await.unwrap();
-    mgr.upload_part(&session.upload_id, b"world ".to_vec()).await.unwrap();
-    mgr.upload_part(&session.upload_id, b"parts!".to_vec()).await.unwrap();
+    mgr.upload_part(&session.upload_id, b"hello ".to_vec())
+        .await
+        .unwrap();
+    mgr.upload_part(&session.upload_id, b"world ".to_vec())
+        .await
+        .unwrap();
+    mgr.upload_part(&session.upload_id, b"parts!".to_vec())
+        .await
+        .unwrap();
 
     let parts = mgr.list_parts(&session.upload_id).unwrap();
     assert_eq!(parts.len(), 3, "should have 3 parts");
@@ -391,16 +418,26 @@ async fn test_upload_size_validation() {
         .await
         .unwrap();
 
-    mgr.upload_part(&session.upload_id, b"hello world".to_vec()).await.unwrap();
+    mgr.upload_part(&session.upload_id, b"hello world".to_vec())
+        .await
+        .unwrap();
 
     let result = mgr.complete_upload(&session.upload_id).await;
-    assert!(result.is_err(), "should reject when declared total_size (20) != actual uploaded (11)");
+    assert!(
+        result.is_err(),
+        "should reject when declared total_size (20) != actual uploaded (11)"
+    );
 
     let session2: UploadSession = mgr
         .initiate_upload("size-val-ns2", "text/plain", HashMap::new(), 11)
         .await
         .unwrap();
-    mgr.upload_part(&session2.upload_id, b"hello world".to_vec()).await.unwrap();
+    mgr.upload_part(&session2.upload_id, b"hello world".to_vec())
+        .await
+        .unwrap();
     let result2 = mgr.complete_upload(&session2.upload_id).await;
-    assert!(result2.is_ok(), "should accept when declared total matches actual");
+    assert!(
+        result2.is_ok(),
+        "should accept when declared total matches actual"
+    );
 }

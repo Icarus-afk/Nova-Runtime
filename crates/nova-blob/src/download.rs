@@ -12,9 +12,7 @@ pub struct DownloadHandler {
 
 impl DownloadHandler {
     pub fn new(store: Arc<dyn BlobStore>, _chunk_size: usize) -> Self {
-        Self {
-            store,
-        }
+        Self { store }
     }
 
     pub async fn download(&self, blob_id: &str) -> Result<Vec<u8>> {
@@ -45,12 +43,7 @@ impl DownloadHandler {
         Ok(all_data)
     }
 
-    pub async fn download_range(
-        &self,
-        blob_id: &str,
-        offset: u64,
-        length: u64,
-    ) -> Result<Vec<u8>> {
+    pub async fn download_range(&self, blob_id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
         let meta = self.store.get_metadata(blob_id).await?;
 
         if offset >= meta.size {
@@ -167,7 +160,10 @@ mod tests {
         let handler = DownloadHandler::new(Arc::new(ts.store), 1024 * 1024);
         let result = handler.download(&ts.blob_id).await.unwrap();
         assert_eq!(result.len() as u64, ts.size);
-        assert_eq!(&result, b"Hello, World! This is test blob data for download testing.");
+        assert_eq!(
+            &result,
+            b"Hello, World! This is test blob data for download testing."
+        );
     }
 
     #[tokio::test]
@@ -182,7 +178,10 @@ mod tests {
     async fn test_download_range_exact_end() {
         let ts = setup_test_store().await;
         let handler = DownloadHandler::new(Arc::new(ts.store), 1024 * 1024);
-        let result = handler.download_range(&ts.blob_id, 0, ts.size).await.unwrap();
+        let result = handler
+            .download_range(&ts.blob_id, 0, ts.size)
+            .await
+            .unwrap();
         assert_eq!(result.len() as u64, ts.size);
     }
 

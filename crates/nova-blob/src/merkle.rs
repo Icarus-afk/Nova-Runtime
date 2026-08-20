@@ -27,7 +27,10 @@ impl MerkleTree {
             }
             level = next;
         }
-        level.into_iter().next().expect("merkle tree root must not be empty — at least one leaf required")
+        level
+            .into_iter()
+            .next()
+            .expect("merkle tree root must not be empty — at least one leaf required")
     }
 
     pub fn verify(chunk_hash: &str, proof: &[ProofStep], root: &str) -> bool {
@@ -98,16 +101,18 @@ mod tests {
         let root = MerkleTree::build(&hashes);
         for i in 0..hashes.len() {
             let proof = MerkleTree::generate_proof(&hashes, i);
-            assert!(MerkleTree::verify(&hashes[i], &proof, &root), "failed for index {}", i);
+            assert!(
+                MerkleTree::verify(&hashes[i], &proof, &root),
+                "failed for index {}",
+                i
+            );
         }
     }
 
     #[test]
     fn test_verify_invalid_proof() {
-        let hashes: Vec<String> = vec![
-            ChunkManager::hash(b"chunk1"),
-            ChunkManager::hash(b"chunk2"),
-        ];
+        let hashes: Vec<String> =
+            vec![ChunkManager::hash(b"chunk1"), ChunkManager::hash(b"chunk2")];
         let root = MerkleTree::build(&hashes);
         let wrong_hash = ChunkManager::hash(b"wrong");
         let proof = MerkleTree::generate_proof(&hashes, 0);

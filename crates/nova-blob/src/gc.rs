@@ -81,7 +81,10 @@ impl GarbageCollector {
                                 let ref_count = self.dedup.release_chunk(chunk_hash);
                                 if ref_count == 0 {
                                     if let Err(e) = self.store.delete_chunk(chunk_hash).await {
-                                        error!("GC TTL: failed to delete chunk {}: {}", chunk_hash, e);
+                                        error!(
+                                            "GC TTL: failed to delete chunk {}: {}",
+                                            chunk_hash, e
+                                        );
                                     } else {
                                         self.dedup.remove_tracked(chunk_hash);
                                     }
@@ -91,7 +94,10 @@ impl GarbageCollector {
                                 error!("GC TTL: failed to delete metadata {}: {}", blob_id, e);
                             } else {
                                 count += 1;
-                                info!("GC TTL: deleted expired blob {} (namespace {})", blob_id, ns);
+                                info!(
+                                    "GC TTL: deleted expired blob {} (namespace {})",
+                                    blob_id, ns
+                                );
                             }
                         }
                     }
@@ -102,7 +108,11 @@ impl GarbageCollector {
         Ok(count)
     }
 
-    pub fn start_background(self: Arc<Self>, interval: Duration, cancel: CancellationToken) -> JoinHandle<()> {
+    pub fn start_background(
+        self: Arc<Self>,
+        interval: Duration,
+        cancel: CancellationToken,
+    ) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -121,7 +131,8 @@ impl GarbageCollector {
     }
 
     pub fn shutdown(&self) {
-        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

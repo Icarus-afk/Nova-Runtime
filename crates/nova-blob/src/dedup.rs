@@ -23,7 +23,10 @@ impl DeduplicationEngine {
         let mut chunks = self.chunks.write();
         if let Some(record) = chunks.get_mut(hash) {
             record.ref_count += 1;
-            debug!("chunk {} ref_count incremented to {}", hash, record.ref_count);
+            debug!(
+                "chunk {} ref_count incremented to {}",
+                hash, record.ref_count
+            );
             true
         } else {
             let record = ChunkRecord {
@@ -47,7 +50,10 @@ impl DeduplicationEngine {
             if record.ref_count > 0 {
                 record.ref_count -= 1;
             }
-            debug!("chunk {} ref_count decremented to {}", hash, record.ref_count);
+            debug!(
+                "chunk {} ref_count decremented to {}",
+                hash, record.ref_count
+            );
             record.ref_count
         } else {
             0
@@ -59,7 +65,11 @@ impl DeduplicationEngine {
     }
 
     pub fn get_ref_count(&self, hash: &str) -> u64 {
-        self.chunks.read().get(hash).map(|r| r.ref_count).unwrap_or(0)
+        self.chunks
+            .read()
+            .get(hash)
+            .map(|r| r.ref_count)
+            .unwrap_or(0)
     }
 
     pub fn collect_unreferenced(&self, grace_period_secs: u64) -> Vec<String> {
@@ -70,9 +80,7 @@ impl DeduplicationEngine {
         let chunks = self.chunks.read();
         chunks
             .values()
-            .filter(|r| {
-                r.ref_count == 0 && (now - r.created_at) as u64 >= grace_period_secs
-            })
+            .filter(|r| r.ref_count == 0 && (now - r.created_at) as u64 >= grace_period_secs)
             .map(|r| r.hash.clone())
             .collect()
     }
@@ -103,8 +111,9 @@ impl DeduplicationEngine {
         }
         let data = std::fs::read(path)
             .map_err(|e| BlobError::Internal(format!("failed to read dedup state: {}", e)))?;
-        let chunks: HashMap<String, ChunkRecord> = serde_json::from_slice(&data)
-            .map_err(|e| BlobError::Internal(format!("failed to deserialize dedup state: {}", e)))?;
+        let chunks: HashMap<String, ChunkRecord> = serde_json::from_slice(&data).map_err(|e| {
+            BlobError::Internal(format!("failed to deserialize dedup state: {}", e))
+        })?;
         let mut map = self.chunks.write();
         *map = chunks;
         debug!("loaded {} chunk records from {:?}", map.len(), path);

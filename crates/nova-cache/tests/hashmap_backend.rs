@@ -15,7 +15,10 @@ fn make_small_backend() -> HashMapBackend {
 #[tokio::test]
 async fn test_basic_put_get() {
     let backend = make_backend();
-    backend.set("hello".into(), b"world".to_vec(), None).await.unwrap();
+    backend
+        .set("hello".into(), b"world".to_vec(), None)
+        .await
+        .unwrap();
     let result = backend.get(&"hello".into()).await.unwrap();
     assert_eq!(result, Some(b"world".to_vec()));
 }
@@ -30,7 +33,10 @@ async fn test_get_missing() {
 #[tokio::test]
 async fn test_delete() {
     let backend = make_backend();
-    backend.set("tmp".into(), b"data".to_vec(), None).await.unwrap();
+    backend
+        .set("tmp".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
     assert!(backend.delete(&"tmp".into()).await.unwrap());
     assert!(!backend.delete(&"tmp".into()).await.unwrap());
     let result = backend.get(&"tmp".into()).await.unwrap();
@@ -41,7 +47,11 @@ async fn test_delete() {
 async fn test_ttl_expiry() {
     let backend = make_backend();
     backend
-        .set("short".into(), b"lived".to_vec(), Some(Duration::from_millis(10)))
+        .set(
+            "short".into(),
+            b"lived".to_vec(),
+            Some(Duration::from_millis(10)),
+        )
         .await
         .unwrap();
     assert!(backend.get(&"short".into()).await.unwrap().is_some());
@@ -53,9 +63,18 @@ async fn test_ttl_expiry() {
 #[tokio::test]
 async fn test_lru_eviction() {
     let backend = make_small_backend();
-    backend.set("aaaa".into(), b"11111".to_vec(), None).await.unwrap();
-    backend.set("bbbb".into(), b"22222".to_vec(), None).await.unwrap();
-    backend.set("cccc".into(), b"33333".to_vec(), None).await.unwrap();
+    backend
+        .set("aaaa".into(), b"11111".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("bbbb".into(), b"22222".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("cccc".into(), b"33333".to_vec(), None)
+        .await
+        .unwrap();
     let result = backend.get(&"aaaa".into()).await.unwrap();
     assert_eq!(result, None);
     assert!(backend.get(&"bbbb".into()).await.unwrap().is_some());
@@ -95,8 +114,14 @@ async fn test_flush() {
 #[tokio::test]
 async fn test_overwrite() {
     let backend = make_backend();
-    backend.set("key".into(), b"first".to_vec(), None).await.unwrap();
-    backend.set("key".into(), b"second".to_vec(), None).await.unwrap();
+    backend
+        .set("key".into(), b"first".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("key".into(), b"second".to_vec(), None)
+        .await
+        .unwrap();
     let result = backend.get(&"key".into()).await.unwrap();
     assert_eq!(result, Some(b"second".to_vec()));
 }
@@ -107,7 +132,10 @@ async fn test_metrics_tracking() {
     let backend = HashMapBackend::new(1024 * 1024, Arc::clone(&metrics)).unwrap();
     backend.get(&"miss".into()).await.unwrap();
     assert_eq!(metrics.misses(), 1);
-    backend.set("hit".into(), b"v".to_vec(), None).await.unwrap();
+    backend
+        .set("hit".into(), b"v".to_vec(), None)
+        .await
+        .unwrap();
     backend.get(&"hit".into()).await.unwrap();
     assert_eq!(metrics.hits(), 1);
     assert_eq!(metrics.sets(), 1);
@@ -144,7 +172,10 @@ async fn test_delete_nonexistent() {
 async fn test_exists() {
     let backend = make_backend();
     assert!(!backend.exists(&"missing".into()).await.unwrap());
-    backend.set("present".into(), b"!".to_vec(), None).await.unwrap();
+    backend
+        .set("present".into(), b"!".to_vec(), None)
+        .await
+        .unwrap();
     assert!(backend.exists(&"present".into()).await.unwrap());
 }
 
@@ -152,7 +183,11 @@ async fn test_exists() {
 async fn test_exists_with_ttl() {
     let backend = make_backend();
     backend
-        .set("ephemeral".into(), b"x".to_vec(), Some(Duration::from_millis(10)))
+        .set(
+            "ephemeral".into(),
+            b"x".to_vec(),
+            Some(Duration::from_millis(10)),
+        )
         .await
         .unwrap();
     assert!(backend.exists(&"ephemeral".into()).await.unwrap());
@@ -164,7 +199,10 @@ async fn test_exists_with_ttl() {
 async fn test_is_empty() {
     let backend = make_backend();
     assert!(backend.is_empty().await.unwrap());
-    backend.set("item".into(), b"1".to_vec(), None).await.unwrap();
+    backend
+        .set("item".into(), b"1".to_vec(), None)
+        .await
+        .unwrap();
     assert!(!backend.is_empty().await.unwrap());
 }
 
@@ -213,7 +251,10 @@ async fn test_get_or_insert_with_miss_calls_factory() {
 #[tokio::test]
 async fn test_get_or_insert_with_hit_returns_cached() {
     let backend = Arc::new(make_backend());
-    backend.set("hit".into(), b"cached".to_vec(), None).await.unwrap();
+    backend
+        .set("hit".into(), b"cached".to_vec(), None)
+        .await
+        .unwrap();
 
     let factory_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let factory_flag = Arc::clone(&factory_called);
@@ -266,9 +307,18 @@ async fn test_set_many() {
 
     backend.set_many(items).await.unwrap();
 
-    assert_eq!(backend.get(&"x".into()).await.unwrap(), Some(b"10".to_vec()));
-    assert_eq!(backend.get(&"y".into()).await.unwrap(), Some(b"20".to_vec()));
-    assert_eq!(backend.get(&"z".into()).await.unwrap(), Some(b"30".to_vec()));
+    assert_eq!(
+        backend.get(&"x".into()).await.unwrap(),
+        Some(b"10".to_vec())
+    );
+    assert_eq!(
+        backend.get(&"y".into()).await.unwrap(),
+        Some(b"20".to_vec())
+    );
+    assert_eq!(
+        backend.get(&"z".into()).await.unwrap(),
+        Some(b"30".to_vec())
+    );
 }
 
 #[tokio::test]
@@ -295,13 +345,21 @@ async fn test_delete_many() {
 
 #[tokio::test]
 async fn test_ttl_sweeper() {
-    let backend = Arc::new(HashMapBackend::new(1024 * 1024, Arc::new(CacheMetrics::default())).unwrap());
+    let backend =
+        Arc::new(HashMapBackend::new(1024 * 1024, Arc::new(CacheMetrics::default())).unwrap());
 
     backend
-        .set("ephemeral".into(), b"x".to_vec(), Some(Duration::from_millis(20)))
+        .set(
+            "ephemeral".into(),
+            b"x".to_vec(),
+            Some(Duration::from_millis(20)),
+        )
         .await
         .unwrap();
-    backend.set("permanent".into(), b"y".to_vec(), None).await.unwrap();
+    backend
+        .set("permanent".into(), b"y".to_vec(), None)
+        .await
+        .unwrap();
 
     let handle = Arc::clone(&backend).start_ttl_sweeper(Duration::from_millis(50));
 
@@ -359,11 +417,18 @@ async fn test_event_invalidation() {
     let config = CacheConfig::default();
     let manager = CacheManager::new(Arc::clone(&backend) as Arc<dyn CacheBackend>, config);
 
-    let bus = nova_event::EventBus::new(1, nova_event::OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+    let bus =
+        nova_event::EventBus::new(1, nova_event::OverflowPolicy::DropNewest, 1024 * 1024, 1000);
     manager.attach_event_bus(&bus).unwrap();
 
-    backend.set("invalidate_me".into(), b"data".to_vec(), None).await.unwrap();
-    backend.set("keep_me".into(), b"data".to_vec(), None).await.unwrap();
+    backend
+        .set("invalidate_me".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("keep_me".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
 
     let event = nova_event::EventBuilder::new("cache.invalidate.invalidate_me")
         .unwrap()
@@ -372,8 +437,17 @@ async fn test_event_invalidation() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert!(backend.get(&"invalidate_me".into()).await.unwrap().is_none());
-    assert_eq!(backend.get(&"keep_me".into()).await.unwrap(), Some(b"data".to_vec()));
+    assert!(
+        backend
+            .get(&"invalidate_me".into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        backend.get(&"keep_me".into()).await.unwrap(),
+        Some(b"data".to_vec())
+    );
 }
 
 #[tokio::test]
@@ -385,12 +459,22 @@ async fn test_event_pattern_invalidation() {
     let config = CacheConfig::default();
     let manager = CacheManager::new(Arc::clone(&backend) as Arc<dyn CacheBackend>, config);
 
-    let bus = nova_event::EventBus::new(1, nova_event::OverflowPolicy::DropNewest, 1024 * 1024, 1000);
+    let bus =
+        nova_event::EventBus::new(1, nova_event::OverflowPolicy::DropNewest, 1024 * 1024, 1000);
     manager.attach_event_bus(&bus).unwrap();
 
-    backend.set("user:alice".into(), b"data".to_vec(), None).await.unwrap();
-    backend.set("user:bob".into(), b"data".to_vec(), None).await.unwrap();
-    backend.set("config:app".into(), b"data".to_vec(), None).await.unwrap();
+    backend
+        .set("user:alice".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("user:bob".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
+    backend
+        .set("config:app".into(), b"data".to_vec(), None)
+        .await
+        .unwrap();
 
     let event = nova_event::EventBuilder::new("cache.invalidate.pattern.user:*")
         .unwrap()
@@ -401,7 +485,10 @@ async fn test_event_pattern_invalidation() {
 
     assert!(backend.get(&"user:alice".into()).await.unwrap().is_none());
     assert!(backend.get(&"user:bob".into()).await.unwrap().is_none());
-    assert_eq!(backend.get(&"config:app".into()).await.unwrap(), Some(b"data".to_vec()));
+    assert_eq!(
+        backend.get(&"config:app".into()).await.unwrap(),
+        Some(b"data".to_vec())
+    );
 }
 
 // ============================================================
@@ -447,10 +534,17 @@ async fn test_ttl_backend_expiry() {
     let backend = Arc::new(nova_cache::backend::TtlBackend::new(inner));
 
     backend
-        .set("ephemeral".into(), b"x".to_vec(), Some(Duration::from_millis(10)))
+        .set(
+            "ephemeral".into(),
+            b"x".to_vec(),
+            Some(Duration::from_millis(10)),
+        )
         .await
         .unwrap();
-    backend.set("permanent".into(), b"y".to_vec(), None).await.unwrap();
+    backend
+        .set("permanent".into(), b"y".to_vec(), None)
+        .await
+        .unwrap();
 
     assert!(backend.get(&"ephemeral".into()).await.unwrap().is_some());
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -464,10 +558,17 @@ async fn test_ttl_backend_sweeper() {
     let backend = Arc::new(nova_cache::backend::TtlBackend::new(inner));
 
     backend
-        .set("ephemeral".into(), b"x".to_vec(), Some(Duration::from_millis(10)))
+        .set(
+            "ephemeral".into(),
+            b"x".to_vec(),
+            Some(Duration::from_millis(10)),
+        )
         .await
         .unwrap();
-    backend.set("permanent".into(), b"y".to_vec(), None).await.unwrap();
+    backend
+        .set("permanent".into(), b"y".to_vec(), None)
+        .await
+        .unwrap();
 
     let handle = Arc::clone(&backend).start_ttl_sweeper(Duration::from_millis(30));
 

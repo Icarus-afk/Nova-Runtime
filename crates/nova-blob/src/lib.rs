@@ -12,8 +12,8 @@ pub mod namespace;
 pub mod stats;
 pub mod upload;
 
-pub use backend::filesystem::FilesystemBackend;
 pub use backend::BlobStore;
+pub use backend::filesystem::FilesystemBackend;
 pub use chunk::ChunkManager;
 pub use config::BlobConfig;
 pub use dedup::DeduplicationEngine;
@@ -23,6 +23,6 @@ pub use gc::GarbageCollector;
 pub use manager::BlobManager;
 pub use merkle::MerkleTree;
 pub use metadata::{BlobMetadata, ChunkRecord, UploadState};
-pub use namespace::{validate_namespace, NamespaceManager};
+pub use namespace::{NamespaceManager, validate_namespace};
 pub use stats::{BlobStats, StatsCollector};
 pub use upload::{PartInfo, UploadManager, UploadSession};

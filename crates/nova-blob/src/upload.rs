@@ -75,7 +75,10 @@ impl UploadManager {
 
         self.sessions.write().insert(upload_id.clone(), session);
 
-        let session = self.sessions.read().get(&upload_id)
+        let session = self
+            .sessions
+            .read()
+            .get(&upload_id)
             .expect("upload session was just inserted")
             .clone();
         debug!("initiated multipart upload {}", upload_id);
@@ -95,7 +98,12 @@ impl UploadManager {
             return Err(BlobError::Internal("upload aborted".to_string()));
         }
 
-        let accumulated: u64 = session.uploaded_parts.iter().map(|p| p.len() as u64).sum::<u64>() + data.len() as u64;
+        let accumulated: u64 = session
+            .uploaded_parts
+            .iter()
+            .map(|p| p.len() as u64)
+            .sum::<u64>()
+            + data.len() as u64;
         if accumulated > self.config.max_blob_size {
             return Err(BlobError::QuotaExceeded(format!(
                 "blob size {} exceeds max {}",
@@ -132,7 +140,11 @@ impl UploadManager {
 
         session.completed = true;
 
-        let all_data: Vec<u8> = session.uploaded_parts.iter().flat_map(|p| p.iter().copied()).collect();
+        let all_data: Vec<u8> = session
+            .uploaded_parts
+            .iter()
+            .flat_map(|p| p.iter().copied())
+            .collect();
         let chunk_manager = ChunkManager::new(self.config.chunk_size);
         let (chunks, chunk_hashes) = chunk_manager.split(&all_data);
         let sha256 = ChunkManager::hash(&all_data);

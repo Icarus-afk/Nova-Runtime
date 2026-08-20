@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dedup::DeduplicationEngine;
 
@@ -88,12 +88,7 @@ impl StatsCollector {
         let total_tracked: u64 = self
             .dedup
             .as_ref()
-            .map(|d| {
-                d.tracked_chunks()
-                    .iter()
-                    .map(|r| r.ref_count)
-                    .sum::<u64>()
-            })
+            .map(|d| d.tracked_chunks().iter().map(|r| r.ref_count).sum::<u64>())
             .unwrap_or(0);
 
         let chunk_dedup_savings = if unique_chunks > 0 {
