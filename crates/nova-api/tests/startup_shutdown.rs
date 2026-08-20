@@ -1,7 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-fn setup() -> (tempfile::TempDir, Arc<nova_storage::Store>, Arc<nova_executor::PipelineExecutor>, Arc<parking_lot::RwLock<nova_config::Config>>) {
+fn setup() -> (
+    tempfile::TempDir,
+    Arc<nova_storage::Store>,
+    Arc<nova_executor::PipelineExecutor>,
+    Arc<parking_lot::RwLock<nova_config::Config>>,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().join("data");
     let wal_dir = data_dir.join("wal");
@@ -20,14 +25,17 @@ fn setup() -> (tempfile::TempDir, Arc<nova_storage::Store>, Arc<nova_executor::P
         nova_executor::PipelineConfig::default(),
     ));
 
-    let config = Arc::new(parking_lot::RwLock::new(
-        nova_config::Config::default(),
-    ));
+    let config = Arc::new(parking_lot::RwLock::new(nova_config::Config::default()));
 
     (tmp, store, pipeline, config)
 }
 
-fn start_server(addr: &str, pipeline: Arc<nova_executor::PipelineExecutor>, config: Arc<parking_lot::RwLock<nova_config::Config>>, shutdown_rx: tokio::sync::watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+fn start_server(
+    addr: &str,
+    pipeline: Arc<nova_executor::PipelineExecutor>,
+    config: Arc<parking_lot::RwLock<nova_config::Config>>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
     let admin_state = Arc::new(nova_api::admin::AdminState {
         started_at: std::time::Instant::now(),
         pipeline,
@@ -108,7 +116,11 @@ async fn metrics_endpoint_returns_prometheus_format() {
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
 
-    let resp = client.get(format!("{}/metrics", base)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let text = resp.text().await.unwrap();
@@ -138,7 +150,11 @@ async fn admin_config_endpoint_returns_config() {
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
 
-    let resp = client.get(format!("{}/admin/config", base)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/admin/config", base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -172,7 +188,11 @@ async fn pipeline_status_endpoint_returns_correct_values() {
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
 
-    let resp = client.get(format!("{}/admin/status", base)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/admin/status", base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -205,7 +225,11 @@ async fn shutdown_channel_triggers_clean_shutdown() {
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
     let resp = client.get(format!("{}/health", base)).send().await.unwrap();
-    assert_eq!(resp.status(), 200, "server should be reachable before shutdown");
+    assert_eq!(
+        resp.status(),
+        200,
+        "server should be reachable before shutdown"
+    );
 
     shutdown_tx.send(true).unwrap();
 
@@ -215,7 +239,10 @@ async fn shutdown_channel_triggers_clean_shutdown() {
         .expect("server panicked");
 
     let err = client.get(format!("{}/health", base)).send().await;
-    assert!(err.is_err(), "server should no longer accept requests after shutdown");
+    assert!(
+        err.is_err(),
+        "server should no longer accept requests after shutdown"
+    );
 
     pipeline.drain(Duration::from_secs(5)).await.unwrap();
     store.close().unwrap();
@@ -233,7 +260,11 @@ async fn shutdown_tx_drop_triggers_shutdown() {
     let client = reqwest::Client::new();
     let base = format!("http://{}", addr);
     let resp = client.get(format!("{}/health", base)).send().await.unwrap();
-    assert_eq!(resp.status(), 200, "server should be reachable before shutdown");
+    assert_eq!(
+        resp.status(),
+        200,
+        "server should be reachable before shutdown"
+    );
 
     drop(shutdown_tx);
 

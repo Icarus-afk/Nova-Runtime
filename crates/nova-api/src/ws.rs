@@ -27,9 +27,13 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
     let event_bus = match state.event_bus.as_ref() {
         Some(bus) => bus.clone(),
         None => {
-            let _ = socket.send(Message::Text(
-                json!({"error": "event bus not available"}).to_string().into(),
-            )).await;
+            let _ = socket
+                .send(Message::Text(
+                    json!({"error": "event bus not available"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
             return;
         }
     };
@@ -70,9 +74,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
 
     if let Err(e) = event_bus.subscribe(sub) {
         tracing::warn!("ws subscription failed: {e}");
-        let _ = socket.send(Message::Text(
-            json!({"error": "subscription failed"}).to_string().into(),
-        )).await;
+        let _ = socket
+            .send(Message::Text(
+                json!({"error": "subscription failed"}).to_string().into(),
+            ))
+            .await;
         return;
     }
 
@@ -131,5 +137,3 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
     event_bus.unsubscribe(sub_id);
     info!("WS client disconnected (sub_id={sub_id})");
 }
-
-
