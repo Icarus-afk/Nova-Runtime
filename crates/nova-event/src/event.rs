@@ -1,8 +1,8 @@
+use crate::EventError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
-use crate::EventError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(pub [u8; 16]);
@@ -57,19 +57,18 @@ impl EventType {
         if canonical.is_empty() {
             return Err(EventError::InvalidEventType("empty event type".into()));
         }
-        let segments: Vec<String> = canonical
-            .split('.')
-            .map(|s| s.to_string())
-            .collect();
+        let segments: Vec<String> = canonical.split('.').map(|s| s.to_string()).collect();
         if segments.iter().any(|s| s.is_empty()) {
-            return Err(EventError::InvalidEventType(
-                format!("empty segment in event type: {}", canonical),
-            ));
+            return Err(EventError::InvalidEventType(format!(
+                "empty segment in event type: {}",
+                canonical
+            )));
         }
         if segments.iter().any(|s| s == "+" || s == "*") {
-            return Err(EventError::InvalidEventType(
-                format!("wildcard in event type: {}", canonical),
-            ));
+            return Err(EventError::InvalidEventType(format!(
+                "wildcard in event type: {}",
+                canonical
+            )));
         }
         Ok(EventType {
             canonical: canonical.to_string(),
@@ -175,7 +174,13 @@ impl EventBuilder {
         })
     }
 
-    pub fn source(mut self, subsystem: Subsystem, component: &str, node_id: &str, instance_id: &str) -> Self {
+    pub fn source(
+        mut self,
+        subsystem: Subsystem,
+        component: &str,
+        node_id: &str,
+        instance_id: &str,
+    ) -> Self {
         self.source = Some(EventSource {
             subsystem,
             component: component.to_string(),
@@ -432,7 +437,9 @@ mod tests {
     #[test]
     fn test_event_builder_large_payload() {
         let payload = vec![0u8; 1024 * 1024];
-        let event = EventBuilder::new("test.event").unwrap().build(payload.clone());
+        let event = EventBuilder::new("test.event")
+            .unwrap()
+            .build(payload.clone());
         assert_eq!(event.metadata.payload_size, payload.len() as u32);
         assert_eq!(event.payload.len(), 1024 * 1024);
     }
@@ -454,7 +461,10 @@ mod tests {
     #[test]
     fn test_event_metadata_timestamp_matches_event_id() {
         let event = EventBuilder::new("test.event").unwrap().build(vec![]);
-        assert_eq!(event.metadata.timestamp, event.metadata.event_id.timestamp());
+        assert_eq!(
+            event.metadata.timestamp,
+            event.metadata.event_id.timestamp()
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
+use crate::{Event, EventError, EventType, Subsystem};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::{EventError, EventType, Event, Subsystem};
 
 #[derive(Debug, Clone)]
 pub enum PatternSegment {
@@ -22,17 +22,19 @@ impl TopicPattern {
         }
         let raw_segments: Vec<&str> = pattern.split('.').collect();
         if raw_segments.iter().any(|s| s.is_empty()) {
-            return Err(EventError::InvalidPattern(
-                format!("empty segment in pattern: {}", pattern),
-            ));
+            return Err(EventError::InvalidPattern(format!(
+                "empty segment in pattern: {}",
+                pattern
+            )));
         }
         let mut segments = Vec::with_capacity(raw_segments.len());
         let mut has_multi = false;
         for s in &raw_segments {
             if has_multi {
-                return Err(EventError::InvalidPattern(
-                    format!("'*' must be last segment: {}", pattern),
-                ));
+                return Err(EventError::InvalidPattern(format!(
+                    "'*' must be last segment: {}",
+                    pattern
+                )));
             }
             match *s {
                 "+" => segments.push(PatternSegment::SingleWildcard),
@@ -70,11 +72,26 @@ impl TopicPattern {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FilterExpr {
-    FieldEquals { field: Vec<String>, value: serde_json::Value },
-    FieldExists { field: Vec<String> },
-    FieldMatches { field: Vec<String>, regex: String },
-    FieldIn { field: Vec<String>, values: Vec<serde_json::Value> },
-    FieldRange { field: Vec<String>, min: serde_json::Value, max: serde_json::Value },
+    FieldEquals {
+        field: Vec<String>,
+        value: serde_json::Value,
+    },
+    FieldExists {
+        field: Vec<String>,
+    },
+    FieldMatches {
+        field: Vec<String>,
+        regex: String,
+    },
+    FieldIn {
+        field: Vec<String>,
+        values: Vec<serde_json::Value>,
+    },
+    FieldRange {
+        field: Vec<String>,
+        min: serde_json::Value,
+        max: serde_json::Value,
+    },
     Not(Box<FilterExpr>),
     And(Vec<FilterExpr>),
     Or(Vec<FilterExpr>),
@@ -97,44 +114,38 @@ impl FilterExpr {
             FilterExpr::FieldEquals { field, value } => {
                 get_field(payload, field).map_or(false, |actual| actual == value)
             }
-            FilterExpr::FieldExists { field } => {
-                get_field(payload, field).is_some()
-            }
-            FilterExpr::FieldMatches { field, regex } => {
-                match get_field(payload, field) {
-                    Some(serde_json::Value::String(s)) => {
-                        regex::Regex::new(regex).map_or(false, |re| re.is_match(s))
-                    }
-                    _ => false,
+            FilterExpr::FieldExists { field } => get_field(payload, field).is_some(),
+            FilterExpr::FieldMatches { field, regex } => match get_field(payload, field) {
+                Some(serde_json::Value::String(s)) => {
+                    regex::Regex::new(regex).map_or(false, |re| re.is_match(s))
                 }
-            }
+                _ => false,
+            },
             FilterExpr::FieldIn { field, values } => {
                 get_field(payload, field).map_or(false, |actual| values.contains(actual))
             }
-            FilterExpr::FieldRange { field, min, max } => {
-                match get_field(payload, field) {
-                    Some(actual) => {
-                        let above_min = match (actual, min) {
-                            (a, m) if a == m => true,
-                            (serde_json::Value::Number(a), serde_json::Value::Number(m)) => {
-                                a.as_f64() >= m.as_f64()
-                            }
-                            (serde_json::Value::String(a), serde_json::Value::String(m)) => a >= m,
-                            _ => false,
-                        };
-                        let below_max = match (actual, max) {
-                            (a, m) if a == m => true,
-                            (serde_json::Value::Number(a), serde_json::Value::Number(m)) => {
-                                a.as_f64() <= m.as_f64()
-                            }
-                            (serde_json::Value::String(a), serde_json::Value::String(m)) => a <= m,
-                            _ => false,
-                        };
-                        above_min && below_max
-                    }
-                    None => false,
+            FilterExpr::FieldRange { field, min, max } => match get_field(payload, field) {
+                Some(actual) => {
+                    let above_min = match (actual, min) {
+                        (a, m) if a == m => true,
+                        (serde_json::Value::Number(a), serde_json::Value::Number(m)) => {
+                            a.as_f64() >= m.as_f64()
+                        }
+                        (serde_json::Value::String(a), serde_json::Value::String(m)) => a >= m,
+                        _ => false,
+                    };
+                    let below_max = match (actual, max) {
+                        (a, m) if a == m => true,
+                        (serde_json::Value::Number(a), serde_json::Value::Number(m)) => {
+                            a.as_f64() <= m.as_f64()
+                        }
+                        (serde_json::Value::String(a), serde_json::Value::String(m)) => a <= m,
+                        _ => false,
+                    };
+                    above_min && below_max
                 }
-            }
+                None => false,
+            },
             FilterExpr::Not(inner) => !inner.evaluate(payload),
             FilterExpr::And(children) => children.iter().all(|child| child.evaluate(payload)),
             FilterExpr::Or(children) => children.iter().any(|child| child.evaluate(payload)),
@@ -278,7 +289,10 @@ mod tests {
     fn test_topic_pattern_segments_wildcard() {
         let pattern = TopicPattern::new("a.+.c").unwrap();
         assert!(matches!(pattern.segments[0], PatternSegment::Literal(_)));
-        assert!(matches!(pattern.segments[1], PatternSegment::SingleWildcard));
+        assert!(matches!(
+            pattern.segments[1],
+            PatternSegment::SingleWildcard
+        ));
         assert!(matches!(pattern.segments[2], PatternSegment::Literal(_)));
     }
 
@@ -311,14 +325,18 @@ mod tests {
 
     #[test]
     fn test_filter_field_exists_true() {
-        let expr = FilterExpr::FieldExists { field: vec!["name".into()] };
+        let expr = FilterExpr::FieldExists {
+            field: vec!["name".into()],
+        };
         let payload = serde_json::json!({"name": "test"});
         assert!(expr.evaluate(&payload));
     }
 
     #[test]
     fn test_filter_field_exists_false() {
-        let expr = FilterExpr::FieldExists { field: vec!["missing".into()] };
+        let expr = FilterExpr::FieldExists {
+            field: vec!["missing".into()],
+        };
         let payload = serde_json::json!({"name": "test"});
         assert!(!expr.evaluate(&payload));
     }
@@ -402,7 +420,9 @@ mod tests {
 
     #[test]
     fn test_filter_not() {
-        let inner = FilterExpr::FieldExists { field: vec!["missing".into()] };
+        let inner = FilterExpr::FieldExists {
+            field: vec!["missing".into()],
+        };
         let expr = FilterExpr::Not(Box::new(inner));
         let payload = serde_json::json!({"name": "test"});
         assert!(expr.evaluate(&payload));
@@ -411,8 +431,14 @@ mod tests {
     #[test]
     fn test_filter_and_all_true() {
         let expr = FilterExpr::And(vec![
-            FilterExpr::FieldEquals { field: vec!["a".into()], value: serde_json::json!(1) },
-            FilterExpr::FieldEquals { field: vec!["b".into()], value: serde_json::json!(2) },
+            FilterExpr::FieldEquals {
+                field: vec!["a".into()],
+                value: serde_json::json!(1),
+            },
+            FilterExpr::FieldEquals {
+                field: vec!["b".into()],
+                value: serde_json::json!(2),
+            },
         ]);
         let payload = serde_json::json!({"a": 1, "b": 2});
         assert!(expr.evaluate(&payload));
@@ -421,8 +447,14 @@ mod tests {
     #[test]
     fn test_filter_and_one_false() {
         let expr = FilterExpr::And(vec![
-            FilterExpr::FieldEquals { field: vec!["a".into()], value: serde_json::json!(1) },
-            FilterExpr::FieldEquals { field: vec!["b".into()], value: serde_json::json!(99) },
+            FilterExpr::FieldEquals {
+                field: vec!["a".into()],
+                value: serde_json::json!(1),
+            },
+            FilterExpr::FieldEquals {
+                field: vec!["b".into()],
+                value: serde_json::json!(99),
+            },
         ]);
         let payload = serde_json::json!({"a": 1, "b": 2});
         assert!(!expr.evaluate(&payload));
@@ -431,8 +463,14 @@ mod tests {
     #[test]
     fn test_filter_or_one_true() {
         let expr = FilterExpr::Or(vec![
-            FilterExpr::FieldEquals { field: vec!["a".into()], value: serde_json::json!(1) },
-            FilterExpr::FieldEquals { field: vec!["a".into()], value: serde_json::json!(99) },
+            FilterExpr::FieldEquals {
+                field: vec!["a".into()],
+                value: serde_json::json!(1),
+            },
+            FilterExpr::FieldEquals {
+                field: vec!["a".into()],
+                value: serde_json::json!(99),
+            },
         ]);
         let payload = serde_json::json!({"a": 1});
         assert!(expr.evaluate(&payload));
@@ -441,8 +479,14 @@ mod tests {
     #[test]
     fn test_filter_or_all_false() {
         let expr = FilterExpr::Or(vec![
-            FilterExpr::FieldEquals { field: vec!["a".into()], value: serde_json::json!(99) },
-            FilterExpr::FieldEquals { field: vec!["b".into()], value: serde_json::json!(98) },
+            FilterExpr::FieldEquals {
+                field: vec!["a".into()],
+                value: serde_json::json!(99),
+            },
+            FilterExpr::FieldEquals {
+                field: vec!["b".into()],
+                value: serde_json::json!(98),
+            },
         ]);
         let payload = serde_json::json!({"a": 1, "b": 2});
         assert!(!expr.evaluate(&payload));
@@ -499,7 +543,9 @@ mod tests {
         let event = EventBuilder::new("test.event")
             .unwrap()
             .build(vec![0, 1, 2, 3]);
-        let expr = FilterExpr::FieldExists { field: vec!["x".into()] };
+        let expr = FilterExpr::FieldExists {
+            field: vec!["x".into()],
+        };
         let filter = ContentFilter { expression: expr };
         assert!(!filter.evaluate(&event));
     }
@@ -518,7 +564,13 @@ mod tests {
 
     #[test]
     fn test_delivery_guarantee_variants() {
-        assert_ne!(DeliveryGuarantee::AtMostOnce as u8, DeliveryGuarantee::AtLeastOnce as u8);
-        assert_ne!(DeliveryGuarantee::AtLeastOnce as u8, DeliveryGuarantee::ExactlyOnce as u8);
+        assert_ne!(
+            DeliveryGuarantee::AtMostOnce as u8,
+            DeliveryGuarantee::AtLeastOnce as u8
+        );
+        assert_ne!(
+            DeliveryGuarantee::AtLeastOnce as u8,
+            DeliveryGuarantee::ExactlyOnce as u8
+        );
     }
 }

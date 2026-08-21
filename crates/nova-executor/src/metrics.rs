@@ -1,7 +1,7 @@
 use crate::types::*;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct PipelineMetrics {
     pub operations_total: AtomicU64,
@@ -207,7 +207,10 @@ impl PipelineMetrics {
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {
-        let hist = self.queue_wait_time_ns.lock().expect("metrics mutex poisoned");
+        let hist = self
+            .queue_wait_time_ns
+            .lock()
+            .expect("metrics mutex poisoned");
         MetricsSnapshot {
             operations_total: self.operations_total.load(Ordering::Relaxed),
             active_operations: self.active_operations.load(Ordering::Relaxed),

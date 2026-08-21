@@ -1,15 +1,15 @@
-use crate::types::*;
-use crate::middleware::{MiddlewareChain, MiddlewareRegistration, StageFn};
-use crate::rate_limiter::{RateLimiter, RateLimitConfig};
 use crate::circuit_breaker::{CircuitBreaker, CircuitState};
-use crate::operation_queue::OperationQueue;
 use crate::metrics::PipelineMetrics;
+use crate::middleware::{MiddlewareChain, MiddlewareRegistration, StageFn};
+use crate::operation_queue::OperationQueue;
+use crate::rate_limiter::{RateLimitConfig, RateLimiter};
+use crate::types::*;
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone)]
@@ -117,9 +117,7 @@ impl PipelineExecutor {
                 config.circuit_breaker_half_open_timeout_ms,
                 config.circuit_breaker_window_ms,
             )),
-            operation_queue: Arc::new(OperationQueue::new(
-                config.pipeline_queue_depth as usize,
-            )),
+            operation_queue: Arc::new(OperationQueue::new(config.pipeline_queue_depth as usize)),
             metrics: Arc::new(PipelineMetrics::new()),
             middleware: RwLock::new(MiddlewareChain::new()),
             max_concurrent: Semaphore::new(max_concurrent_ops as usize),
@@ -135,7 +133,10 @@ impl PipelineExecutor {
 
     pub async fn execute(&self, req: OperationRequest, ctx: OperationContext) -> OperationResponse {
         if !*self.is_running.read() {
-            return OperationResponse::error(ErrorCode::ServiceUnavailable, "pipeline is not running");
+            return OperationResponse::error(
+                ErrorCode::ServiceUnavailable,
+                "pipeline is not running",
+            );
         }
         if *self.is_draining.read() {
             return OperationResponse::error(ErrorCode::ServiceUnavailable, "pipeline is draining");
@@ -156,7 +157,9 @@ impl PipelineExecutor {
         let mut ctx = ctx;
         let mut req = req;
 
-        let timeout_ms = req.options.timeout
+        let timeout_ms = req
+            .options
+            .timeout
             .map(|d| d.as_millis() as u64)
             .unwrap_or(self.config.default_operation_timeout_ms);
         let clamped = timeout_ms.min(self.config.max_operation_timeout_ms);
@@ -164,18 +167,28 @@ impl PipelineExecutor {
 
         let response = self.run_pipeline(started_at, &mut ctx, &mut req);
 
-        self.metrics.record_operation(req.operation_type, response.status);
+        self.metrics
+            .record_operation(req.operation_type, response.status);
         self.total_operations.fetch_add(1, Ordering::Relaxed);
         self.active_operations.fetch_sub(1, Ordering::AcqRel);
 
         response
     }
 
-    fn run_pipeline(&self, started_at: Instant, ctx: &mut OperationContext, req: &mut OperationRequest) -> OperationResponse {
+    fn run_pipeline(
+        &self,
+        started_at: Instant,
+        ctx: &mut OperationContext,
+        req: &mut OperationRequest,
+    ) -> OperationResponse {
         // Stages 1-3: Parse, Validate, Authorize (pre-execution)
         let mut stage_result: Option<PipelineResult> = None;
 
-        for &stage in &[PipelineStage::Parse, PipelineStage::Validate, PipelineStage::Authorize] {
+        for &stage in &[
+            PipelineStage::Parse,
+            PipelineStage::Validate,
+            PipelineStage::Authorize,
+        ] {
             ctx.stage = stage;
             let stage_start = Instant::now();
             let stage_fn: StageFn = match stage {
@@ -202,7 +215,9 @@ impl PipelineExecutor {
 
         let exec_result = match stage_result {
             Some(PipelineResult::ShortCircuit(resp)) => return resp,
-            Some(PipelineResult::Error(e)) => return Self::build_error_response(ctx, started_at, e),
+            Some(PipelineResult::Error(e)) => {
+                return Self::build_error_response(ctx, started_at, e);
+            }
             None => self.execute_with_retry(ctx, req),
             _ => unreachable!(),
         };
@@ -210,60 +225,98 @@ impl PipelineExecutor {
         // Log and Notify run even on failure
         ctx.stage = PipelineStage::Log;
         let _ = self.middleware.read().run_chain(
-            PipelineStage::Log, ctx, req,
-            Arc::new(|ctx, req| { Self::log_stage(ctx, req); PipelineResult::Continue }),
+            PipelineStage::Log,
+            ctx,
+            req,
+            Arc::new(|ctx, req| {
+                Self::log_stage(ctx, req);
+                PipelineResult::Continue
+            }),
         );
 
         ctx.stage = PipelineStage::Notify;
         let _ = self.middleware.read().run_chain(
-            PipelineStage::Notify, ctx, req,
-            Arc::new(|ctx, req| { Self::notify_stage(ctx, req); PipelineResult::Continue }),
+            PipelineStage::Notify,
+            ctx,
+            req,
+            Arc::new(|ctx, req| {
+                Self::notify_stage(ctx, req);
+                PipelineResult::Continue
+            }),
         );
 
         let duration_ns = started_at.elapsed().as_nanos() as u64;
         match exec_result {
-            Ok(StageStatus::Success) | Ok(StageStatus::ShortCircuit) | Ok(StageStatus::Skipped) => OperationResponse {
-                status: StatusCode::Ok,
-                success: true,
-                data: None,
-                data_size: 0,
-                trace_id: ctx.trace_id,
-                duration_ns,
-                error: None,
-                warnings: Vec::new(),
-                stage_timings: Vec::new(),
-            },
+            Ok(StageStatus::Success) | Ok(StageStatus::ShortCircuit) | Ok(StageStatus::Skipped) => {
+                OperationResponse {
+                    status: StatusCode::Ok,
+                    success: true,
+                    data: None,
+                    data_size: 0,
+                    trace_id: ctx.trace_id,
+                    duration_ns,
+                    error: None,
+                    warnings: Vec::new(),
+                    stage_timings: Vec::new(),
+                }
+            }
             Err(e) => Self::build_error_response(ctx, started_at, e),
-            Ok(StageStatus::Error) => Self::build_error_response(ctx, started_at, PipelineError::new(ErrorCode::InternalError, "stage returned error status").with_stage(PipelineStage::Execute)),
+            Ok(StageStatus::Error) => Self::build_error_response(
+                ctx,
+                started_at,
+                PipelineError::new(ErrorCode::InternalError, "stage returned error status")
+                    .with_stage(PipelineStage::Execute),
+            ),
         }
     }
 
-    fn execute_with_retry(&self, ctx: &mut OperationContext, req: &mut OperationRequest) -> Result<StageStatus, PipelineError> {
+    fn execute_with_retry(
+        &self,
+        ctx: &mut OperationContext,
+        req: &mut OperationRequest,
+    ) -> Result<StageStatus, PipelineError> {
         let max_retries = req.options.max_retries.min(self.config.max_retries);
 
         let mut attempt: u8 = 0;
         loop {
             if attempt > 0 {
-                let delay = Self::calculate_backoff(attempt, self.config.retry_base_delay_ms, self.config.retry_max_delay_ms);
+                let delay = Self::calculate_backoff(
+                    attempt,
+                    self.config.retry_base_delay_ms,
+                    self.config.retry_max_delay_ms,
+                );
                 if ctx.remaining_deadline() <= delay {
-                    return Err(PipelineError::new(ErrorCode::DeadlineExceeded, "deadline exceeded before retry").with_stage(PipelineStage::Execute));
+                    return Err(PipelineError::new(
+                        ErrorCode::DeadlineExceeded,
+                        "deadline exceeded before retry",
+                    )
+                    .with_stage(PipelineStage::Execute));
                 }
                 let jitter_frac = (Instant::now().elapsed().as_nanos() % 26) as f64 / 100.0;
                 let jitter_ms = (delay.as_millis() as f64 * jitter_frac) as u64;
                 let actual = delay + Duration::from_millis(jitter_ms);
                 if ctx.remaining_deadline() <= actual {
-                    return Err(PipelineError::new(ErrorCode::DeadlineExceeded, "deadline exceeded before retry").with_stage(PipelineStage::Execute));
+                    return Err(PipelineError::new(
+                        ErrorCode::DeadlineExceeded,
+                        "deadline exceeded before retry",
+                    )
+                    .with_stage(PipelineStage::Execute));
                 }
                 std::thread::sleep(actual);
             }
 
             if ctx.is_expired() {
-                return Err(PipelineError::new(ErrorCode::DeadlineExceeded, "deadline exceeded").with_stage(PipelineStage::Execute));
+                return Err(
+                    PipelineError::new(ErrorCode::DeadlineExceeded, "deadline exceeded")
+                        .with_stage(PipelineStage::Execute),
+                );
             }
 
             ctx.retry_count = attempt;
             let subsystem = match &req.target {
-                OperationTarget::Object { .. } | OperationTarget::Collection { .. } => SubsystemId::Storage,
+                OperationTarget::Object { .. } | OperationTarget::Collection { .. } => {
+                    SubsystemId::Storage
+                }
                 OperationTarget::Queue { .. } => SubsystemId::Queue,
                 OperationTarget::Schedule { .. } => SubsystemId::Scheduler,
                 OperationTarget::Blob { .. } => SubsystemId::Blob,
@@ -275,21 +328,29 @@ impl PipelineExecutor {
             // Check circuit breaker state
             match self.circuit_breaker.state(&subsystem) {
                 CircuitState::Open(until) if Instant::now() < until => {
-                    return Err(PipelineError::new(ErrorCode::CircuitBreakerOpen, "circuit breaker is open").with_stage(PipelineStage::Execute));
+                    return Err(PipelineError::new(
+                        ErrorCode::CircuitBreakerOpen,
+                        "circuit breaker is open",
+                    )
+                    .with_stage(PipelineStage::Execute));
                 }
                 _ => {}
             }
 
             let stage_start = Instant::now();
             let execute_mw = self.middleware.read().run_chain(
-                PipelineStage::Execute, ctx, req,
+                PipelineStage::Execute,
+                ctx,
+                req,
                 Arc::new(Self::execute_stage),
             );
             ctx.stage_elapsed = stage_start.elapsed();
 
             match execute_mw {
                 PipelineResult::Continue => {
-                    let _ = self.circuit_breaker.execute(&subsystem, || Ok::<_, nova_core::RuntimeError>(()));
+                    let _ = self
+                        .circuit_breaker
+                        .execute(&subsystem, || Ok::<_, nova_core::RuntimeError>(()));
                     return Ok(StageStatus::Success);
                 }
                 PipelineResult::ShortCircuit(_) => {
@@ -306,7 +367,11 @@ impl PipelineExecutor {
         }
     }
 
-    fn build_error_response(ctx: &OperationContext, started_at: Instant, err: PipelineError) -> OperationResponse {
+    fn build_error_response(
+        ctx: &OperationContext,
+        started_at: Instant,
+        err: PipelineError,
+    ) -> OperationResponse {
         let status = match err.code {
             ErrorCode::ParseError => StatusCode::BadRequest,
             ErrorCode::ValidationError => StatusCode::UnprocessableEntity,
@@ -325,9 +390,14 @@ impl PipelineExecutor {
             ErrorCode::NotImplemented => StatusCode::NotImplemented,
             ErrorCode::InsufficientStorage => StatusCode::InsufficientStorage,
         };
-        let retryable = matches!(err.code, ErrorCode::RateLimited
-            | ErrorCode::CircuitBreakerOpen | ErrorCode::DeadlineExceeded
-            | ErrorCode::ServiceUnavailable | ErrorCode::InternalError);
+        let retryable = matches!(
+            err.code,
+            ErrorCode::RateLimited
+                | ErrorCode::CircuitBreakerOpen
+                | ErrorCode::DeadlineExceeded
+                | ErrorCode::ServiceUnavailable
+                | ErrorCode::InternalError
+        );
         OperationResponse {
             status,
             success: false,
@@ -354,8 +424,11 @@ impl PipelineExecutor {
         }
         if req.payload_size > 10 * 1024 * 1024 {
             return PipelineResult::Error(
-                PipelineError::new(ErrorCode::PayloadTooLarge, format!("payload size {} exceeds limit", req.payload_size))
-                    .with_stage(PipelineStage::Parse)
+                PipelineError::new(
+                    ErrorCode::PayloadTooLarge,
+                    format!("payload size {} exceeds limit", req.payload_size),
+                )
+                .with_stage(PipelineStage::Parse),
             );
         }
         PipelineResult::Continue
@@ -365,8 +438,11 @@ impl PipelineExecutor {
         ctx.stage = PipelineStage::Validate;
         if req.payload_size > 0 && req.payload.is_none() {
             return PipelineResult::Error(
-                PipelineError::new(ErrorCode::ValidationError, "payload_size > 0 but no payload provided")
-                    .with_stage(PipelineStage::Validate)
+                PipelineError::new(
+                    ErrorCode::ValidationError,
+                    "payload_size > 0 but no payload provided",
+                )
+                .with_stage(PipelineStage::Validate),
             );
         }
         let target_valid = match &req.target {
@@ -382,14 +458,17 @@ impl PipelineExecutor {
         if !target_valid {
             return PipelineResult::Error(
                 PipelineError::new(ErrorCode::ValidationError, "invalid operation target")
-                    .with_stage(PipelineStage::Validate)
+                    .with_stage(PipelineStage::Validate),
             );
         }
         if let Some(timeout) = req.options.timeout {
             if timeout.as_millis() as u64 > 3_600_000 {
                 return PipelineResult::Error(
-                    PipelineError::new(ErrorCode::ValidationError, "operation timeout exceeds maximum")
-                        .with_stage(PipelineStage::Validate)
+                    PipelineError::new(
+                        ErrorCode::ValidationError,
+                        "operation timeout exceeds maximum",
+                    )
+                    .with_stage(PipelineStage::Validate),
                 );
             }
         }
@@ -399,13 +478,22 @@ impl PipelineExecutor {
     fn authorize_stage(ctx: &mut OperationContext, req: &mut OperationRequest) -> PipelineResult {
         ctx.stage = PipelineStage::Authorize;
         if req.operation_type.is_mutation() {
-            let authorized = ctx.user_session.as_ref()
-                .map(|s| s.permissions.iter().any(|p| p.contains("write") || p.contains("admin")))
+            let authorized = ctx
+                .user_session
+                .as_ref()
+                .map(|s| {
+                    s.permissions
+                        .iter()
+                        .any(|p| p.contains("write") || p.contains("admin"))
+                })
                 .unwrap_or(false);
             if !authorized {
                 return PipelineResult::Error(
-                    PipelineError::new(ErrorCode::AuthorizationError, "insufficient permissions for mutation operation")
-                        .with_stage(PipelineStage::Authorize)
+                    PipelineError::new(
+                        ErrorCode::AuthorizationError,
+                        "insufficient permissions for mutation operation",
+                    )
+                    .with_stage(PipelineStage::Authorize),
                 );
             }
         }
@@ -416,12 +504,17 @@ impl PipelineExecutor {
         ctx.stage = PipelineStage::Execute;
         if ctx.is_expired() {
             return PipelineResult::Error(
-                PipelineError::new(ErrorCode::DeadlineExceeded, "deadline exceeded before execution")
-                    .with_stage(PipelineStage::Execute)
+                PipelineError::new(
+                    ErrorCode::DeadlineExceeded,
+                    "deadline exceeded before execution",
+                )
+                .with_stage(PipelineStage::Execute),
             );
         }
         ctx.subsystem = match &req.target {
-            OperationTarget::Object { .. } | OperationTarget::Collection { .. } => SubsystemId::Storage,
+            OperationTarget::Object { .. } | OperationTarget::Collection { .. } => {
+                SubsystemId::Storage
+            }
             OperationTarget::Queue { .. } => SubsystemId::Queue,
             OperationTarget::Schedule { .. } => SubsystemId::Scheduler,
             OperationTarget::Blob { .. } => SubsystemId::Blob,
@@ -432,11 +525,9 @@ impl PipelineExecutor {
         PipelineResult::Continue
     }
 
-    fn log_stage(_ctx: &mut OperationContext, _req: &mut OperationRequest) {
-    }
+    fn log_stage(_ctx: &mut OperationContext, _req: &mut OperationRequest) {}
 
-    fn notify_stage(_ctx: &mut OperationContext, _req: &mut OperationRequest) {
-    }
+    fn notify_stage(_ctx: &mut OperationContext, _req: &mut OperationRequest) {}
 
     fn calculate_backoff(attempt: u8, base_ms: u64, max_ms: u64) -> Duration {
         let exponent = attempt.saturating_sub(1) as u32;
@@ -493,7 +584,11 @@ impl PipelineExecutor {
         }
         let cache = self.idempotency_cache.read();
         cache.get(&key).and_then(|(resp, expires)| {
-            if Instant::now() < *expires { Some(resp.clone()) } else { None }
+            if Instant::now() < *expires {
+                Some(resp.clone())
+            } else {
+                None
+            }
         })
     }
 
@@ -512,14 +607,14 @@ impl PipelineExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ErrorCode;
     use crate::OperationRequest;
     use crate::OperationTarget;
     use crate::OperationType;
-    use crate::UserSession;
-    use crate::ErrorCode;
     use crate::PipelineStage;
-    use std::collections::HashMap;
+    use crate::UserSession;
     use crate::context::OperationContextBuilder;
+    use std::collections::HashMap;
     use std::net::SocketAddr;
 
     fn test_addr() -> SocketAddr {
@@ -590,7 +685,10 @@ mod tests {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(
             OperationType::Get,
-            OperationTarget::Object { type_name: "user".into(), id: Some(1) },
+            OperationTarget::Object {
+                type_name: "user".into(),
+                id: Some(1),
+            },
         );
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
         assert_eq!(result, PipelineResult::Continue);
@@ -601,7 +699,10 @@ mod tests {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(
             OperationType::Get,
-            OperationTarget::Object { type_name: "".into(), id: None },
+            OperationTarget::Object {
+                type_name: "".into(),
+                id: None,
+            },
         );
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
         match result {
@@ -618,7 +719,9 @@ mod tests {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(
             OperationType::Get,
-            OperationTarget::Collection { type_name: "".into() },
+            OperationTarget::Collection {
+                type_name: "".into(),
+            },
         );
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
         match result {
@@ -658,10 +761,7 @@ mod tests {
     #[test]
     fn test_validate_stage_timeout_exceeds_maximum() {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
-        let mut req = OperationRequest::new(
-            OperationType::Get,
-            OperationTarget::System,
-        );
+        let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
         req.options.timeout = Some(Duration::from_millis(3_600_001));
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
         match result {
@@ -676,10 +776,7 @@ mod tests {
     #[test]
     fn test_validate_stage_valid_timeout() {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
-        let mut req = OperationRequest::new(
-            OperationType::Get,
-            OperationTarget::System,
-        );
+        let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
         req.options.timeout = Some(Duration::from_millis(100));
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
         assert_eq!(result, PipelineResult::Continue);
@@ -688,10 +785,7 @@ mod tests {
     #[test]
     fn test_validate_stage_payload_size_without_payload() {
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
-        let mut req = OperationRequest::new(
-            OperationType::Get,
-            OperationTarget::System,
-        );
+        let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
         req.payload_size = 100;
         req.payload = None;
         let result = PipelineExecutor::validate_stage(&mut ctx, &mut req);
@@ -810,21 +904,34 @@ mod tests {
             (ErrorCode::NotFound, StatusCode::NotFound),
             (ErrorCode::Conflict, StatusCode::Conflict),
             (ErrorCode::RateLimited, StatusCode::TooManyRequests),
-            (ErrorCode::CircuitBreakerOpen, StatusCode::ServiceUnavailable),
+            (
+                ErrorCode::CircuitBreakerOpen,
+                StatusCode::ServiceUnavailable,
+            ),
             (ErrorCode::DeadlineExceeded, StatusCode::DeadlineExceeded),
             (ErrorCode::Cancelled, StatusCode::Cancelled),
             (ErrorCode::PayloadTooLarge, StatusCode::RequestTooLarge),
             (ErrorCode::Unprocessable, StatusCode::UnprocessableEntity),
             (ErrorCode::InternalError, StatusCode::InternalError),
-            (ErrorCode::ServiceUnavailable, StatusCode::ServiceUnavailable),
+            (
+                ErrorCode::ServiceUnavailable,
+                StatusCode::ServiceUnavailable,
+            ),
             (ErrorCode::NotImplemented, StatusCode::NotImplemented),
-            (ErrorCode::InsufficientStorage, StatusCode::InsufficientStorage),
+            (
+                ErrorCode::InsufficientStorage,
+                StatusCode::InsufficientStorage,
+            ),
         ];
 
         for (code, expected_status) in test_cases {
             let err = PipelineError::new(code, "test message");
             let resp = PipelineExecutor::build_error_response(&ctx, started_at, err);
-            assert_eq!(resp.status, expected_status, "mismatch for error code {:?}", code);
+            assert_eq!(
+                resp.status, expected_status,
+                "mismatch for error code {:?}",
+                code
+            );
             assert!(!resp.success);
             assert!(resp.error.is_some());
             assert_eq!(resp.error.as_ref().unwrap().code, code);
@@ -856,13 +963,21 @@ mod tests {
         for code in retryable_codes {
             let err = PipelineError::new(code, "msg");
             let resp = PipelineExecutor::build_error_response(&ctx, started_at, err);
-            assert!(resp.error.as_ref().unwrap().retryable, "{:?} should be retryable", code);
+            assert!(
+                resp.error.as_ref().unwrap().retryable,
+                "{:?} should be retryable",
+                code
+            );
         }
 
         for code in non_retryable_codes {
             let err = PipelineError::new(code, "msg");
             let resp = PipelineExecutor::build_error_response(&ctx, started_at, err);
-            assert!(!resp.error.as_ref().unwrap().retryable, "{:?} should NOT be retryable", code);
+            assert!(
+                !resp.error.as_ref().unwrap().retryable,
+                "{:?} should NOT be retryable",
+                code
+            );
         }
     }
 
@@ -892,14 +1007,23 @@ mod tests {
 
     #[test]
     fn test_register_and_unregister_middleware() {
-        use crate::middleware::{MiddlewareRegistration, Middleware};
+        use crate::middleware::{Middleware, MiddlewareRegistration};
         use std::sync::Arc;
 
         struct DummyMiddleware;
         impl Middleware for DummyMiddleware {
-            fn name(&self) -> &'static str { "dummy" }
-            fn stage(&self) -> PipelineStage { PipelineStage::Parse }
-            fn handle(&self, _ctx: &mut OperationContext, _req: &mut OperationRequest, next: &dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult) -> PipelineResult {
+            fn name(&self) -> &'static str {
+                "dummy"
+            }
+            fn stage(&self) -> PipelineStage {
+                PipelineStage::Parse
+            }
+            fn handle(
+                &self,
+                _ctx: &mut OperationContext,
+                _req: &mut OperationRequest,
+                next: &dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult,
+            ) -> PipelineResult {
                 next(_ctx, _req)
             }
         }
@@ -917,14 +1041,18 @@ mod tests {
         };
 
         assert!(executor.register_middleware(reg).is_ok());
-        assert!(executor.register_middleware(MiddlewareRegistration {
-            name: "dummy".into(),
-            stage: PipelineStage::Parse,
-            order: 0,
-            middleware: Arc::new(DummyMiddleware),
-            enabled: true,
-            config: HashMap::new(),
-        }).is_err());
+        assert!(
+            executor
+                .register_middleware(MiddlewareRegistration {
+                    name: "dummy".into(),
+                    stage: PipelineStage::Parse,
+                    order: 0,
+                    middleware: Arc::new(DummyMiddleware),
+                    enabled: true,
+                    config: HashMap::new(),
+                })
+                .is_err()
+        );
 
         assert!(executor.unregister_middleware("dummy").is_ok());
         assert!(executor.unregister_middleware("nonexistent").is_err());
@@ -953,7 +1081,10 @@ mod tests {
             .build();
         let mut req = OperationRequest::new(
             OperationType::Get,
-            OperationTarget::Object { type_name: "user".into(), id: None },
+            OperationTarget::Object {
+                type_name: "user".into(),
+                id: None,
+            },
         );
         let result = PipelineExecutor::execute_stage(&mut ctx, &mut req);
         assert_eq!(result, PipelineResult::Continue);

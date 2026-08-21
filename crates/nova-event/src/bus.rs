@@ -1,13 +1,12 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
-use uuid::Uuid;
-use crossbeam::channel;
-use crate::{
-    Event, EventId, EventMetadata, EventSource, EventPriority, Subsystem,
-    Subscription, SubscriptionTrie, DeadLetterQueue,
-    DeadLetterEntry, EventError, Result,
-};
 use crate::store::{EventStore, ReplayCursor};
+use crate::{
+    DeadLetterEntry, DeadLetterQueue, Event, EventError, EventId, EventMetadata, EventPriority,
+    EventSource, Result, Subscription, SubscriptionTrie, Subsystem,
+};
+use crossbeam::channel;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
@@ -93,7 +92,12 @@ pub struct EventBus {
 }
 
 impl EventBus {
-    pub fn new(shard_count: u16, overflow_policy: OverflowPolicy, max_payload_size: u64, store_max_entries: usize) -> Self {
+    pub fn new(
+        shard_count: u16,
+        overflow_policy: OverflowPolicy,
+        max_payload_size: u64,
+        store_max_entries: usize,
+    ) -> Self {
         EventBus {
             trie: Arc::new(SubscriptionTrie::new()),
             shard_count,
@@ -126,7 +130,9 @@ impl EventBus {
         event.metadata.timestamp = timestamp;
         event.metadata.payload_size = payload_size as u32;
 
-        self.metrics.events_published_total.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .events_published_total
+            .fetch_add(1, Ordering::Relaxed);
 
         let subscriptions = self.trie.lookup(&event.metadata.event_type);
         let event = Arc::new(event);
@@ -144,9 +150,9 @@ impl EventBus {
 
             let _shard = match &event.metadata.ordering_key {
                 Some(key) => {
-                    let hash = key.bytes().fold(0u64, |acc, b| {
-                        acc.wrapping_mul(31).wrapping_add(b as u64)
-                    });
+                    let hash = key
+                        .bytes()
+                        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
                     hash % self.shard_count as u64
                 }
                 None => {
@@ -157,31 +163,35 @@ impl EventBus {
 
             match sub.sender.try_send((*event).clone()) {
                 Ok(()) => {
-                    self.metrics.events_delivered_total.fetch_add(1, Ordering::Relaxed);
+                    self.metrics
+                        .events_delivered_total
+                        .fetch_add(1, Ordering::Relaxed);
                 }
-                Err(channel::TrySendError::Full(_)) => {
-                    match self.overflow_policy {
-                        OverflowPolicy::DropNewest | OverflowPolicy::DropOldest => {
-                            self.metrics.queue_dropped_total.fetch_add(1, Ordering::Relaxed);
-                        }
-                        OverflowPolicy::RejectPublisher => {
-                            self.metrics.queue_rejected_total.fetch_add(1, Ordering::Relaxed);
-                            return Err(EventError::BusFull(
-                                "subscriber channel at capacity".into(),
-                            ));
-                        }
-                        OverflowPolicy::BlockPublisher => {
-                            match sub.sender.send((*event).clone()) {
-                                Ok(()) => {
-                                    self.metrics.events_delivered_total.fetch_add(1, Ordering::Relaxed);
-                                }
-                                Err(_) => {
-                                    self.metrics.queue_dropped_total.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                        }
+                Err(channel::TrySendError::Full(_)) => match self.overflow_policy {
+                    OverflowPolicy::DropNewest | OverflowPolicy::DropOldest => {
+                        self.metrics
+                            .queue_dropped_total
+                            .fetch_add(1, Ordering::Relaxed);
                     }
-                }
+                    OverflowPolicy::RejectPublisher => {
+                        self.metrics
+                            .queue_rejected_total
+                            .fetch_add(1, Ordering::Relaxed);
+                        return Err(EventError::BusFull("subscriber channel at capacity".into()));
+                    }
+                    OverflowPolicy::BlockPublisher => match sub.sender.send((*event).clone()) {
+                        Ok(()) => {
+                            self.metrics
+                                .events_delivered_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            self.metrics
+                                .queue_dropped_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    },
+                },
                 Err(channel::TrySendError::Disconnected(_)) => {
                     let _ = self.dead_letter_queue.push(DeadLetterEntry {
                         event: (*event).clone(),
@@ -205,14 +215,18 @@ impl EventBus {
     pub fn subscribe(&self, sub: Subscription) -> Result<()> {
         let topic = sub.topic.clone();
         self.trie.insert(&topic, sub)?;
-        self.metrics.subscriber_count.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .subscriber_count
+            .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     pub fn unsubscribe(&self, sub_id: Uuid) -> bool {
         let removed = self.trie.remove(sub_id);
         if removed {
-            self.metrics.subscriber_count.fetch_sub(1, Ordering::Relaxed);
+            self.metrics
+                .subscriber_count
+                .fetch_sub(1, Ordering::Relaxed);
         }
         removed
     }
@@ -230,9 +244,7 @@ impl EventBus {
     }
 
     pub fn subscriber_count(&self) -> usize {
-        self.metrics
-            .subscriber_count
-            .load(Ordering::Relaxed) as usize
+        self.metrics.subscriber_count.load(Ordering::Relaxed) as usize
     }
 
     pub fn publish_with_key(&self, mut event: Event, ordering_key: &str) -> Result<EventId> {
@@ -258,12 +270,19 @@ impl EventBus {
         Arc::clone(&self.event_store)
     }
 
-    pub fn replay(&self, subscriber_id: &crate::SubscriberId, cursor: ReplayCursor) -> Result<ReplayCursor> {
+    pub fn replay(
+        &self,
+        subscriber_id: &crate::SubscriberId,
+        cursor: ReplayCursor,
+    ) -> Result<ReplayCursor> {
         let all_subs = self.trie.all_subscriptions();
-        let subs: Vec<&Subscription> = all_subs.iter()
-            .filter(|s| s.subscriber.id == subscriber_id.id
-                && s.subscriber.subsystem == subscriber_id.subsystem
-                && s.subscriber.name == subscriber_id.name)
+        let subs: Vec<&Subscription> = all_subs
+            .iter()
+            .filter(|s| {
+                s.subscriber.id == subscriber_id.id
+                    && s.subscriber.subsystem == subscriber_id.subsystem
+                    && s.subscriber.name == subscriber_id.name
+            })
             .collect();
 
         if subs.is_empty() {
@@ -275,7 +294,9 @@ impl EventBus {
         let mut checkpoint_count = 0u64;
 
         loop {
-            let stored_events = self.event_store.scan_from(current.last_processed_offset + 1, limit);
+            let stored_events = self
+                .event_store
+                .scan_from(current.last_processed_offset + 1, limit);
             if stored_events.is_empty() {
                 break;
             }
@@ -326,8 +347,12 @@ impl EventBus {
 
                     match sub.sender.try_send(event) {
                         Ok(()) => {
-                            self.metrics.events_delivered_total.fetch_add(1, Ordering::Relaxed);
-                            self.metrics.replay_events_total.fetch_add(1, Ordering::Relaxed);
+                            self.metrics
+                                .events_delivered_total
+                                .fetch_add(1, Ordering::Relaxed);
+                            self.metrics
+                                .replay_events_total
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                         Err(_) => continue,
                     }
@@ -355,12 +380,14 @@ impl EventBus {
 mod tests {
     use super::*;
     use crate::{
-        Subscription, TopicPattern, DeliveryGuarantee,
-        SubscriberId, EventBuilder, ReplayCursor,
+        DeliveryGuarantee, EventBuilder, ReplayCursor, SubscriberId, Subscription, TopicPattern,
     };
     use uuid::Uuid;
 
-    fn make_sub(topic: &str, capacity: usize) -> (Subscription, crossbeam::channel::Receiver<Event>) {
+    fn make_sub(
+        topic: &str,
+        capacity: usize,
+    ) -> (Subscription, crossbeam::channel::Receiver<Event>) {
         let (tx, rx) = crossbeam::channel::bounded(capacity);
         let sub = Subscription {
             id: Uuid::new_v4(),
@@ -408,7 +435,10 @@ mod tests {
         bus.publish(event).unwrap();
 
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+        assert_eq!(
+            received.metadata.event_type.canonical,
+            "test.event.occurred"
+        );
     }
 
     #[test]
@@ -466,16 +496,16 @@ mod tests {
         let (sub, _rx) = make_sub("test.event.occurred", 16);
         bus.subscribe(sub).unwrap();
 
-        let err = bus.publish(make_event_with_payload(vec![0u8; 20])).unwrap_err();
+        let err = bus
+            .publish(make_event_with_payload(vec![0u8; 20]))
+            .unwrap_err();
         assert!(matches!(err, EventError::PayloadTooLarge { .. }));
     }
 
     #[test]
     fn test_bus_invalid_topic_too_short() {
         let bus = EventBus::new(1, OverflowPolicy::DropNewest, 1024 * 1024, 1000);
-        let event = EventBuilder::new("short")
-            .unwrap()
-            .build(vec![]);
+        let event = EventBuilder::new("short").unwrap().build(vec![]);
         let err = bus.publish(event).unwrap_err();
         assert!(matches!(err, EventError::InvalidEventType(_)));
     }
@@ -502,7 +532,10 @@ mod tests {
 
         bus.publish(make_event()).unwrap();
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+        assert_eq!(
+            received.metadata.event_type.canonical,
+            "test.event.occurred"
+        );
     }
 
     #[test]
@@ -513,7 +546,10 @@ mod tests {
 
         bus.publish(make_event()).unwrap();
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.metadata.event_type.canonical, "test.event.occurred");
+        assert_eq!(
+            received.metadata.event_type.canonical,
+            "test.event.occurred"
+        );
     }
 
     #[test]

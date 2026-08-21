@@ -1,10 +1,10 @@
 use crate::types::*;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
-use std::fmt;
 
 pub type CompletionSender = mpsc::Sender<OperationResponse>;
 
@@ -253,18 +253,22 @@ impl fmt::Debug for OperationQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::OperationContextBuilder;
     use crate::OperationRequest;
-    use crate::OperationType;
     use crate::OperationTarget;
+    use crate::OperationType;
     use crate::Priority;
+    use crate::context::OperationContextBuilder;
     use std::net::SocketAddr;
-    use std::time::{Duration, Instant};
     use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
-    fn test_addr() -> SocketAddr { "127.0.0.1:8080".parse().unwrap() }
+    fn test_addr() -> SocketAddr {
+        "127.0.0.1:8080".parse().unwrap()
+    }
 
-    fn make_pending_op(priority: Priority) -> (PendingOperation, mpsc::Receiver<OperationResponse>) {
+    fn make_pending_op(
+        priority: Priority,
+    ) -> (PendingOperation, mpsc::Receiver<OperationResponse>) {
         let (tx, rx) = mpsc::channel();
         let ctx = OperationContextBuilder::new(test_addr())
             .priority(priority)

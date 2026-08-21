@@ -1,10 +1,10 @@
 use crate::types::*;
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use dashmap::DashMap;
-use parking_lot::RwLock;
 
 #[derive(Debug)]
 struct AtomicF64 {
@@ -13,7 +13,9 @@ struct AtomicF64 {
 
 impl AtomicF64 {
     fn new(val: f64) -> Self {
-        Self { inner: AtomicU64::new(val.to_bits()) }
+        Self {
+            inner: AtomicU64::new(val.to_bits()),
+        }
     }
 
     fn load(&self, order: Ordering) -> f64 {
@@ -28,15 +30,29 @@ impl AtomicF64 {
         let mut old = self.load(Ordering::Relaxed);
         loop {
             let new = old + val;
-            match self.inner.compare_exchange(old.to_bits(), new.to_bits(), order, Ordering::Relaxed) {
+            match self.inner.compare_exchange(
+                old.to_bits(),
+                new.to_bits(),
+                order,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => return old,
                 Err(bits) => old = f64::from_bits(bits),
             }
         }
     }
 
-    fn compare_exchange(&self, current: f64, new: f64, success: Ordering, failure: Ordering) -> Result<f64, f64> {
-        match self.inner.compare_exchange(current.to_bits(), new.to_bits(), success, failure) {
+    fn compare_exchange(
+        &self,
+        current: f64,
+        new: f64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<f64, f64> {
+        match self
+            .inner
+            .compare_exchange(current.to_bits(), new.to_bits(), success, failure)
+        {
             Ok(_) => Ok(current),
             Err(bits) => Err(f64::from_bits(bits)),
         }
@@ -85,7 +101,12 @@ impl TokenBucket {
             if current < tokens {
                 return false;
             }
-            match self.tokens.compare_exchange(current, current - tokens, Ordering::Release, Ordering::Relaxed) {
+            match self.tokens.compare_exchange(
+                current,
+                current - tokens,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => return true,
                 Err(_) => continue,
             }
@@ -209,7 +230,10 @@ impl RateLimiter {
         Ok(())
     }
 
-    fn get_or_create_user_bucket(&self, user_id: u128) -> dashmap::mapref::one::RefMut<'_, u128, TokenBucket> {
+    fn get_or_create_user_bucket(
+        &self,
+        user_id: u128,
+    ) -> dashmap::mapref::one::RefMut<'_, u128, TokenBucket> {
         if !self.per_user.contains_key(&user_id) && self.per_user.len() >= self.max_tracked_users {
             if let Some(entry) = self.per_user.iter().next() {
                 let key = *entry.key();
@@ -223,7 +247,10 @@ impl RateLimiter {
         })
     }
 
-    fn get_or_create_ip_bucket(&self, ip: IpAddr) -> dashmap::mapref::one::RefMut<'_, IpAddr, TokenBucket> {
+    fn get_or_create_ip_bucket(
+        &self,
+        ip: IpAddr,
+    ) -> dashmap::mapref::one::RefMut<'_, IpAddr, TokenBucket> {
         if !self.per_ip.contains_key(&ip) && self.per_ip.len() >= self.max_tracked_ips {
             if let Some(entry) = self.per_ip.iter().next() {
                 let key = *entry.key();
@@ -237,7 +264,10 @@ impl RateLimiter {
         })
     }
 
-    fn get_or_create_operation_bucket(&self, op: OperationType) -> dashmap::mapref::one::RefMut<'_, OperationType, TokenBucket> {
+    fn get_or_create_operation_bucket(
+        &self,
+        op: OperationType,
+    ) -> dashmap::mapref::one::RefMut<'_, OperationType, TokenBucket> {
         self.per_operation.entry(op).or_insert_with(|| {
             let cfg = self.config.read();
             let rate = cfg.operation_limits.get(&op).copied().unwrap_or(1000.0);
@@ -273,11 +303,11 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::OperationContextBuilder;
     use crate::OperationRequest;
-    use crate::OperationType;
     use crate::OperationTarget;
+    use crate::OperationType;
     use crate::UserSession;
+    use crate::context::OperationContextBuilder;
     use std::collections::HashMap;
     use std::net::SocketAddr;
 

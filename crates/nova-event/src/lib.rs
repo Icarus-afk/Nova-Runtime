@@ -1,18 +1,18 @@
-pub mod event;
-pub mod subscription;
-pub mod trie;
 pub mod bus;
 pub mod dead_letter;
+pub mod event;
 pub mod middleware;
 pub mod store;
+pub mod subscription;
+pub mod trie;
 
-pub use event::*;
-pub use subscription::*;
-pub use trie::*;
 pub use bus::*;
 pub use dead_letter::*;
+pub use event::*;
 pub use middleware::*;
-pub use store::{StoredEvent, ReplayCursor, EventStore};
+pub use store::{EventStore, ReplayCursor, StoredEvent};
+pub use subscription::*;
+pub use trie::*;
 
 use thiserror::Error;
 

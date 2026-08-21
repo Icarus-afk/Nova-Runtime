@@ -1,36 +1,73 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OperationType {
-    Get, List, Create, Update, Delete, Patch,
-    Query, Search,
-    Enqueue, Dequeue, Peek, Ack,
-    Schedule, Cancel,
-    BlobPut, BlobGet, BlobDelete,
-    Authenticate, Authorize, CreateToken, RevokeToken,
-    Health, Metrics, Config, Profile, AdminAction,
+    Get,
+    List,
+    Create,
+    Update,
+    Delete,
+    Patch,
+    Query,
+    Search,
+    Enqueue,
+    Dequeue,
+    Peek,
+    Ack,
+    Schedule,
+    Cancel,
+    BlobPut,
+    BlobGet,
+    BlobDelete,
+    Authenticate,
+    Authorize,
+    CreateToken,
+    RevokeToken,
+    Health,
+    Metrics,
+    Config,
+    Profile,
+    AdminAction,
 }
 
 impl OperationType {
     pub fn is_mutation(&self) -> bool {
-        matches!(self, OperationType::Create | OperationType::Update
-            | OperationType::Delete | OperationType::Patch
-            | OperationType::Enqueue | OperationType::Dequeue
-            | OperationType::Ack | OperationType::Schedule
-            | OperationType::Cancel | OperationType::BlobPut
-            | OperationType::BlobDelete | OperationType::CreateToken
-            | OperationType::RevokeToken | OperationType::AdminAction)
+        matches!(
+            self,
+            OperationType::Create
+                | OperationType::Update
+                | OperationType::Delete
+                | OperationType::Patch
+                | OperationType::Enqueue
+                | OperationType::Dequeue
+                | OperationType::Ack
+                | OperationType::Schedule
+                | OperationType::Cancel
+                | OperationType::BlobPut
+                | OperationType::BlobDelete
+                | OperationType::CreateToken
+                | OperationType::RevokeToken
+                | OperationType::AdminAction
+        )
     }
 
     pub fn is_read(&self) -> bool {
-        matches!(self, OperationType::Get | OperationType::List
-            | OperationType::Peek | OperationType::BlobGet
-            | OperationType::Health | OperationType::Metrics
-            | OperationType::Config | OperationType::Profile
-            | OperationType::Query | OperationType::Search)
+        matches!(
+            self,
+            OperationType::Get
+                | OperationType::List
+                | OperationType::Peek
+                | OperationType::BlobGet
+                | OperationType::Health
+                | OperationType::Metrics
+                | OperationType::Config
+                | OperationType::Profile
+                | OperationType::Query
+                | OperationType::Search
+        )
     }
 }
 
@@ -109,7 +146,9 @@ pub enum Consistency {
 }
 
 impl Default for Consistency {
-    fn default() -> Self { Consistency::Strong }
+    fn default() -> Self {
+        Consistency::Strong
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -120,7 +159,9 @@ pub enum Durability {
 }
 
 impl Default for Durability {
-    fn default() -> Self { Durability::Sync }
+    fn default() -> Self {
+        Durability::Sync
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -151,24 +192,40 @@ pub enum StatusCode {
 
 impl StatusCode {
     pub fn is_success(&self) -> bool {
-        matches!(self, StatusCode::Ok | StatusCode::Created
-            | StatusCode::Accepted | StatusCode::NoContent)
+        matches!(
+            self,
+            StatusCode::Ok | StatusCode::Created | StatusCode::Accepted | StatusCode::NoContent
+        )
     }
 
     pub fn is_client_error(&self) -> bool {
-        matches!(self, StatusCode::BadRequest | StatusCode::Unauthorized
-            | StatusCode::Forbidden | StatusCode::NotFound
-            | StatusCode::MethodNotAllowed | StatusCode::Conflict
-            | StatusCode::Gone | StatusCode::TooManyRequests
-            | StatusCode::RequestTooLarge | StatusCode::UnprocessableEntity
-            | StatusCode::Cancelled)
+        matches!(
+            self,
+            StatusCode::BadRequest
+                | StatusCode::Unauthorized
+                | StatusCode::Forbidden
+                | StatusCode::NotFound
+                | StatusCode::MethodNotAllowed
+                | StatusCode::Conflict
+                | StatusCode::Gone
+                | StatusCode::TooManyRequests
+                | StatusCode::RequestTooLarge
+                | StatusCode::UnprocessableEntity
+                | StatusCode::Cancelled
+        )
     }
 
     pub fn is_server_error(&self) -> bool {
-        matches!(self, StatusCode::InternalError | StatusCode::NotImplemented
-            | StatusCode::ServiceUnavailable | StatusCode::GatewayTimeout
-            | StatusCode::InsufficientStorage | StatusCode::CircuitBreakerOpen
-            | StatusCode::DeadlineExceeded)
+        matches!(
+            self,
+            StatusCode::InternalError
+                | StatusCode::NotImplemented
+                | StatusCode::ServiceUnavailable
+                | StatusCode::GatewayTimeout
+                | StatusCode::InsufficientStorage
+                | StatusCode::CircuitBreakerOpen
+                | StatusCode::DeadlineExceeded
+        )
     }
 }
 
@@ -201,7 +258,9 @@ pub struct OperationOptions {
     pub tracing: bool,
 }
 
-fn default_max_retries() -> u8 { 3 }
+fn default_max_retries() -> u8 {
+    3
+}
 
 impl Default for OperationOptions {
     fn default() -> Self {
@@ -329,9 +388,14 @@ impl OperationResponse {
             ErrorCode::NotImplemented => StatusCode::NotImplemented,
             ErrorCode::InsufficientStorage => StatusCode::InsufficientStorage,
         };
-        let retryable = matches!(code, ErrorCode::RateLimited
-            | ErrorCode::CircuitBreakerOpen | ErrorCode::DeadlineExceeded
-            | ErrorCode::ServiceUnavailable | ErrorCode::InternalError);
+        let retryable = matches!(
+            code,
+            ErrorCode::RateLimited
+                | ErrorCode::CircuitBreakerOpen
+                | ErrorCode::DeadlineExceeded
+                | ErrorCode::ServiceUnavailable
+                | ErrorCode::InternalError
+        );
         OperationResponse {
             status,
             success: false,
@@ -421,9 +485,13 @@ impl PipelineError {
             message: msg,
             details: serde_json::Value::Null,
             stage: PipelineStage::Parse,
-            retryable: matches!(code, ErrorCode::RateLimited
-                | ErrorCode::CircuitBreakerOpen | ErrorCode::DeadlineExceeded
-                | ErrorCode::ServiceUnavailable),
+            retryable: matches!(
+                code,
+                ErrorCode::RateLimited
+                    | ErrorCode::CircuitBreakerOpen
+                    | ErrorCode::DeadlineExceeded
+                    | ErrorCode::ServiceUnavailable
+            ),
         }
     }
 

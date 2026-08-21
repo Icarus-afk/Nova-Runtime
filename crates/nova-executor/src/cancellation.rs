@@ -1,6 +1,6 @@
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::fmt;
 
 #[derive(Clone)]
 pub struct CancellationToken {
@@ -34,7 +34,11 @@ impl CancellationToken {
         self.inner.cancelled.store(true, Ordering::Release);
 
         let callbacks = {
-            let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
+            let mut guard = self
+                .inner
+                .callbacks
+                .lock()
+                .expect("cancellation mutex poisoned");
             guard.drain(..).collect::<Vec<_>>()
         };
 
@@ -53,7 +57,11 @@ impl CancellationToken {
             return;
         }
 
-        let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
+        let mut guard = self
+            .inner
+            .callbacks
+            .lock()
+            .expect("cancellation mutex poisoned");
 
         if self.inner.cancelled.load(Ordering::Acquire) {
             drop(guard);
@@ -65,7 +73,11 @@ impl CancellationToken {
     }
 
     pub fn drain(&self) {
-        let mut guard = self.inner.callbacks.lock().expect("cancellation mutex poisoned");
+        let mut guard = self
+            .inner
+            .callbacks
+            .lock()
+            .expect("cancellation mutex poisoned");
         guard.clear();
     }
 

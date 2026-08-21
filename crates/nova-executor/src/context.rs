@@ -100,7 +100,9 @@ impl OperationContextBuilder {
     pub fn build(self) -> OperationContext {
         let trace_id = self.trace_id.unwrap_or_else(|| generate_trace_id());
         let span_id = self.span_id.unwrap_or_else(generate_span_id);
-        let deadline = self.deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(5));
+        let deadline = self
+            .deadline
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(5));
 
         OperationContext {
             trace_id,
@@ -221,7 +223,11 @@ mod tests {
             .timeout(Duration::from_secs(30))
             .build();
         let expected = Instant::now() + Duration::from_secs(30);
-        let diff = if expected > ctx.deadline { expected - ctx.deadline } else { ctx.deadline - expected };
+        let diff = if expected > ctx.deadline {
+            expected - ctx.deadline
+        } else {
+            ctx.deadline - expected
+        };
         assert!(diff < Duration::from_millis(10));
     }
 
@@ -273,15 +279,25 @@ mod tests {
         let ctx = OperationContextBuilder::new(test_addr())
             .kv_store("key", serde_json::json!("value"))
             .build();
-        assert_eq!(ctx.kv_store.get("key").unwrap(), &serde_json::json!("value"));
+        assert_eq!(
+            ctx.kv_store.get("key").unwrap(),
+            &serde_json::json!("value")
+        );
     }
 
     #[test]
     fn test_builder_default_deadline() {
         let ctx = OperationContextBuilder::new(test_addr()).build();
         let expected = Instant::now() + Duration::from_secs(5);
-        let diff = if expected > ctx.deadline { expected - ctx.deadline } else { ctx.deadline - expected };
-        assert!(diff < Duration::from_millis(10), "default deadline should be ~5s from now");
+        let diff = if expected > ctx.deadline {
+            expected - ctx.deadline
+        } else {
+            ctx.deadline - expected
+        };
+        assert!(
+            diff < Duration::from_millis(10),
+            "default deadline should be ~5s from now"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::RwLock;
 use crate::{Event, EventId, EventType, TraceContext};
+use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone)]
 pub struct StoredEvent {

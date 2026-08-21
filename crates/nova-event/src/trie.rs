@@ -1,8 +1,8 @@
+use crate::{EventType, PatternSegment, Result, Subscription, TopicPattern};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use uuid::Uuid;
-use crate::{Subscription, TopicPattern, PatternSegment, EventType, Result};
 
 struct TrieNode {
     literal_children: RwLock<HashMap<String, Arc<TrieNode>>>,
@@ -39,7 +39,8 @@ impl SubscriptionTrie {
             current = match segment {
                 PatternSegment::Literal(lit) => {
                     let mut children = current.literal_children.write();
-                    let entry = children.entry(lit.clone())
+                    let entry = children
+                        .entry(lit.clone())
                         .or_insert_with(|| Arc::new(TrieNode::new()));
                     Arc::clone(entry)
                 }
@@ -158,7 +159,7 @@ impl SubscriptionTrie {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventType, SubscriberId, Subsystem, DeliveryGuarantee};
+    use crate::{DeliveryGuarantee, EventType, SubscriberId, Subsystem};
     use crossbeam::channel;
 
     fn make_sub(topic: &str) -> Subscription {

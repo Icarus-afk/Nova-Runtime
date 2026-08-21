@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
+use crate::{Event, EventBus, EventError, Result, SubscriberId};
 use parking_lot::RwLock;
-use crate::{Event, SubscriberId, EventBus, Result, EventError};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct DeadLetterEntry {

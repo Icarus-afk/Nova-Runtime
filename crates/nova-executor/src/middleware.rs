@@ -1,7 +1,8 @@
 use crate::types::*;
 use std::sync::Arc;
 
-pub type StageFn = Arc<dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult + Send + Sync>;
+pub type StageFn =
+    Arc<dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult + Send + Sync>;
 
 pub trait Middleware: Send + Sync {
     fn name(&self) -> &'static str;
@@ -29,40 +30,52 @@ pub struct MiddlewareChain {
 
 impl MiddlewareChain {
     pub fn new() -> Self {
-        Self { middleware: Vec::new() }
+        Self {
+            middleware: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, registration: MiddlewareRegistration) -> Result<(), String> {
         if self.middleware.iter().any(|m| m.name == registration.name) {
-            return Err(format!("Middleware '{}' already registered", registration.name));
+            return Err(format!(
+                "Middleware '{}' already registered",
+                registration.name
+            ));
         }
         self.middleware.push(registration);
         Ok(())
     }
 
     pub fn unregister(&mut self, name: &str) -> Result<(), String> {
-        let idx = self.middleware.iter().position(|m| m.name == name)
+        let idx = self
+            .middleware
+            .iter()
+            .position(|m| m.name == name)
             .ok_or_else(|| format!("Middleware '{}' not found", name))?;
         self.middleware.remove(idx);
         Ok(())
     }
 
     pub fn enable(&mut self, name: &str) -> Result<(), String> {
-        self.middleware.iter_mut()
+        self.middleware
+            .iter_mut()
             .find(|m| m.name == name)
             .map(|m| m.enabled = true)
             .ok_or_else(|| format!("Middleware '{}' not found", name))
     }
 
     pub fn disable(&mut self, name: &str) -> Result<(), String> {
-        self.middleware.iter_mut()
+        self.middleware
+            .iter_mut()
             .find(|m| m.name == name)
             .map(|m| m.enabled = false)
             .ok_or_else(|| format!("Middleware '{}' not found", name))
     }
 
     pub fn for_stage(&self, stage: PipelineStage) -> Vec<&MiddlewareRegistration> {
-        let mut chain: Vec<_> = self.middleware.iter()
+        let mut chain: Vec<_> = self
+            .middleware
+            .iter()
             .filter(|m| m.stage == stage && m.enabled)
             .collect();
         chain.sort_by_key(|m| m.order);
@@ -81,20 +94,22 @@ impl MiddlewareChain {
             return (stage_fn)(ctx, req);
         }
 
-        let mut composed: Box<dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult> =
-            Box::new(move |ctx, req| (stage_fn)(ctx, req));
+        let mut composed: Box<
+            dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult,
+        > = Box::new(move |ctx, req| (stage_fn)(ctx, req));
 
         for mw in middleware_list.into_iter().rev() {
             let mw = mw.middleware.clone();
-            let prev = std::mem::replace(&mut composed, Box::new(|_, _| {
-                PipelineResult::Error(PipelineError::new(
-                    ErrorCode::InternalError,
-                    "middleware chain internal error: unreachable state",
-                ))
-            }));
-            composed = Box::new(move |ctx, req| {
-                mw.handle(ctx, req, &prev)
-            });
+            let prev = std::mem::replace(
+                &mut composed,
+                Box::new(|_, _| {
+                    PipelineResult::Error(PipelineError::new(
+                        ErrorCode::InternalError,
+                        "middleware chain internal error: unreachable state",
+                    ))
+                }),
+            );
+            composed = Box::new(move |ctx, req| mw.handle(ctx, req, &prev));
         }
 
         (composed)(ctx, req)
@@ -118,10 +133,10 @@ impl Default for MiddlewareChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::OperationContextBuilder;
     use crate::OperationRequest;
-    use crate::OperationType;
     use crate::OperationTarget;
+    use crate::OperationType;
+    use crate::context::OperationContextBuilder;
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -133,8 +148,12 @@ mod tests {
     }
 
     impl Middleware for TestMiddleware {
-        fn name(&self) -> &'static str { self.name }
-        fn stage(&self) -> PipelineStage { self.stage }
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn stage(&self) -> PipelineStage {
+            self.stage
+        }
         fn handle(
             &self,
             _ctx: &mut OperationContext,
@@ -153,8 +172,12 @@ mod tests {
     }
 
     impl Middleware for TrackingMiddleware {
-        fn name(&self) -> &'static str { self.name }
-        fn stage(&self) -> PipelineStage { self.stage }
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn stage(&self) -> PipelineStage {
+            self.stage
+        }
         fn handle(
             &self,
             ctx: &mut OperationContext,
@@ -169,8 +192,12 @@ mod tests {
     struct ShortCircuitMiddleware;
 
     impl Middleware for ShortCircuitMiddleware {
-        fn name(&self) -> &'static str { "short_circuit" }
-        fn stage(&self) -> PipelineStage { PipelineStage::Parse }
+        fn name(&self) -> &'static str {
+            "short_circuit"
+        }
+        fn stage(&self) -> PipelineStage {
+            PipelineStage::Parse
+        }
         fn handle(
             &self,
             _ctx: &mut OperationContext,
@@ -181,9 +208,16 @@ mod tests {
         }
     }
 
-    fn test_addr() -> SocketAddr { "127.0.0.1:8080".parse().unwrap() }
+    fn test_addr() -> SocketAddr {
+        "127.0.0.1:8080".parse().unwrap()
+    }
 
-    fn make_registration(name: &'static str, stage: PipelineStage, order: u32, enabled: bool) -> MiddlewareRegistration {
+    fn make_registration(
+        name: &'static str,
+        stage: PipelineStage,
+        order: u32,
+        enabled: bool,
+    ) -> MiddlewareRegistration {
         MiddlewareRegistration {
             name: name.into(),
             stage,
@@ -264,33 +298,37 @@ mod tests {
         let mut chain = MiddlewareChain::new();
         let count = Arc::new(AtomicU32::new(0));
 
-        chain.register(MiddlewareRegistration {
-            name: "first".into(),
-            stage: PipelineStage::Parse,
-            order: 1,
-            middleware: Arc::new(TrackingMiddleware {
-                name: "first",
+        chain
+            .register(MiddlewareRegistration {
+                name: "first".into(),
                 stage: PipelineStage::Parse,
                 order: 1,
-                call_count: count.clone(),
-            }),
-            enabled: true,
-            config: HashMap::new(),
-        }).unwrap();
+                middleware: Arc::new(TrackingMiddleware {
+                    name: "first",
+                    stage: PipelineStage::Parse,
+                    order: 1,
+                    call_count: count.clone(),
+                }),
+                enabled: true,
+                config: HashMap::new(),
+            })
+            .unwrap();
 
-        chain.register(MiddlewareRegistration {
-            name: "second".into(),
-            stage: PipelineStage::Parse,
-            order: 2,
-            middleware: Arc::new(TrackingMiddleware {
-                name: "second",
+        chain
+            .register(MiddlewareRegistration {
+                name: "second".into(),
                 stage: PipelineStage::Parse,
                 order: 2,
-                call_count: count.clone(),
-            }),
-            enabled: true,
-            config: HashMap::new(),
-        }).unwrap();
+                middleware: Arc::new(TrackingMiddleware {
+                    name: "second",
+                    stage: PipelineStage::Parse,
+                    order: 2,
+                    call_count: count.clone(),
+                }),
+                enabled: true,
+                config: HashMap::new(),
+            })
+            .unwrap();
 
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
@@ -307,28 +345,32 @@ mod tests {
         let mut chain = MiddlewareChain::new();
         let count = Arc::new(AtomicU32::new(0));
 
-        chain.register(MiddlewareRegistration {
-            name: "short".into(),
-            stage: PipelineStage::Parse,
-            order: 1,
-            middleware: Arc::new(ShortCircuitMiddleware),
-            enabled: true,
-            config: HashMap::new(),
-        }).unwrap();
+        chain
+            .register(MiddlewareRegistration {
+                name: "short".into(),
+                stage: PipelineStage::Parse,
+                order: 1,
+                middleware: Arc::new(ShortCircuitMiddleware),
+                enabled: true,
+                config: HashMap::new(),
+            })
+            .unwrap();
 
-        chain.register(MiddlewareRegistration {
-            name: "after_short".into(),
-            stage: PipelineStage::Parse,
-            order: 2,
-            middleware: Arc::new(TrackingMiddleware {
-                name: "after_short",
+        chain
+            .register(MiddlewareRegistration {
+                name: "after_short".into(),
                 stage: PipelineStage::Parse,
                 order: 2,
-                call_count: count.clone(),
-            }),
-            enabled: true,
-            config: HashMap::new(),
-        }).unwrap();
+                middleware: Arc::new(TrackingMiddleware {
+                    name: "after_short",
+                    stage: PipelineStage::Parse,
+                    order: 2,
+                    call_count: count.clone(),
+                }),
+                enabled: true,
+                config: HashMap::new(),
+            })
+            .unwrap();
 
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
@@ -358,9 +400,25 @@ mod tests {
     #[test]
     fn test_for_stage_returns_only_enabled_middleware_for_stage() {
         let mut chain = MiddlewareChain::new();
-        chain.register(make_registration("parse_mw", PipelineStage::Parse, 0, true)).unwrap();
-        chain.register(make_registration("validate_mw", PipelineStage::Validate, 0, true)).unwrap();
-        chain.register(make_registration("disabled_parse", PipelineStage::Parse, 1, false)).unwrap();
+        chain
+            .register(make_registration("parse_mw", PipelineStage::Parse, 0, true))
+            .unwrap();
+        chain
+            .register(make_registration(
+                "validate_mw",
+                PipelineStage::Validate,
+                0,
+                true,
+            ))
+            .unwrap();
+        chain
+            .register(make_registration(
+                "disabled_parse",
+                PipelineStage::Parse,
+                1,
+                false,
+            ))
+            .unwrap();
 
         let parse_mw = chain.for_stage(PipelineStage::Parse);
         assert_eq!(parse_mw.len(), 1);
@@ -373,9 +431,15 @@ mod tests {
     #[test]
     fn test_for_stage_returns_ordered_by_order_field() {
         let mut chain = MiddlewareChain::new();
-        chain.register(make_registration("z_last", PipelineStage::Parse, 10, true)).unwrap();
-        chain.register(make_registration("a_first", PipelineStage::Parse, 1, true)).unwrap();
-        chain.register(make_registration("m_middle", PipelineStage::Parse, 5, true)).unwrap();
+        chain
+            .register(make_registration("z_last", PipelineStage::Parse, 10, true))
+            .unwrap();
+        chain
+            .register(make_registration("a_first", PipelineStage::Parse, 1, true))
+            .unwrap();
+        chain
+            .register(make_registration("m_middle", PipelineStage::Parse, 5, true))
+            .unwrap();
 
         let list = chain.for_stage(PipelineStage::Parse);
         assert_eq!(list.len(), 3);
@@ -389,19 +453,21 @@ mod tests {
         let mut chain = MiddlewareChain::new();
         let count = Arc::new(AtomicU32::new(0));
 
-        chain.register(MiddlewareRegistration {
-            name: "disabled".into(),
-            stage: PipelineStage::Parse,
-            order: 1,
-            middleware: Arc::new(TrackingMiddleware {
-                name: "disabled",
+        chain
+            .register(MiddlewareRegistration {
+                name: "disabled".into(),
                 stage: PipelineStage::Parse,
                 order: 1,
-                call_count: count.clone(),
-            }),
-            enabled: false,
-            config: HashMap::new(),
-        }).unwrap();
+                middleware: Arc::new(TrackingMiddleware {
+                    name: "disabled",
+                    stage: PipelineStage::Parse,
+                    order: 1,
+                    call_count: count.clone(),
+                }),
+                enabled: false,
+                config: HashMap::new(),
+            })
+            .unwrap();
 
         let mut ctx = OperationContextBuilder::new(test_addr()).build();
         let mut req = OperationRequest::new(OperationType::Get, OperationTarget::System);
