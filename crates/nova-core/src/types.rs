@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
 pub const WAL_SEGMENT_SIZE: u64 = 64 * 1024 * 1024; // 64 MB
@@ -354,7 +354,9 @@ pub enum CompressionCodec {
     None,
     #[default]
     Snappy,
-    Zstd { level: i32 },
+    Zstd {
+        level: i32,
+    },
 }
 
 #[cfg(test)]
@@ -789,10 +791,19 @@ mod tests {
 
     #[test]
     fn test_isolation_level_variants() {
-        assert_eq!(format!("{:?}", IsolationLevel::ReadCommitted), "ReadCommitted");
-        assert_eq!(format!("{:?}", IsolationLevel::RepeatableRead), "RepeatableRead");
+        assert_eq!(
+            format!("{:?}", IsolationLevel::ReadCommitted),
+            "ReadCommitted"
+        );
+        assert_eq!(
+            format!("{:?}", IsolationLevel::RepeatableRead),
+            "RepeatableRead"
+        );
         assert_eq!(format!("{:?}", IsolationLevel::Snapshot), "Snapshot");
-        assert_eq!(format!("{:?}", IsolationLevel::Serializable), "Serializable");
+        assert_eq!(
+            format!("{:?}", IsolationLevel::Serializable),
+            "Serializable"
+        );
     }
 
     #[test]

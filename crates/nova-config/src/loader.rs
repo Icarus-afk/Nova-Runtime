@@ -1,9 +1,9 @@
 use crate::config::*;
-use std::path::{Path, PathBuf};
-use std::collections::HashMap;
-use std::sync::Arc;
-use parking_lot::RwLock;
 use crossbeam::channel;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 use tracing;
 
@@ -13,16 +13,26 @@ pub enum ConfigError {
     FileNotFound(PathBuf),
 
     #[error("Failed to read config file {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 
     #[error("Failed to parse config file {path}: {source}")]
-    Parse { path: PathBuf, source: toml::de::Error },
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
 
     #[error("Validation failed: {0:?}")]
     Validation(Vec<String>),
 
     #[error("Environment variable {var} has invalid value '{value}': {message}")]
-    EnvVar { var: String, value: String, message: String },
+    EnvVar {
+        var: String,
+        value: String,
+        message: String,
+    },
 
     #[error("No config path set for reload")]
     NoPath,
@@ -69,10 +79,7 @@ impl ConfigLoader {
         Ok(())
     }
 
-    pub fn load(
-        &self,
-        matches: Option<&clap::ArgMatches>,
-    ) -> Result<Config> {
+    pub fn load(&self, matches: Option<&clap::ArgMatches>) -> Result<Config> {
         let mut config = Config::default();
 
         let system_path = PathBuf::from("/etc/novad/novad.toml");
@@ -83,7 +90,11 @@ impl ConfigLoader {
                     tracing::info!("Loaded system config from {}", system_path.display());
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load system config {}: {}", system_path.display(), e);
+                    tracing::warn!(
+                        "Failed to load system config {}: {}",
+                        system_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -112,7 +123,11 @@ impl ConfigLoader {
                     tracing::info!("Loaded local config from {}", local_path.display());
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load local config {}: {}", local_path.display(), e);
+                    tracing::warn!(
+                        "Failed to load local config {}: {}",
+                        local_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -132,10 +147,14 @@ impl ConfigLoader {
         if !path.exists() {
             return Err(ConfigError::FileNotFound(path.to_path_buf()));
         }
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })?;
-        let config: Config = toml::from_str(&content)
-            .map_err(|e| ConfigError::Parse { path: path.to_path_buf(), source: e })?;
+        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let config: Config = toml::from_str(&content).map_err(|e| ConfigError::Parse {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         Ok(config)
     }
 
@@ -148,7 +167,10 @@ impl ConfigLoader {
             let stripped = key.strip_prefix("NOVA_").unwrap();
             let parts: Vec<&str> = stripped.splitn(2, "__").collect();
             if parts.len() != 2 {
-                tracing::warn!("Skipping env var {}: expected NOVA_<SECTION>__<FIELD> format", key);
+                tracing::warn!(
+                    "Skipping env var {}: expected NOVA_<SECTION>__<FIELD> format",
+                    key
+                );
                 continue;
             }
 
@@ -157,9 +179,12 @@ impl ConfigLoader {
 
             let parse_result: std::result::Result<toml::Value, _> = value.parse::<toml::Value>();
             let toml_val = match parse_result {
-                Ok(toml::Value::String(_)) | Ok(toml::Value::Integer(_)) |
-                Ok(toml::Value::Float(_)) | Ok(toml::Value::Boolean(_)) |
-                Ok(toml::Value::Array(_)) | Ok(toml::Value::Table(_)) => parse_result.unwrap(),
+                Ok(toml::Value::String(_))
+                | Ok(toml::Value::Integer(_))
+                | Ok(toml::Value::Float(_))
+                | Ok(toml::Value::Boolean(_))
+                | Ok(toml::Value::Array(_))
+                | Ok(toml::Value::Table(_)) => parse_result.unwrap(),
                 _ => toml::Value::String(value.clone()),
             };
 
@@ -197,7 +222,11 @@ impl ConfigLoader {
             config.general.data_dir = PathBuf::from(val);
             config.storage.wal_dir = PathBuf::from(val).join("wal");
         }
-        if let Some(val) = matches.try_get_one::<String>("listen-address").ok().flatten() {
+        if let Some(val) = matches
+            .try_get_one::<String>("listen-address")
+            .ok()
+            .flatten()
+        {
             config.networking.listen_address = val.clone();
         }
         if let Some(val) = matches.try_get_one::<u16>("listen-port").ok().flatten() {
@@ -212,7 +241,11 @@ impl ConfigLoader {
         if let Some(val) = matches.try_get_one::<u64>("max-connections").ok().flatten() {
             config.general.max_connections = *val as u32;
         }
-        if let Some(val) = matches.try_get_one::<u64>("shutdown-timeout").ok().flatten() {
+        if let Some(val) = matches
+            .try_get_one::<u64>("shutdown-timeout")
+            .ok()
+            .flatten()
+        {
             config.general.shutdown_timeout_ms = *val;
         }
     }
@@ -261,13 +294,13 @@ fn apply_env_to_section(config: &mut Config, section: &str, field_path: &str, va
         "execution" => apply_env_execution(&mut config.execution, field_path, value, &val_str),
         "auth" => apply_env_auth(&mut config.auth, field_path, value, &val_str),
         "security" => apply_env_security(&mut config.security, field_path, value, &val_str),
-            "cache" => apply_env_cache(&mut config.cache, field_path, value, &val_str),
-            "blob" => apply_env_blob(&mut config.blob, field_path, value, &val_str),
-            "search" => apply_env_search(&mut config.search, field_path, value, &val_str),
-            "sql" => apply_env_sql(&mut config.sql, field_path, value, &val_str),
-            "queue" => apply_env_queue(&mut config.queue, field_path, value, &val_str),
-            "scheduler" => apply_env_scheduler(&mut config.scheduler, field_path, value, &val_str),
-            _ => {
+        "cache" => apply_env_cache(&mut config.cache, field_path, value, &val_str),
+        "blob" => apply_env_blob(&mut config.blob, field_path, value, &val_str),
+        "search" => apply_env_search(&mut config.search, field_path, value, &val_str),
+        "sql" => apply_env_sql(&mut config.sql, field_path, value, &val_str),
+        "queue" => apply_env_queue(&mut config.queue, field_path, value, &val_str),
+        "scheduler" => apply_env_scheduler(&mut config.scheduler, field_path, value, &val_str),
+        _ => {
             tracing::warn!("Unknown config section '{}' from env var", section);
         }
     }
@@ -277,64 +310,153 @@ fn apply_env_general(cfg: &mut GeneralConfig, field: &str, _val: &toml::Value, v
     match field {
         "data_dir" => cfg.data_dir = PathBuf::from(val_str),
         "pid_file" => cfg.pid_file = PathBuf::from(val_str),
-        "max_connections" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_connections = n; } }
-        "shutdown_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.shutdown_timeout_ms = n; } }
-        "startup_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.startup_timeout_ms = n; } }
-        _ => { tracing::warn!("Unknown general config field '{}'", field); }
+        "max_connections" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_connections = n;
+            }
+        }
+        "shutdown_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.shutdown_timeout_ms = n;
+            }
+        }
+        "startup_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.startup_timeout_ms = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown general config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_storage(cfg: &mut StorageConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
         "wal_dir" => cfg.wal_dir = PathBuf::from(val_str),
-        "wal_segment_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.wal_segment_size = n; } }
-        "block_cache_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.block_cache_size = n; } }
-        "page_cache_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.page_cache_size = n; } }
-        "memtable_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.memtable_size = n; } }
-        "max_blob_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_blob_size = n; } }
-        "compression" => {
-            match val_str.to_lowercase().as_str() {
-                "none" => cfg.compression = nova_core::Compression::None,
-                "snappy" => cfg.compression = nova_core::Compression::Snappy,
-                "zstd" => cfg.compression = nova_core::Compression::Zstd,
-                _ => { tracing::warn!("Unknown compression '{}'", val_str); }
+        "wal_segment_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.wal_segment_size = n;
             }
         }
-        "bloom_filter_bits_per_key" => {
-            if let Ok(n) = val_str.parse::<u32>() { cfg.bloom_filter_bits_per_key = n; }
+        "block_cache_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.block_cache_size = n;
+            }
         }
-        _ => { tracing::warn!("Unknown storage config field '{}'", field); }
+        "page_cache_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.page_cache_size = n;
+            }
+        }
+        "memtable_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.memtable_size = n;
+            }
+        }
+        "max_blob_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.max_blob_size = n;
+            }
+        }
+        "compression" => match val_str.to_lowercase().as_str() {
+            "none" => cfg.compression = nova_core::Compression::None,
+            "snappy" => cfg.compression = nova_core::Compression::Snappy,
+            "zstd" => cfg.compression = nova_core::Compression::Zstd,
+            _ => {
+                tracing::warn!("Unknown compression '{}'", val_str);
+            }
+        },
+        "bloom_filter_bits_per_key" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.bloom_filter_bits_per_key = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown storage config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_memory(cfg: &mut MemoryConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "max_memory" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_memory = n; } }
-        "pressure_threshold_pct" => { if let Ok(n) = val_str.parse::<u8>() { cfg.pressure_threshold_pct = n; } }
-        "critical_threshold_pct" => { if let Ok(n) = val_str.parse::<u8>() { cfg.critical_threshold_pct = n; } }
-        "emergency_reserve" => { if let Ok(n) = val_str.parse::<u64>() { cfg.emergency_reserve = n; } }
-        "gc_threshold_pct" => { if let Ok(n) = val_str.parse::<u8>() { cfg.gc_threshold_pct = n; } }
-        _ => { tracing::warn!("Unknown memory config field '{}'", field); }
+        "max_memory" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.max_memory = n;
+            }
+        }
+        "pressure_threshold_pct" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.pressure_threshold_pct = n;
+            }
+        }
+        "critical_threshold_pct" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.critical_threshold_pct = n;
+            }
+        }
+        "emergency_reserve" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.emergency_reserve = n;
+            }
+        }
+        "gc_threshold_pct" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.gc_threshold_pct = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown memory config field '{}'", field);
+        }
     }
 }
 
-fn apply_env_networking(cfg: &mut NetworkingConfig, field: &str, _val: &toml::Value, val_str: &str) {
+fn apply_env_networking(
+    cfg: &mut NetworkingConfig,
+    field: &str,
+    _val: &toml::Value,
+    val_str: &str,
+) {
     match field {
         "listen_address" => cfg.listen_address = val_str.to_string(),
-        "listen_port" => { if let Ok(n) = val_str.parse::<u16>() { cfg.listen_port = n; } }
-        "tls_enabled" => { if let Ok(b) = val_str.parse::<bool>() { cfg.tls_enabled = b; } }
+        "listen_port" => {
+            if let Ok(n) = val_str.parse::<u16>() {
+                cfg.listen_port = n;
+            }
+        }
+        "tls_enabled" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.tls_enabled = b;
+            }
+        }
         "tls_cert_path" => {
-            if !val_str.is_empty() { cfg.tls_cert_path = Some(PathBuf::from(val_str)); }
+            if !val_str.is_empty() {
+                cfg.tls_cert_path = Some(PathBuf::from(val_str));
+            }
         }
         "tls_key_path" => {
-            if !val_str.is_empty() { cfg.tls_key_path = Some(PathBuf::from(val_str)); }
+            if !val_str.is_empty() {
+                cfg.tls_key_path = Some(PathBuf::from(val_str));
+            }
         }
         "unix_socket_path" => {
-            if !val_str.is_empty() { cfg.unix_socket_path = Some(PathBuf::from(val_str)); }
+            if !val_str.is_empty() {
+                cfg.unix_socket_path = Some(PathBuf::from(val_str));
+            }
         }
-        "tcp_nodelay" => { if let Ok(b) = val_str.parse::<bool>() { cfg.tcp_nodelay = b; } }
-        "keepalive_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.keepalive_secs = n; } }
-        _ => { tracing::warn!("Unknown networking config field '{}'", field); }
+        "tcp_nodelay" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.tcp_nodelay = b;
+            }
+        }
+        "keepalive_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.keepalive_secs = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown networking config field '{}'", field);
+        }
     }
 }
 
@@ -343,13 +465,22 @@ fn apply_env_logging(cfg: &mut LoggingConfig, field: &str, _val: &toml::Value, v
         "level" => cfg.level = val_str.to_string(),
         "format" => cfg.format = val_str.to_string(),
         "file" => {
-            if !val_str.is_empty() { cfg.file = Some(PathBuf::from(val_str)); }
+            if !val_str.is_empty() {
+                cfg.file = Some(PathBuf::from(val_str));
+            }
         }
-        _ => { tracing::warn!("Unknown logging config field '{}'", field); }
+        _ => {
+            tracing::warn!("Unknown logging config field '{}'", field);
+        }
     }
 }
 
-fn apply_env_subsystems(cfg: &mut SubsystemsConfig, field: &str, _val: &toml::Value, val_str: &str) {
+fn apply_env_subsystems(
+    cfg: &mut SubsystemsConfig,
+    field: &str,
+    _val: &toml::Value,
+    val_str: &str,
+) {
     let parsed = val_str.parse::<bool>().unwrap_or(false);
     match field {
         "enable_sql" => cfg.enable_sql = parsed,
@@ -360,177 +491,523 @@ fn apply_env_subsystems(cfg: &mut SubsystemsConfig, field: &str, _val: &toml::Va
         "enable_blob" => cfg.enable_blob = parsed,
         "enable_auth" => cfg.enable_auth = parsed,
         "enable_dashboard" => cfg.enable_dashboard = parsed,
-        _ => { tracing::warn!("Unknown subsystems config field '{}'", field); }
+        _ => {
+            tracing::warn!("Unknown subsystems config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_event(cfg: &mut EventConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "ordering_shards" => { if let Ok(n) = val_str.parse::<u16>() { cfg.ordering_shards = n; } }
-        "default_queue_capacity" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_queue_capacity = n; } }
-        "default_max_retries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_max_retries = n; } }
-        "dlq_max_entries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.dlq_max_entries = n; } }
-        _ => { tracing::warn!("Unknown event config field '{}'", field); }
+        "ordering_shards" => {
+            if let Ok(n) = val_str.parse::<u16>() {
+                cfg.ordering_shards = n;
+            }
+        }
+        "default_queue_capacity" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.default_queue_capacity = n;
+            }
+        }
+        "default_max_retries" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.default_max_retries = n;
+            }
+        }
+        "dlq_max_entries" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.dlq_max_entries = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown event config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_execution(cfg: &mut ExecutionConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "max_concurrent" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent = n; } }
-        "worker_threads" => { if let Ok(n) = val_str.parse::<u32>() { cfg.worker_threads = n; } }
-        "execution_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.execution_timeout_ms = n; } }
-        "max_concurrent_ops" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent_ops = n; } }
-        "pipeline_queue_depth" => { if let Ok(n) = val_str.parse::<u32>() { cfg.pipeline_queue_depth = n; } }
-        "default_operation_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.default_operation_timeout_ms = n; } }
-        "max_operation_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_operation_timeout_ms = n; } }
-        "rate_limit_default_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_default_per_sec = n; } }
-        "rate_limit_global_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_global_per_sec = n; } }
-        "rate_limit_global_burst" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_global_burst = n; } }
-        "rate_limit_user_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_user_per_sec = n; } }
-        "rate_limit_ip_per_sec" => { if let Ok(n) = val_str.parse::<u64>() { cfg.rate_limit_ip_per_sec = n; } }
-        "circuit_breaker_threshold" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_threshold = n; } }
-        "circuit_breaker_window_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_window_ms = n; } }
-        "circuit_breaker_half_open_timeout_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_half_open_timeout_ms = n; } }
-        "circuit_breaker_success_threshold" => { if let Ok(n) = val_str.parse::<u64>() { cfg.circuit_breaker_success_threshold = n; } }
-        "audit_enabled" => { if let Ok(b) = val_str.parse::<bool>() { cfg.audit_enabled = b; } }
-        "audit_include_payloads" => { if let Ok(b) = val_str.parse::<bool>() { cfg.audit_include_payloads = b; } }
-        "audit_max_entry_size" => { if let Ok(n) = val_str.parse::<u32>() { cfg.audit_max_entry_size = n; } }
-        "idempotency_key_ttl_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.idempotency_key_ttl_secs = n; } }
-        "max_idempotency_keys" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_idempotency_keys = n; } }
-        "pipeline_max_retries" | "max_retries" => { if let Ok(n) = val_str.parse::<u8>() { cfg.pipeline_max_retries = n; } }
-        "retry_base_delay_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.retry_base_delay_ms = n; } }
-        "retry_max_delay_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.retry_max_delay_ms = n; } }
-        _ => { tracing::warn!("Unknown execution config field '{}'", field); }
+        "max_concurrent" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_concurrent = n;
+            }
+        }
+        "worker_threads" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.worker_threads = n;
+            }
+        }
+        "execution_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.execution_timeout_ms = n;
+            }
+        }
+        "max_concurrent_ops" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_concurrent_ops = n;
+            }
+        }
+        "pipeline_queue_depth" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.pipeline_queue_depth = n;
+            }
+        }
+        "default_operation_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.default_operation_timeout_ms = n;
+            }
+        }
+        "max_operation_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.max_operation_timeout_ms = n;
+            }
+        }
+        "rate_limit_default_per_sec" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.rate_limit_default_per_sec = n;
+            }
+        }
+        "rate_limit_global_per_sec" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.rate_limit_global_per_sec = n;
+            }
+        }
+        "rate_limit_global_burst" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.rate_limit_global_burst = n;
+            }
+        }
+        "rate_limit_user_per_sec" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.rate_limit_user_per_sec = n;
+            }
+        }
+        "rate_limit_ip_per_sec" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.rate_limit_ip_per_sec = n;
+            }
+        }
+        "circuit_breaker_threshold" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.circuit_breaker_threshold = n;
+            }
+        }
+        "circuit_breaker_window_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.circuit_breaker_window_ms = n;
+            }
+        }
+        "circuit_breaker_half_open_timeout_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.circuit_breaker_half_open_timeout_ms = n;
+            }
+        }
+        "circuit_breaker_success_threshold" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.circuit_breaker_success_threshold = n;
+            }
+        }
+        "audit_enabled" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.audit_enabled = b;
+            }
+        }
+        "audit_include_payloads" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.audit_include_payloads = b;
+            }
+        }
+        "audit_max_entry_size" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.audit_max_entry_size = n;
+            }
+        }
+        "idempotency_key_ttl_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.idempotency_key_ttl_secs = n;
+            }
+        }
+        "max_idempotency_keys" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_idempotency_keys = n;
+            }
+        }
+        "pipeline_max_retries" | "max_retries" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.pipeline_max_retries = n;
+            }
+        }
+        "retry_base_delay_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.retry_base_delay_ms = n;
+            }
+        }
+        "retry_max_delay_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.retry_max_delay_ms = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown execution config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_auth(cfg: &mut AuthConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "session_ttl" | "ttl_seconds" => { if let Ok(n) = val_str.parse::<u32>() { cfg.session.ttl_seconds = n; } }
-        "max_active_sessions" => { if let Ok(n) = val_str.parse::<u32>() { cfg.session.max_active_sessions = n; } }
-        "token_length_bytes" => { if let Ok(n) = val_str.parse::<usize>() { cfg.session.token_length_bytes = n; } }
-        "session_cache_size" | "cache_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.session.cache_size = n; } }
+        "session_ttl" | "ttl_seconds" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.session.ttl_seconds = n;
+            }
+        }
+        "max_active_sessions" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.session.max_active_sessions = n;
+            }
+        }
+        "token_length_bytes" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.session.token_length_bytes = n;
+            }
+        }
+        "session_cache_size" | "cache_size" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.session.cache_size = n;
+            }
+        }
         "password_min_length" | "min_length" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_length = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.min_length = n;
+            }
         }
         "password_max_length" | "max_length" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.max_length = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.max_length = n;
+            }
         }
         "password_min_lowercase" | "min_lowercase" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_lowercase = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.min_lowercase = n;
+            }
         }
         "password_min_uppercase" | "min_uppercase" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_uppercase = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.min_uppercase = n;
+            }
         }
         "password_min_digits" | "min_digits" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_digits = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.min_digits = n;
+            }
         }
         "password_min_special" | "min_special" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.password_policy.min_special = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.password_policy.min_special = n;
+            }
         }
-        "bcrypt_cost" => { if let Ok(n) = val_str.parse::<u32>() { cfg.internal.bcrypt_cost = n; } }
+        "bcrypt_cost" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.internal.bcrypt_cost = n;
+            }
+        }
         "lockout_max_attempts" | "max_attempts" => {
-            if let Ok(n) = val_str.parse::<u8>() { cfg.internal.lockout.max_attempts = n; }
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.lockout.max_attempts = n;
+            }
         }
         "lockout_duration_secs" | "duration_secs" => {
-            if let Ok(n) = val_str.parse::<u64>() { cfg.internal.lockout.duration_secs = n; }
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.internal.lockout.duration_secs = n;
+            }
         }
         "enable_brute_force_detection" | "brute_force_enabled" => {
-            if let Ok(b) = val_str.parse::<bool>() { cfg.internal.enable_brute_force_detection = b; }
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.internal.enable_brute_force_detection = b;
+            }
         }
         "mfa_issuer" | "issuer" => cfg.internal.mfa.issuer = val_str.to_string(),
-        "mfa_window" | "window" => { if let Ok(n) = val_str.parse::<u8>() { cfg.internal.mfa.window = n; } }
-        _ => { tracing::warn!("Unknown auth config field '{}'", field); }
+        "mfa_window" | "window" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.internal.mfa.window = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown auth config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_security(cfg: &mut SecurityConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
         "encryption_at_rest_enabled" | "encryption_enabled" | "enabled" => {
-            if let Ok(b) = val_str.parse::<bool>() { cfg.encryption_at_rest.enabled = b; }
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.encryption_at_rest.enabled = b;
+            }
         }
-        _ => { tracing::warn!("Unknown security config field '{}'", field); }
+        _ => {
+            tracing::warn!("Unknown security config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_cache(cfg: &mut CacheConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "max_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_size = n; } }
-        "default_ttl_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.default_ttl_secs = n; } }
+        "max_size" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_size = n;
+            }
+        }
+        "default_ttl_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.default_ttl_secs = n;
+            }
+        }
         "eviction_policy" => cfg.eviction_policy = val_str.to_string(),
         "backend_type" => cfg.backend_type = val_str.to_string(),
-        "redis_url" => { if !val_str.is_empty() { cfg.redis_url = Some(val_str.to_string()); } }
-        _ => { tracing::warn!("Unknown cache config field '{}'", field); }
+        "redis_url" => {
+            if !val_str.is_empty() {
+                cfg.redis_url = Some(val_str.to_string());
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown cache config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_blob(cfg: &mut BlobConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "chunk_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.chunk_size = n; } }
-        "max_blob_size" => { if let Ok(n) = val_str.parse::<u64>() { cfg.max_blob_size = n; } }
-        "gc_interval_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_interval_secs = n; } }
-        "gc_grace_period_secs" => { if let Ok(n) = val_str.parse::<u64>() { cfg.gc_grace_period_secs = n; } }
+        "chunk_size" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.chunk_size = n;
+            }
+        }
+        "max_blob_size" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.max_blob_size = n;
+            }
+        }
+        "gc_interval_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.gc_interval_secs = n;
+            }
+        }
+        "gc_grace_period_secs" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.gc_grace_period_secs = n;
+            }
+        }
         "data_dir" => cfg.data_dir = val_str.to_string(),
-        "chunk_nesting_depth" => { if let Ok(n) = val_str.parse::<usize>() { cfg.chunk_nesting_depth = n; } }
-        _ => { tracing::warn!("Unknown blob config field '{}'", field); }
+        "chunk_nesting_depth" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.chunk_nesting_depth = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown blob config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_search(cfg: &mut SearchConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "default_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_limit = n; } }
-        "max_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_limit = n; } }
-        "bm25_k1" => { if let Ok(f) = val_str.parse::<f64>() { cfg.bm25_k1 = f; } }
-        "bm25_b" => { if let Ok(f) = val_str.parse::<f64>() { cfg.bm25_b = f; } }
-        "fuzzy_max_distance" => { if let Ok(n) = val_str.parse::<u8>() { cfg.fuzzy_max_distance = n; } }
-        "highlight_snippet_len" => { if let Ok(n) = val_str.parse::<usize>() { cfg.highlight_snippet_len = n; } }
-        "highlight_max_snippets" => { if let Ok(n) = val_str.parse::<usize>() { cfg.highlight_max_snippets = n; } }
-        "refresh_interval_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.refresh_interval_ms = n; } }
-        "merge_segment_threshold" => { if let Ok(n) = val_str.parse::<usize>() { cfg.merge_segment_threshold = n; } }
-        _ => { tracing::warn!("Unknown search config field '{}'", field); }
+        "default_limit" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.default_limit = n;
+            }
+        }
+        "max_limit" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_limit = n;
+            }
+        }
+        "bm25_k1" => {
+            if let Ok(f) = val_str.parse::<f64>() {
+                cfg.bm25_k1 = f;
+            }
+        }
+        "bm25_b" => {
+            if let Ok(f) = val_str.parse::<f64>() {
+                cfg.bm25_b = f;
+            }
+        }
+        "fuzzy_max_distance" => {
+            if let Ok(n) = val_str.parse::<u8>() {
+                cfg.fuzzy_max_distance = n;
+            }
+        }
+        "highlight_snippet_len" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.highlight_snippet_len = n;
+            }
+        }
+        "highlight_max_snippets" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.highlight_max_snippets = n;
+            }
+        }
+        "refresh_interval_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.refresh_interval_ms = n;
+            }
+        }
+        "merge_segment_threshold" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.merge_segment_threshold = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown search config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_sql(cfg: &mut SQLConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "max_batch_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_batch_size = n; } }
-        "max_columns" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_columns = n; } }
-        "default_limit" => { if let Ok(n) = val_str.parse::<usize>() { cfg.default_limit = n; } }
-        _ => { tracing::warn!("Unknown sql config field '{}'", field); }
+        "max_batch_size" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_batch_size = n;
+            }
+        }
+        "max_columns" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_columns = n;
+            }
+        }
+        "default_limit" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.default_limit = n;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown sql config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_queue(cfg: &mut QueueConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "max_queues" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_queues = n; } }
-        "max_messages_per_queue" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_messages_per_queue = n; } }
-        "max_message_size" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_message_size = n; } }
-        "default_visibility_timeout_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_visibility_timeout_secs = n; } }
-        "message_ttl_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.message_ttl_secs = n; } }
-        "max_receive_count" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_receive_count = n; } }
-        "scanner_interval_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.scanner_interval_ms = n; } }
-        "backpressure_threshold" => { if let Ok(f) = val_str.parse::<f64>() { cfg.backpressure_threshold = f; } }
-        "dlq_max_entries" => { if let Ok(n) = val_str.parse::<usize>() { cfg.dlq_max_entries = n; } }
-        "dlq_max_retries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.dlq_max_retries = n; } }
-        "enable_dlq" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_dlq = b; } }
-        "enable_scanners" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_scanners = b; } }
-        _ => { tracing::warn!("Unknown queue config field '{}'", field); }
+        "max_queues" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_queues = n;
+            }
+        }
+        "max_messages_per_queue" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_messages_per_queue = n;
+            }
+        }
+        "max_message_size" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_message_size = n;
+            }
+        }
+        "default_visibility_timeout_secs" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.default_visibility_timeout_secs = n;
+            }
+        }
+        "message_ttl_secs" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.message_ttl_secs = n;
+            }
+        }
+        "max_receive_count" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_receive_count = n;
+            }
+        }
+        "scanner_interval_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.scanner_interval_ms = n;
+            }
+        }
+        "backpressure_threshold" => {
+            if let Ok(f) = val_str.parse::<f64>() {
+                cfg.backpressure_threshold = f;
+            }
+        }
+        "dlq_max_entries" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.dlq_max_entries = n;
+            }
+        }
+        "dlq_max_retries" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.dlq_max_retries = n;
+            }
+        }
+        "enable_dlq" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.enable_dlq = b;
+            }
+        }
+        "enable_scanners" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.enable_scanners = b;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown queue config field '{}'", field);
+        }
     }
 }
 
 fn apply_env_scheduler(cfg: &mut SchedulerConfig, field: &str, _val: &toml::Value, val_str: &str) {
     match field {
-        "time_wheel_tick_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.time_wheel_tick_ms = n; } }
-        "time_wheel_slots" => { if let Ok(n) = val_str.parse::<usize>() { cfg.time_wheel_slots = n; } }
-        "priority_queue_tick_ms" => { if let Ok(n) = val_str.parse::<u64>() { cfg.priority_queue_tick_ms = n; } }
-        "max_jobs_per_queue" => { if let Ok(n) = val_str.parse::<usize>() { cfg.max_jobs_per_queue = n; } }
-        "max_concurrent_jobs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.max_concurrent_jobs = n; } }
-        "default_job_timeout_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_job_timeout_secs = n; } }
-        "default_max_retries" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_max_retries = n; } }
-        "default_retry_delay_secs" => { if let Ok(n) = val_str.parse::<u32>() { cfg.default_retry_delay_secs = n; } }
-        "enable_startup_recovery" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_startup_recovery = b; } }
-        "enable_catch_up" => { if let Ok(b) = val_str.parse::<bool>() { cfg.enable_catch_up = b; } }
-        _ => { tracing::warn!("Unknown scheduler config field '{}'", field); }
+        "time_wheel_tick_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.time_wheel_tick_ms = n;
+            }
+        }
+        "time_wheel_slots" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.time_wheel_slots = n;
+            }
+        }
+        "priority_queue_tick_ms" => {
+            if let Ok(n) = val_str.parse::<u64>() {
+                cfg.priority_queue_tick_ms = n;
+            }
+        }
+        "max_jobs_per_queue" => {
+            if let Ok(n) = val_str.parse::<usize>() {
+                cfg.max_jobs_per_queue = n;
+            }
+        }
+        "max_concurrent_jobs" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.max_concurrent_jobs = n;
+            }
+        }
+        "default_job_timeout_secs" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.default_job_timeout_secs = n;
+            }
+        }
+        "default_max_retries" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.default_max_retries = n;
+            }
+        }
+        "default_retry_delay_secs" => {
+            if let Ok(n) = val_str.parse::<u32>() {
+                cfg.default_retry_delay_secs = n;
+            }
+        }
+        "enable_startup_recovery" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.enable_startup_recovery = b;
+            }
+        }
+        "enable_catch_up" => {
+            if let Ok(b) = val_str.parse::<bool>() {
+                cfg.enable_catch_up = b;
+            }
+        }
+        _ => {
+            tracing::warn!("Unknown scheduler config field '{}'", field);
+        }
     }
 }
 
@@ -659,8 +1136,8 @@ fn merge_security(_base: SecurityConfig, overlay: SecurityConfig) -> SecurityCon
 mod tests {
     use super::*;
     use serde::de::Error as SerdeError;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Serialises tests that mutate environment variables.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -700,7 +1177,9 @@ mod tests {
 
     impl EnvGuard {
         fn set(key: &str, value: &str) -> Self {
-            unsafe { std::env::set_var(key, value); }
+            unsafe {
+                std::env::set_var(key, value);
+            }
             EnvGuard(())
         }
     }
@@ -719,7 +1198,9 @@ mod tests {
             .map(|(k, _)| k)
             .collect();
         for k in keys {
-            unsafe { std::env::remove_var(k); }
+            unsafe {
+                std::env::remove_var(k);
+            }
         }
     }
 
@@ -805,7 +1286,10 @@ mod tests {
     fn parse_file_unknown_key_accepted() {
         let tf = TempConfig::new(r#"unknown_key = 1"#);
         let result = ConfigLoader::parse_file(tf.path());
-        assert!(result.is_ok(), "unrecognized top-level keys should be silently ignored with default values");
+        assert!(
+            result.is_ok(),
+            "unrecognized top-level keys should be silently ignored with default values"
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -950,8 +1434,14 @@ mod tests {
         assert_eq!(config.networking.listen_address, "0.0.0.0");
         assert_eq!(config.networking.listen_port, 8080);
         assert!(config.networking.tls_enabled);
-        assert_eq!(config.networking.tls_cert_path, Some(PathBuf::from("/cert.pem")));
-        assert_eq!(config.networking.tls_key_path, Some(PathBuf::from("/key.pem")));
+        assert_eq!(
+            config.networking.tls_cert_path,
+            Some(PathBuf::from("/cert.pem"))
+        );
+        assert_eq!(
+            config.networking.tls_key_path,
+            Some(PathBuf::from("/key.pem"))
+        );
         assert!(!config.networking.tcp_nodelay);
         assert_eq!(config.networking.keepalive_secs, 60);
 
@@ -972,7 +1462,10 @@ mod tests {
 
         assert_eq!(config.logging.level, "warn");
         assert_eq!(config.logging.format, "json");
-        assert_eq!(config.logging.file, Some(PathBuf::from("/var/log/nova.log")));
+        assert_eq!(
+            config.logging.file,
+            Some(PathBuf::from("/var/log/nova.log"))
+        );
 
         clear_nova_vars();
     }
@@ -1177,12 +1670,31 @@ mod tests {
         use clap::{Arg, Command, value_parser};
         Command::new("test")
             .arg(Arg::new("data-dir").long("data-dir").num_args(1))
-            .arg(Arg::new("listen-address").long("listen-address").num_args(1))
-            .arg(Arg::new("listen-port").long("listen-port").num_args(1).value_parser(value_parser!(u16)))
+            .arg(
+                Arg::new("listen-address")
+                    .long("listen-address")
+                    .num_args(1),
+            )
+            .arg(
+                Arg::new("listen-port")
+                    .long("listen-port")
+                    .num_args(1)
+                    .value_parser(value_parser!(u16)),
+            )
             .arg(Arg::new("log-level").long("log-level").num_args(1))
             .arg(Arg::new("log-format").long("log-format").num_args(1))
-            .arg(Arg::new("max-connections").long("max-connections").num_args(1).value_parser(value_parser!(u64)))
-            .arg(Arg::new("shutdown-timeout").long("shutdown-timeout").num_args(1).value_parser(value_parser!(u64)))
+            .arg(
+                Arg::new("max-connections")
+                    .long("max-connections")
+                    .num_args(1)
+                    .value_parser(value_parser!(u64)),
+            )
+            .arg(
+                Arg::new("shutdown-timeout")
+                    .long("shutdown-timeout")
+                    .num_args(1)
+                    .value_parser(value_parser!(u64)),
+            )
             .try_get_matches_from(args)
             .unwrap()
     }
@@ -1255,13 +1767,20 @@ mod tests {
     fn cli_multiple_overrides_at_once() {
         let matches = make_cli_matches(&[
             "test",
-            "--data-dir", "/data",
-            "--listen-address", "0.0.0.0",
-            "--listen-port", "7000",
-            "--log-level", "warn",
-            "--log-format", "json",
-            "--max-connections", "256",
-            "--shutdown-timeout", "3000",
+            "--data-dir",
+            "/data",
+            "--listen-address",
+            "0.0.0.0",
+            "--listen-port",
+            "7000",
+            "--log-level",
+            "warn",
+            "--log-format",
+            "json",
+            "--max-connections",
+            "256",
+            "--shutdown-timeout",
+            "3000",
         ]);
         let mut config = Config::default();
         ConfigLoader::apply_cli_overrides(&mut config, &matches);

@@ -97,7 +97,9 @@ impl std::fmt::Display for Operation {
             Operation::Read { key, collection } => {
                 write!(f, "Read({}/{})", collection, key)
             }
-            Operation::Write { key, collection, .. } => {
+            Operation::Write {
+                key, collection, ..
+            } => {
                 write!(f, "Write({}/{})", collection, key)
             }
             Operation::Delete { key, collection } => {
@@ -161,7 +163,9 @@ mod tests {
             for op in ops {
                 match op {
                     WriteOperation::Set { key, value } => self.set(&key, value)?,
-                    WriteOperation::Delete { key } => { self.delete(&key)?; }
+                    WriteOperation::Delete { key } => {
+                        self.delete(&key)?;
+                    }
                 }
             }
             Ok(())
@@ -309,10 +313,7 @@ mod tests {
         store.set(&key, Value::new(b"v1".to_vec())).unwrap();
         store.set(&key, Value::new(b"v2".to_vec())).unwrap();
 
-        assert_eq!(
-            store.get(&key).unwrap(),
-            Some(Value::new(b"v2".to_vec()))
-        );
+        assert_eq!(store.get(&key).unwrap(), Some(Value::new(b"v2".to_vec())));
     }
 
     #[test]
@@ -346,9 +347,7 @@ mod tests {
         store
             .set(&Key::from("b"), Value::new(b"2".to_vec()))
             .unwrap();
-        let results = store
-            .scan(Key::from("")..Key::from("z"))
-            .unwrap();
+        let results = store.scan(Key::from("")..Key::from("z")).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -376,7 +375,9 @@ mod tests {
         store
             .set(&Key::from("x"), Value::new(b"y".to_vec()))
             .unwrap();
-        let ops = vec![WriteOperation::Delete { key: Key::from("x") }];
+        let ops = vec![WriteOperation::Delete {
+            key: Key::from("x"),
+        }];
         store.batch(ops).unwrap();
         assert!(store.get(&Key::from("x")).unwrap().is_none());
     }
@@ -527,9 +528,7 @@ mod tests {
     #[test]
     fn test_mock_event_publisher_publish() {
         let pubsub = MockEventPublisher::new();
-        pubsub
-            .publish("topic1", b"hello")
-            .unwrap();
+        pubsub.publish("topic1", b"hello").unwrap();
         let events = pubsub.events.lock().unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "topic1");
@@ -539,9 +538,7 @@ mod tests {
     #[test]
     fn test_mock_event_publisher_publish_with_key() {
         let pubsub = MockEventPublisher::new();
-        pubsub
-            .publish_with_key("t", "mykey", b"data")
-            .unwrap();
+        pubsub.publish_with_key("t", "mykey", b"data").unwrap();
         let events = pubsub.events.lock().unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "t");
@@ -557,7 +554,10 @@ mod tests {
             collection: "col".into(),
         };
         match op {
-            Operation::Read { ref key, ref collection } => {
+            Operation::Read {
+                ref key,
+                ref collection,
+            } => {
                 assert_eq!(key.as_bytes(), b"k");
                 assert_eq!(collection, "col");
             }
@@ -573,7 +573,11 @@ mod tests {
             collection: "col".into(),
         };
         match op {
-            Operation::Write { ref key, ref value, ref collection } => {
+            Operation::Write {
+                ref key,
+                ref value,
+                ref collection,
+            } => {
                 assert_eq!(key.as_bytes(), b"k");
                 assert_eq!(value.as_bytes(), b"v");
                 assert_eq!(collection, "col");
@@ -589,7 +593,10 @@ mod tests {
             collection: "col".into(),
         };
         match op {
-            Operation::Delete { ref key, ref collection } => {
+            Operation::Delete {
+                ref key,
+                ref collection,
+            } => {
                 assert_eq!(key.as_bytes(), b"k");
                 assert_eq!(collection, "col");
             }
@@ -604,7 +611,10 @@ mod tests {
             query: b"{}".to_vec(),
         };
         match op {
-            Operation::Query { ref collection, ref query } => {
+            Operation::Query {
+                ref collection,
+                ref query,
+            } => {
                 assert_eq!(collection, "col");
                 assert_eq!(query, b"{}");
             }
@@ -698,10 +708,7 @@ mod tests {
 
     #[test]
     fn test_operation_result_query() {
-        let r = OperationResult::Query(vec![(
-            Key::from("k"),
-            Value::new(b"v".to_vec()),
-        )]);
+        let r = OperationResult::Query(vec![(Key::from("k"), Value::new(b"v".to_vec()))]);
         match r {
             OperationResult::Query(results) => assert_eq!(results.len(), 1),
             _ => panic!("expected Query"),

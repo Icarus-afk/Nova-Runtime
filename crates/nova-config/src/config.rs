@@ -132,11 +132,21 @@ pub struct GeneralConfig {
     pub startup_timeout_ms: u64,
 }
 
-fn default_data_dir() -> PathBuf { PathBuf::from("/var/lib/novad") }
-fn default_pid_file() -> PathBuf { PathBuf::from("/var/run/novad.pid") }
-fn default_max_connections() -> u32 { 1024 }
-fn default_shutdown_timeout_ms() -> u64 { 5000 }
-fn default_startup_timeout_ms() -> u64 { 30000 }
+fn default_data_dir() -> PathBuf {
+    PathBuf::from("/var/lib/novad")
+}
+fn default_pid_file() -> PathBuf {
+    PathBuf::from("/var/run/novad.pid")
+}
+fn default_max_connections() -> u32 {
+    1024
+}
+fn default_shutdown_timeout_ms() -> u64 {
+    5000
+}
+fn default_startup_timeout_ms() -> u64 {
+    30000
+}
 
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -152,21 +162,51 @@ impl Default for GeneralConfig {
 
 // ---- Storage ----
 
-fn default_wal_dir() -> PathBuf { PathBuf::from("/var/lib/novad/wal") }
-fn default_wal_segment_size() -> u64 { 67_108_864 }
-fn default_block_cache_size() -> u64 { 268_435_456 }
-fn default_page_cache_size() -> u64 { 67_108_864 }
-fn default_memtable_size() -> u64 { 67_108_864 }
-fn default_max_blob_size() -> u64 { 10_737_418_240 }
-fn default_compression() -> nova_core::Compression { nova_core::Compression::Snappy }
-fn default_bloom_filter_bits_per_key() -> u32 { 10 }
-fn default_page_size() -> u16 { 8192 }
-fn default_wal_page_size() -> u16 { 4096 }
-fn default_btree_order() -> u8 { 4 }
-fn default_lsm_max_level() -> u8 { 7 }
-fn default_bloom_false_positive_rate() -> f64 { 0.01 }
-fn default_write_buffer_size() -> u64 { 67_108_864 }
-fn default_compaction_threads() -> u8 { 2 }
+fn default_wal_dir() -> PathBuf {
+    PathBuf::from("/var/lib/novad/wal")
+}
+fn default_wal_segment_size() -> u64 {
+    67_108_864
+}
+fn default_block_cache_size() -> u64 {
+    268_435_456
+}
+fn default_page_cache_size() -> u64 {
+    67_108_864
+}
+fn default_memtable_size() -> u64 {
+    67_108_864
+}
+fn default_max_blob_size() -> u64 {
+    10_737_418_240
+}
+fn default_compression() -> nova_core::Compression {
+    nova_core::Compression::Snappy
+}
+fn default_bloom_filter_bits_per_key() -> u32 {
+    10
+}
+fn default_page_size() -> u16 {
+    8192
+}
+fn default_wal_page_size() -> u16 {
+    4096
+}
+fn default_btree_order() -> u8 {
+    4
+}
+fn default_lsm_max_level() -> u8 {
+    7
+}
+fn default_bloom_false_positive_rate() -> f64 {
+    0.01
+}
+fn default_write_buffer_size() -> u64 {
+    67_108_864
+}
+fn default_compaction_threads() -> u8 {
+    2
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StorageConfig {
@@ -243,11 +283,21 @@ pub struct MemoryConfig {
     pub gc_threshold_pct: u8,
 }
 
-fn default_max_memory() -> u64 { 1_073_741_824 }
-fn default_pressure_threshold_pct() -> u8 { 80 }
-fn default_critical_threshold_pct() -> u8 { 95 }
-fn default_emergency_reserve() -> u64 { 33_554_432 }
-fn default_gc_threshold_pct() -> u8 { 70 }
+fn default_max_memory() -> u64 {
+    1_073_741_824
+}
+fn default_pressure_threshold_pct() -> u8 {
+    80
+}
+fn default_critical_threshold_pct() -> u8 {
+    95
+}
+fn default_emergency_reserve() -> u64 {
+    33_554_432
+}
+fn default_gc_threshold_pct() -> u8 {
+    70
+}
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -263,15 +313,33 @@ impl Default for MemoryConfig {
 
 // ---- Networking ----
 
-fn default_listen_address() -> String { "127.0.0.1".to_string() }
-fn default_listen_port() -> u16 { 8642 }
-fn default_tcp_nodelay() -> bool { true }
-fn default_keepalive_secs() -> u64 { 30 }
-fn default_read_timeout_ms() -> u64 { 30_000 }
-fn default_write_timeout_ms() -> u64 { 60_000 }
-fn default_tokens_per_second() -> u32 { 1000 }
-fn default_burst_size() -> u32 { 2000 }
-fn default_listener_enabled() -> bool { true }
+fn default_listen_address() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_listen_port() -> u16 {
+    8642
+}
+fn default_tcp_nodelay() -> bool {
+    true
+}
+fn default_keepalive_secs() -> u64 {
+    30
+}
+fn default_read_timeout_ms() -> u64 {
+    30_000
+}
+fn default_write_timeout_ms() -> u64 {
+    60_000
+}
+fn default_tokens_per_second() -> u32 {
+    1000
+}
+fn default_burst_size() -> u32 {
+    2000
+}
+fn default_listener_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ListenerConfig {
@@ -380,8 +448,12 @@ pub struct LoggingConfig {
     pub file: Option<PathBuf>,
 }
 
-fn default_log_level() -> String { "info".to_string() }
-fn default_log_format() -> String { "text".to_string() }
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_log_format() -> String {
+    "text".to_string()
+}
 
 impl Default for LoggingConfig {
     fn default() -> Self {
@@ -415,14 +487,30 @@ pub struct SubsystemsConfig {
     pub enable_dashboard: bool,
 }
 
-fn default_enable_sql() -> bool { true }
-fn default_enable_cache() -> bool { true }
-fn default_enable_queue() -> bool { true }
-fn default_enable_scheduler() -> bool { true }
-fn default_enable_search() -> bool { true }
-fn default_enable_blob() -> bool { true }
-fn default_enable_auth() -> bool { true }
-fn default_enable_dashboard() -> bool { true }
+fn default_enable_sql() -> bool {
+    true
+}
+fn default_enable_cache() -> bool {
+    true
+}
+fn default_enable_queue() -> bool {
+    true
+}
+fn default_enable_scheduler() -> bool {
+    true
+}
+fn default_enable_search() -> bool {
+    true
+}
+fn default_enable_blob() -> bool {
+    true
+}
+fn default_enable_auth() -> bool {
+    true
+}
+fn default_enable_dashboard() -> bool {
+    true
+}
 
 impl Default for SubsystemsConfig {
     fn default() -> Self {
@@ -441,10 +529,18 @@ impl Default for SubsystemsConfig {
 
 // ---- Event ----
 
-fn default_ordering_shards() -> u16 { 64 }
-fn default_queue_capacity() -> usize { 1024 }
-fn default_max_retries() -> u32 { 3 }
-fn default_dlq_max_entries() -> u32 { 100_000 }
+fn default_ordering_shards() -> u16 {
+    64
+}
+fn default_queue_capacity() -> usize {
+    1024
+}
+fn default_max_retries() -> u32 {
+    3
+}
+fn default_dlq_max_entries() -> u32 {
+    100_000
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventConfig {
@@ -471,32 +567,84 @@ impl Default for EventConfig {
 
 // ---- Execution ----
 
-fn default_max_concurrent() -> u32 { 1024 }
-fn default_worker_threads() -> u32 { 4 }
-fn default_execution_timeout_ms() -> u64 { 30_000 }
-fn default_max_concurrent_ops() -> u32 { 256 }
-fn default_pipeline_queue_depth() -> u32 { 1024 }
-fn default_default_operation_timeout_ms() -> u64 { 5000 }
-fn default_max_operation_timeout_ms() -> u64 { 60_000 }
-fn default_rate_limit_default_per_sec() -> u64 { 1000 }
-fn default_rate_limit_global_per_sec() -> u64 { 10_000 }
-fn default_rate_limit_global_burst() -> u64 { 20_000 }
-fn default_rate_limit_user_per_sec() -> u64 { 100 }
-fn default_rate_limit_user_burst() -> u64 { 200 }
-fn default_rate_limit_ip_per_sec() -> u64 { 1000 }
-fn default_rate_limit_ip_burst() -> u64 { 2000 }
-fn default_circuit_breaker_threshold() -> u64 { 50 }
-fn default_circuit_breaker_window_ms() -> u64 { 10_000 }
-fn default_circuit_breaker_half_open_timeout_ms() -> u64 { 10_000 }
-fn default_circuit_breaker_success_threshold() -> u64 { 10 }
-fn default_audit_enabled() -> bool { true }
-fn default_audit_include_payloads() -> bool { false }
-fn default_audit_max_entry_size() -> u32 { 4096 }
-fn default_idempotency_key_ttl_secs() -> u64 { 86_400 }
-fn default_max_idempotency_keys() -> u32 { 100_000 }
-fn default_pipeline_max_retries() -> u8 { 3 }
-fn default_retry_base_delay_ms() -> u64 { 10 }
-fn default_retry_max_delay_ms() -> u64 { 1000 }
+fn default_max_concurrent() -> u32 {
+    1024
+}
+fn default_worker_threads() -> u32 {
+    4
+}
+fn default_execution_timeout_ms() -> u64 {
+    30_000
+}
+fn default_max_concurrent_ops() -> u32 {
+    256
+}
+fn default_pipeline_queue_depth() -> u32 {
+    1024
+}
+fn default_default_operation_timeout_ms() -> u64 {
+    5000
+}
+fn default_max_operation_timeout_ms() -> u64 {
+    60_000
+}
+fn default_rate_limit_default_per_sec() -> u64 {
+    1000
+}
+fn default_rate_limit_global_per_sec() -> u64 {
+    10_000
+}
+fn default_rate_limit_global_burst() -> u64 {
+    20_000
+}
+fn default_rate_limit_user_per_sec() -> u64 {
+    100
+}
+fn default_rate_limit_user_burst() -> u64 {
+    200
+}
+fn default_rate_limit_ip_per_sec() -> u64 {
+    1000
+}
+fn default_rate_limit_ip_burst() -> u64 {
+    2000
+}
+fn default_circuit_breaker_threshold() -> u64 {
+    50
+}
+fn default_circuit_breaker_window_ms() -> u64 {
+    10_000
+}
+fn default_circuit_breaker_half_open_timeout_ms() -> u64 {
+    10_000
+}
+fn default_circuit_breaker_success_threshold() -> u64 {
+    10
+}
+fn default_audit_enabled() -> bool {
+    true
+}
+fn default_audit_include_payloads() -> bool {
+    false
+}
+fn default_audit_max_entry_size() -> u32 {
+    4096
+}
+fn default_idempotency_key_ttl_secs() -> u64 {
+    86_400
+}
+fn default_max_idempotency_keys() -> u32 {
+    100_000
+}
+fn default_pipeline_max_retries() -> u8 {
+    3
+}
+fn default_retry_base_delay_ms() -> u64 {
+    10
+}
+fn default_retry_max_delay_ms() -> u64 {
+    1000
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionConfig {
@@ -591,22 +739,54 @@ impl Default for ExecutionConfig {
 
 // ---- Auth ----
 
-fn default_password_min_length() -> u8 { 8 }
-fn default_password_max_length() -> u8 { 128 }
-fn default_password_min_lowercase() -> u8 { 1 }
-fn default_password_min_uppercase() -> u8 { 1 }
-fn default_password_min_digits() -> u8 { 1 }
-fn default_password_min_special() -> u8 { 0 }
-fn default_password_bcrypt_cost() -> u32 { 12 }
-fn default_lockout_max_attempts() -> u8 { 5 }
-fn default_lockout_duration_secs() -> u64 { 900 }
-fn default_session_ttl() -> u32 { 86_400 }
-fn default_max_active_sessions() -> u32 { 100 }
-fn default_token_length_bytes() -> usize { 32 }
-fn default_session_cache_size() -> usize { 100_000 }
-fn default_mfa_issuer() -> String { "Nova Runtime".to_string() }
-fn default_mfa_window() -> u8 { 1 }
-fn default_enable_brute_force_detection() -> bool { true }
+fn default_password_min_length() -> u8 {
+    8
+}
+fn default_password_max_length() -> u8 {
+    128
+}
+fn default_password_min_lowercase() -> u8 {
+    1
+}
+fn default_password_min_uppercase() -> u8 {
+    1
+}
+fn default_password_min_digits() -> u8 {
+    1
+}
+fn default_password_min_special() -> u8 {
+    0
+}
+fn default_password_bcrypt_cost() -> u32 {
+    12
+}
+fn default_lockout_max_attempts() -> u8 {
+    5
+}
+fn default_lockout_duration_secs() -> u64 {
+    900
+}
+fn default_session_ttl() -> u32 {
+    86_400
+}
+fn default_max_active_sessions() -> u32 {
+    100
+}
+fn default_token_length_bytes() -> usize {
+    32
+}
+fn default_session_cache_size() -> usize {
+    100_000
+}
+fn default_mfa_issuer() -> String {
+    "Nova Runtime".to_string()
+}
+fn default_mfa_window() -> u8 {
+    1
+}
+fn default_enable_brute_force_detection() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PasswordPolicy {
@@ -753,10 +933,18 @@ pub struct SecurityConfig {
 
 // ---- Cache ----
 
-fn default_cache_max_size() -> usize { 128 * 1024 * 1024 }
-fn default_cache_ttl_secs() -> u64 { 300 }
-fn default_cache_eviction_policy() -> String { "Lru".to_string() }
-fn default_cache_backend_type() -> String { "HashMap".to_string() }
+fn default_cache_max_size() -> usize {
+    128 * 1024 * 1024
+}
+fn default_cache_ttl_secs() -> u64 {
+    300
+}
+fn default_cache_eviction_policy() -> String {
+    "Lru".to_string()
+}
+fn default_cache_backend_type() -> String {
+    "HashMap".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CacheConfig {
@@ -786,12 +974,24 @@ impl Default for CacheConfig {
 
 // ---- Blob ----
 
-fn default_blob_chunk_size() -> usize { 1024 * 1024 }
-fn default_blob_max_size() -> u64 { 10 * 1024 * 1024 * 1024 }
-fn default_blob_gc_interval_secs() -> u64 { 3600 }
-fn default_blob_gc_grace_period_secs() -> u64 { 86400 }
-fn default_blob_data_dir() -> String { "./novad-blobs".to_string() }
-fn default_blob_chunk_nesting_depth() -> usize { 3 }
+fn default_blob_chunk_size() -> usize {
+    1024 * 1024
+}
+fn default_blob_max_size() -> u64 {
+    10 * 1024 * 1024 * 1024
+}
+fn default_blob_gc_interval_secs() -> u64 {
+    3600
+}
+fn default_blob_gc_grace_period_secs() -> u64 {
+    86400
+}
+fn default_blob_data_dir() -> String {
+    "./novad-blobs".to_string()
+}
+fn default_blob_chunk_nesting_depth() -> usize {
+    3
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BlobConfig {
@@ -824,15 +1024,33 @@ impl Default for BlobConfig {
 
 // ---- Search ----
 
-fn default_search_default_limit() -> usize { 10 }
-fn default_search_max_limit() -> usize { 1000 }
-fn default_search_bm25_k1() -> f64 { 1.2 }
-fn default_search_bm25_b() -> f64 { 0.75 }
-fn default_search_fuzzy_max_distance() -> u8 { 2 }
-fn default_search_highlight_snippet_len() -> usize { 150 }
-fn default_search_highlight_max_snippets() -> usize { 3 }
-fn default_search_refresh_interval_ms() -> u64 { 1000 }
-fn default_search_merge_segment_threshold() -> usize { 5 }
+fn default_search_default_limit() -> usize {
+    10
+}
+fn default_search_max_limit() -> usize {
+    1000
+}
+fn default_search_bm25_k1() -> f64 {
+    1.2
+}
+fn default_search_bm25_b() -> f64 {
+    0.75
+}
+fn default_search_fuzzy_max_distance() -> u8 {
+    2
+}
+fn default_search_highlight_snippet_len() -> usize {
+    150
+}
+fn default_search_highlight_max_snippets() -> usize {
+    3
+}
+fn default_search_refresh_interval_ms() -> u64 {
+    1000
+}
+fn default_search_merge_segment_threshold() -> usize {
+    5
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchConfig {
@@ -874,9 +1092,15 @@ impl Default for SearchConfig {
 
 // ---- SQL ----
 
-fn default_sql_max_batch_size() -> usize { 1024 }
-fn default_sql_max_columns() -> usize { 256 }
-fn default_sql_limit() -> usize { 1000 }
+fn default_sql_max_batch_size() -> usize {
+    1024
+}
+fn default_sql_max_columns() -> usize {
+    256
+}
+fn default_sql_limit() -> usize {
+    1000
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SQLConfig {
@@ -900,18 +1124,42 @@ impl Default for SQLConfig {
 
 // ---- Queue ----
 
-fn default_max_queues() -> usize { 1000 }
-fn default_max_messages_per_queue() -> usize { 10000 }
-fn default_max_message_size() -> usize { 262144 }
-fn default_queue_visibility_timeout_secs() -> u32 { 30 }
-fn default_queue_message_ttl_secs() -> u32 { 86400 }
-fn default_queue_max_receive_count() -> u32 { 3 }
-fn default_queue_scanner_interval_ms() -> u64 { 1000 }
-fn default_queue_backpressure_threshold() -> f64 { 0.9 }
-fn default_queue_dlq_max_entries() -> usize { 100000 }
-fn default_queue_dlq_max_retries() -> u32 { 3 }
-fn default_queue_enable_dlq() -> bool { true }
-fn default_queue_enable_scanners() -> bool { true }
+fn default_max_queues() -> usize {
+    1000
+}
+fn default_max_messages_per_queue() -> usize {
+    10000
+}
+fn default_max_message_size() -> usize {
+    262144
+}
+fn default_queue_visibility_timeout_secs() -> u32 {
+    30
+}
+fn default_queue_message_ttl_secs() -> u32 {
+    86400
+}
+fn default_queue_max_receive_count() -> u32 {
+    3
+}
+fn default_queue_scanner_interval_ms() -> u64 {
+    1000
+}
+fn default_queue_backpressure_threshold() -> f64 {
+    0.9
+}
+fn default_queue_dlq_max_entries() -> usize {
+    100000
+}
+fn default_queue_dlq_max_retries() -> u32 {
+    3
+}
+fn default_queue_enable_dlq() -> bool {
+    true
+}
+fn default_queue_enable_scanners() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueueConfig {
@@ -962,16 +1210,36 @@ impl Default for QueueConfig {
 
 // ---- Scheduler ----
 
-fn default_scheduler_time_wheel_tick_ms() -> u64 { 100 }
-fn default_scheduler_time_wheel_slots() -> usize { 360 }
-fn default_scheduler_priority_queue_tick_ms() -> u64 { 1000 }
-fn default_scheduler_max_jobs_per_queue() -> usize { 10000 }
-fn default_scheduler_max_concurrent_jobs() -> u32 { 64 }
-fn default_scheduler_default_job_timeout_secs() -> u32 { 300 }
-fn default_scheduler_default_max_retries() -> u32 { 3 }
-fn default_scheduler_default_retry_delay_secs() -> u32 { 10 }
-fn default_scheduler_enable_startup_recovery() -> bool { true }
-fn default_scheduler_enable_catch_up() -> bool { true }
+fn default_scheduler_time_wheel_tick_ms() -> u64 {
+    100
+}
+fn default_scheduler_time_wheel_slots() -> usize {
+    360
+}
+fn default_scheduler_priority_queue_tick_ms() -> u64 {
+    1000
+}
+fn default_scheduler_max_jobs_per_queue() -> usize {
+    10000
+}
+fn default_scheduler_max_concurrent_jobs() -> u32 {
+    64
+}
+fn default_scheduler_default_job_timeout_secs() -> u32 {
+    300
+}
+fn default_scheduler_default_max_retries() -> u32 {
+    3
+}
+fn default_scheduler_default_retry_delay_secs() -> u32 {
+    10
+}
+fn default_scheduler_enable_startup_recovery() -> bool {
+    true
+}
+fn default_scheduler_enable_catch_up() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SchedulerConfig {
@@ -1063,7 +1331,10 @@ impl Config {
         // 2a: page_size must be power of 2 (4096, 8192, 16384, 32768)
         let valid_page_sizes = [4096u16, 8192, 16384, 32768];
         if !valid_page_sizes.contains(&self.storage.page_size) {
-            errors.push(format!("storage.page_size must be power of 2 (4096, 8192, 16384, 32768), got {}", self.storage.page_size));
+            errors.push(format!(
+                "storage.page_size must be power of 2 (4096, 8192, 16384, 32768), got {}",
+                self.storage.page_size
+            ));
         }
 
         // 2b: wal_segment_size >= wal_page_size * 64
@@ -1082,7 +1353,9 @@ impl Config {
         }
 
         // 2e: bloom_false_positive_rate must be > 0.0 and <= 0.1
-        if self.storage.bloom_false_positive_rate <= 0.0 || self.storage.bloom_false_positive_rate > 0.1 {
+        if self.storage.bloom_false_positive_rate <= 0.0
+            || self.storage.bloom_false_positive_rate > 0.1
+        {
             errors.push("storage.bloom_false_positive_rate must be > 0.0 and <= 0.1".into());
         }
 
@@ -1099,18 +1372,28 @@ impl Config {
         // 3a: each listener address must not be empty
         for (i, listener) in self.networking.listeners.iter().enumerate() {
             if listener.address.is_empty() {
-                errors.push(format!("networking.listeners[{}].address must not be empty", i));
+                errors.push(format!(
+                    "networking.listeners[{}].address must not be empty",
+                    i
+                ));
             }
         }
 
         // 3e: read_timeout_ms >= write_timeout_ms / 2
-        if self.networking.timeouts.read_timeout_ms < self.networking.timeouts.write_timeout_ms / 2 {
-            errors.push("networking.timeouts.read_timeout_ms must be >= write_timeout_ms / 2".into());
+        if self.networking.timeouts.read_timeout_ms < self.networking.timeouts.write_timeout_ms / 2
+        {
+            errors
+                .push("networking.timeouts.read_timeout_ms must be >= write_timeout_ms / 2".into());
         }
 
         // 3g: rate limit tokens_per_second >= burst_size / 10
-        if self.networking.rate_limiting.default_tokens_per_second < self.networking.rate_limiting.default_burst_size / 10 {
-            errors.push("networking.rate_limiting.default_tokens_per_second must be >= burst_size / 10".into());
+        if self.networking.rate_limiting.default_tokens_per_second
+            < self.networking.rate_limiting.default_burst_size / 10
+        {
+            errors.push(
+                "networking.rate_limiting.default_tokens_per_second must be >= burst_size / 10"
+                    .into(),
+            );
         }
 
         // 4a: ordering_shards must be power of 2
@@ -1145,7 +1428,9 @@ impl Config {
         }
 
         // 5c: execution_timeout_ms between 100 and 3,600,000
-        if self.execution.execution_timeout_ms < 100 || self.execution.execution_timeout_ms > 3_600_000 {
+        if self.execution.execution_timeout_ms < 100
+            || self.execution.execution_timeout_ms > 3_600_000
+        {
             errors.push("execution.execution_timeout_ms must be between 100 and 3,600,000".into());
         }
 
@@ -1164,7 +1449,9 @@ impl Config {
             errors.push("execution.default_operation_timeout_ms must be >= 100".into());
         }
         if self.execution.default_operation_timeout_ms > self.execution.max_operation_timeout_ms {
-            errors.push("execution.default_operation_timeout_ms must be <= max_operation_timeout_ms".into());
+            errors.push(
+                "execution.default_operation_timeout_ms must be <= max_operation_timeout_ms".into(),
+            );
         }
 
         // 5g: max_operation_timeout_ms <= 3,600,000
@@ -1174,7 +1461,9 @@ impl Config {
 
         // 5h: rate_limit_global_burst >= rate_limit_global_per_sec
         if self.execution.rate_limit_global_burst < self.execution.rate_limit_global_per_sec {
-            errors.push("execution.rate_limit_global_burst must be >= rate_limit_global_per_sec".into());
+            errors.push(
+                "execution.rate_limit_global_burst must be >= rate_limit_global_per_sec".into(),
+            );
         }
 
         // 5i: circuit_breaker_threshold >= 1
@@ -1218,7 +1507,9 @@ impl Config {
         }
 
         // 6b: password_policy.min_length <= password_policy.max_length
-        if self.auth.internal.password_policy.min_length > self.auth.internal.password_policy.max_length {
+        if self.auth.internal.password_policy.min_length
+            > self.auth.internal.password_policy.max_length
+        {
             errors.push("auth.internal.password_policy.min_length must be <= max_length".into());
         }
 
@@ -1253,7 +1544,10 @@ impl Config {
             ));
         }
         if self.storage.wal_segment_size < 4096 {
-            errors.push(format!("storage.wal_segment_size ({}) must be >= 4096", self.storage.wal_segment_size));
+            errors.push(format!(
+                "storage.wal_segment_size ({}) must be >= 4096",
+                self.storage.wal_segment_size
+            ));
         }
         if self.networking.listen_port == 0 {
             errors.push("networking.listen_port must be > 0".into());
@@ -1273,7 +1567,10 @@ impl Config {
             errors.push("general.shutdown_timeout_ms must be > 0".into());
         }
         if self.memory.gc_threshold_pct > 100 {
-            errors.push(format!("memory.gc_threshold_pct ({}) must be <= 100", self.memory.gc_threshold_pct));
+            errors.push(format!(
+                "memory.gc_threshold_pct ({}) must be <= 100",
+                self.memory.gc_threshold_pct
+            ));
         }
         if self.storage.bloom_filter_bits_per_key == 0 {
             errors.push("storage.bloom_filter_bits_per_key must be > 0".into());
@@ -1285,7 +1582,11 @@ impl Config {
         // Scheduler validations
         errors.extend(self.validate_scheduler());
 
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -1590,7 +1891,10 @@ mod tests {
         let mut c = valid_config();
         c.storage.wal_segment_size = 100;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("wal_segment_size") && e.contains("4096")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("wal_segment_size") && e.contains("4096"))
+        );
     }
 
     #[test]
@@ -1599,7 +1903,10 @@ mod tests {
         c.storage.wal_page_size = 8192;
         c.storage.wal_segment_size = 8192 * 63;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("wal_segment_size") && e.contains("64")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("wal_segment_size") && e.contains("64"))
+        );
     }
 
     #[test]
@@ -1721,7 +2028,10 @@ mod tests {
         let mut c = valid_config();
         c.memory.critical_threshold_pct = 100;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("critical_threshold_pct") && e.contains("100")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("critical_threshold_pct") && e.contains("100"))
+        );
     }
 
     #[test]
@@ -1738,9 +2048,15 @@ mod tests {
     #[test]
     fn validate_networking_listener_address_empty() {
         let mut c = valid_config();
-        c.networking.listeners = vec![ListenerConfig { address: String::new(), enabled: true }];
+        c.networking.listeners = vec![ListenerConfig {
+            address: String::new(),
+            enabled: true,
+        }];
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("listeners") && e.contains("address")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("listeners") && e.contains("address"))
+        );
     }
 
     #[test]
@@ -1897,7 +2213,10 @@ mod tests {
         let mut c = valid_config();
         c.execution.default_operation_timeout_ms = 50;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("default_operation_timeout_ms") && e.contains("100")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("default_operation_timeout_ms") && e.contains("100"))
+        );
     }
 
     #[test]
@@ -1906,7 +2225,11 @@ mod tests {
         c.execution.default_operation_timeout_ms = 70_000;
         c.execution.max_operation_timeout_ms = 60_000;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("default_operation_timeout_ms") && e.contains("max_operation_timeout_ms")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("default_operation_timeout_ms")
+                    && e.contains("max_operation_timeout_ms"))
+        );
     }
 
     #[test]
@@ -1947,7 +2270,10 @@ mod tests {
         let mut c = valid_config();
         c.execution.circuit_breaker_success_threshold = 0;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("circuit_breaker_success_threshold")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("circuit_breaker_success_threshold"))
+        );
     }
 
     #[test]
@@ -1980,7 +2306,10 @@ mod tests {
         c.execution.retry_base_delay_ms = 100;
         c.execution.retry_max_delay_ms = 50;
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("retry_max_delay_ms") && e.contains("retry_base_delay_ms")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("retry_max_delay_ms") && e.contains("retry_base_delay_ms"))
+        );
     }
 
     #[test]
@@ -2050,6 +2379,10 @@ mod tests {
         c.event.ordering_shards = 3;
         c.execution.max_concurrent = 0;
         let errs = c.validate().unwrap_err();
-        assert!(errs.len() >= 5, "expected at least 5 errors, got {}", errs.len());
+        assert!(
+            errs.len() >= 5,
+            "expected at least 5 errors, got {}",
+            errs.len()
+        );
     }
 }

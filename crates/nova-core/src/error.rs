@@ -203,10 +203,7 @@ mod tests {
     #[test]
     fn test_error_deserialization() {
         let e = RuntimeError::Deserialization("decode failed".into());
-        assert_eq!(
-            e.to_string(),
-            "Deserialization error: decode failed"
-        );
+        assert_eq!(e.to_string(), "Deserialization error: decode failed");
     }
 
     #[test]
@@ -293,10 +290,7 @@ mod tests {
     fn test_result_err() {
         let r: Result<i32> = Err(RuntimeError::NotFound("x".into()));
         assert!(r.is_err());
-        assert_eq!(
-            r.unwrap_err().to_string(),
-            "Not found: x"
-        );
+        assert_eq!(r.unwrap_err().to_string(), "Not found: x");
     }
 
     // --- IntoError ---
