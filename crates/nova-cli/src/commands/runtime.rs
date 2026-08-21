@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum RuntimeCommands {
@@ -29,12 +29,15 @@ impl RuntimeCommands {
                         let uptime = body["uptime_secs"].as_u64().unwrap_or(0);
                         let active = body["active_operations"].as_u64().unwrap_or(0);
                         let total = body["total_operations"].as_u64().unwrap_or(0);
-                        output::print_value(&serde_json::json!({
-                            "status": if is_running { "running" } else { "stopped" },
-                            "uptime_secs": uptime,
-                            "active_operations": active,
-                            "total_operations": total,
-                        }), &ctx.output)?;
+                        output::print_value(
+                            &serde_json::json!({
+                                "status": if is_running { "running" } else { "stopped" },
+                                "uptime_secs": uptime,
+                                "active_operations": active,
+                                "total_operations": total,
+                            }),
+                            &ctx.output,
+                        )?;
                     }
                     Err(e) => match &ctx.output {
                         crate::app::OutputFormat::Json => {
@@ -56,7 +59,9 @@ impl RuntimeCommands {
                 if *daemonize {
                     println!("Use `novad` to start the daemon as a background process.");
                 } else {
-                    println!("Use `nova run` to start the daemon in-process, or `novad` for the standalone daemon.");
+                    println!(
+                        "Use `nova run` to start the daemon in-process, or `novad` for the standalone daemon."
+                    );
                 }
                 Ok(())
             }
@@ -102,28 +107,49 @@ mod tests {
 
     #[test]
     fn test_status() {
-        assert!(matches!(parse(&["test", "status"]), RuntimeCommands::Status));
+        assert!(matches!(
+            parse(&["test", "status"]),
+            RuntimeCommands::Status
+        ));
     }
 
     #[test]
     fn test_start() {
-        assert!(matches!(parse(&["test", "start"]), RuntimeCommands::Start { daemonize: false }));
-        assert!(matches!(parse(&["test", "start", "--daemonize"]), RuntimeCommands::Start { daemonize: true }));
+        assert!(matches!(
+            parse(&["test", "start"]),
+            RuntimeCommands::Start { daemonize: false }
+        ));
+        assert!(matches!(
+            parse(&["test", "start", "--daemonize"]),
+            RuntimeCommands::Start { daemonize: true }
+        ));
     }
 
     #[test]
     fn test_stop() {
-        assert!(matches!(parse(&["test", "stop"]), RuntimeCommands::Stop { force: false }));
-        assert!(matches!(parse(&["test", "stop", "--force"]), RuntimeCommands::Stop { force: true }));
+        assert!(matches!(
+            parse(&["test", "stop"]),
+            RuntimeCommands::Stop { force: false }
+        ));
+        assert!(matches!(
+            parse(&["test", "stop", "--force"]),
+            RuntimeCommands::Stop { force: true }
+        ));
     }
 
     #[test]
     fn test_restart() {
-        assert!(matches!(parse(&["test", "restart"]), RuntimeCommands::Restart));
+        assert!(matches!(
+            parse(&["test", "restart"]),
+            RuntimeCommands::Restart
+        ));
     }
 
     #[test]
     fn test_reload() {
-        assert!(matches!(parse(&["test", "reload"]), RuntimeCommands::Reload));
+        assert!(matches!(
+            parse(&["test", "reload"]),
+            RuntimeCommands::Reload
+        ));
     }
 }

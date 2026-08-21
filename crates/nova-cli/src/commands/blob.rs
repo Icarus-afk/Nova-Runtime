@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 use std::fs;
 use std::io::Write;
 
@@ -29,8 +29,15 @@ impl BlobCommands {
         let client = ApiClient::new(&ctx.address, ctx.api_key.as_deref());
         match self {
             BlobCommands::List { prefix } => {
-                let params: Vec<(&str, &str)> = prefix.as_ref().map(|p| vec![("prefix", p.as_str())]).unwrap_or_default();
-                match if params.is_empty() { client.get("/v1/blob") } else { client.get_with_query("/v1/blob", &params) } {
+                let params: Vec<(&str, &str)> = prefix
+                    .as_ref()
+                    .map(|p| vec![("prefix", p.as_str())])
+                    .unwrap_or_default();
+                match if params.is_empty() {
+                    client.get("/v1/blob")
+                } else {
+                    client.get_with_query("/v1/blob", &params)
+                } {
                     Ok(body) => {
                         let blobs = if body.is_array() {
                             body.clone()
@@ -41,11 +48,16 @@ impl BlobCommands {
                             output::print_table_from_json(
                                 &["Key", "Size", "Content-Type"],
                                 arr,
-                                |b| vec![
-                                    b["key"].as_str().unwrap_or("-").to_string(),
-                                    b["size"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-                                    b["content_type"].as_str().unwrap_or("-").to_string(),
-                                ],
+                                |b| {
+                                    vec![
+                                        b["key"].as_str().unwrap_or("-").to_string(),
+                                        b["size"]
+                                            .as_u64()
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "-".to_string()),
+                                        b["content_type"].as_str().unwrap_or("-").to_string(),
+                                    ]
+                                },
                                 &ctx.output,
                             )?;
                         } else {
@@ -60,7 +72,8 @@ impl BlobCommands {
                 Ok(())
             }
             BlobCommands::Put { key, file } => {
-                let data = fs::read(file).map_err(|e| anyhow::anyhow!("Failed to read file '{file}': {e}"))?;
+                let data = fs::read(file)
+                    .map_err(|e| anyhow::anyhow!("Failed to read file '{file}': {e}"))?;
                 let body = serde_json::json!({
                     "key": key,
                     "data": base64_encode(&data),
@@ -82,8 +95,10 @@ impl BlobCommands {
                         let decoded = base64_decode(data_str).unwrap_or_default();
                         match output_file {
                             Some(path) => {
-                                let mut f = fs::File::create(path).map_err(|e| anyhow::anyhow!("Failed to create file: {e}"))?;
-                                f.write_all(&decoded).map_err(|e| anyhow::anyhow!("Failed to write file: {e}"))?;
+                                let mut f = fs::File::create(path)
+                                    .map_err(|e| anyhow::anyhow!("Failed to create file: {e}"))?;
+                                f.write_all(&decoded)
+                                    .map_err(|e| anyhow::anyhow!("Failed to write file: {e}"))?;
                                 println!("Downloaded {key} to {path}");
                             }
                             None => {
@@ -144,24 +159,42 @@ mod tests {
 
     #[test]
     fn test_list() {
-        assert!(matches!(parse(&["test", "list"]), BlobCommands::List { prefix: None }));
-        assert!(matches!(parse(&["test", "list", "--prefix", "img/"]), BlobCommands::List { prefix: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "list"]),
+            BlobCommands::List { prefix: None }
+        ));
+        assert!(matches!(
+            parse(&["test", "list", "--prefix", "img/"]),
+            BlobCommands::List { prefix: Some(_) }
+        ));
     }
 
     #[test]
     fn test_put() {
-        assert!(matches!(parse(&["test", "put", "k", "f.txt"]), BlobCommands::Put { .. }));
+        assert!(matches!(
+            parse(&["test", "put", "k", "f.txt"]),
+            BlobCommands::Put { .. }
+        ));
     }
 
     #[test]
     fn test_get() {
-        assert!(matches!(parse(&["test", "get", "k"]), BlobCommands::Get { .. }));
-        assert!(matches!(parse(&["test", "get", "k", "out.txt"]), BlobCommands::Get { .. }));
+        assert!(matches!(
+            parse(&["test", "get", "k"]),
+            BlobCommands::Get { .. }
+        ));
+        assert!(matches!(
+            parse(&["test", "get", "k", "out.txt"]),
+            BlobCommands::Get { .. }
+        ));
     }
 
     #[test]
     fn test_delete() {
-        assert!(matches!(parse(&["test", "delete", "k"]), BlobCommands::Delete { .. }));
+        assert!(matches!(
+            parse(&["test", "delete", "k"]),
+            BlobCommands::Delete { .. }
+        ));
     }
 
     #[test]

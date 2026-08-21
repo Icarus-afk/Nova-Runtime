@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum SqlCommands {
@@ -81,18 +81,33 @@ mod tests {
 
     #[test]
     fn test_query() {
-        assert!(matches!(parse(&["test", "query", "SELECT 1"]), SqlCommands::Query { .. }));
-        assert!(matches!(parse(&["test", "query", "SELECT 1", "--format", "json"]), SqlCommands::Query { .. }));
+        assert!(matches!(
+            parse(&["test", "query", "SELECT 1"]),
+            SqlCommands::Query { .. }
+        ));
+        assert!(matches!(
+            parse(&["test", "query", "SELECT 1", "--format", "json"]),
+            SqlCommands::Query { .. }
+        ));
     }
 
     #[test]
     fn test_execute() {
-        assert!(matches!(parse(&["test", "execute", "script.sql"]), SqlCommands::Execute { .. }));
+        assert!(matches!(
+            parse(&["test", "execute", "script.sql"]),
+            SqlCommands::Execute { .. }
+        ));
     }
 
     #[test]
     fn test_schema() {
-        assert!(matches!(parse(&["test", "schema"]), SqlCommands::Schema { table: None }));
-        assert!(matches!(parse(&["test", "schema", "users"]), SqlCommands::Schema { table: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "schema"]),
+            SqlCommands::Schema { table: None }
+        ));
+        assert!(matches!(
+            parse(&["test", "schema", "users"]),
+            SqlCommands::Schema { table: Some(_) }
+        ));
     }
 }

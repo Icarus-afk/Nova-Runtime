@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum CacheCommands {
@@ -22,10 +22,13 @@ impl CacheCommands {
                 match client.get("/v1/cache/stats") {
                     Ok(body) => output::print_value(&body, &ctx.output)?,
                     Err(e) => {
-                        output::print_value(&serde_json::json!({
-                            "error": e,
-                            "message": "Cache endpoint not available"
-                        }), &ctx.output)?;
+                        output::print_value(
+                            &serde_json::json!({
+                                "error": e,
+                                "message": "Cache endpoint not available"
+                            }),
+                            &ctx.output,
+                        )?;
                     }
                 }
                 Ok(())
@@ -51,8 +54,15 @@ impl CacheCommands {
                 Ok(())
             }
             CacheCommands::List { pattern } => {
-                let params: Vec<(&str, &str)> = pattern.as_ref().map(|p| vec![("pattern", p.as_str())]).unwrap_or_default();
-                match if params.is_empty() { client.get("/v1/cache/keys") } else { client.get_with_query("/v1/cache/keys", &params) } {
+                let params: Vec<(&str, &str)> = pattern
+                    .as_ref()
+                    .map(|p| vec![("pattern", p.as_str())])
+                    .unwrap_or_default();
+                match if params.is_empty() {
+                    client.get("/v1/cache/keys")
+                } else {
+                    client.get_with_query("/v1/cache/keys", &params)
+                } {
                     Ok(body) => output::print_value(&body, &ctx.output)?,
                     Err(e) => {
                         eprintln!("Failed to list cache keys: {e}");
@@ -97,7 +107,13 @@ mod tests {
 
     #[test]
     fn test_list() {
-        assert!(matches!(parse(&["test", "list"]), CacheCommands::List { pattern: None }));
-        assert!(matches!(parse(&["test", "list", "--pattern", "user:*"]), CacheCommands::List { pattern: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "list"]),
+            CacheCommands::List { pattern: None }
+        ));
+        assert!(matches!(
+            parse(&["test", "list", "--pattern", "user:*"]),
+            CacheCommands::List { pattern: Some(_) }
+        ));
     }
 }

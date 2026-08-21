@@ -36,7 +36,9 @@ impl ApiClient {
         }
         let resp = req.send().map_err(|e| format!("Request failed: {}", e))?;
         let status = resp.status();
-        let body: Value = resp.json().map_err(|e| format!("Failed to parse response: {}", e))?;
+        let body: Value = resp
+            .json()
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
         if status.is_success() {
             Ok(body)
         } else {
@@ -89,7 +91,9 @@ impl ApiClient {
         };
         let resp = req.send().map_err(|e| format!("Request failed: {}", e))?;
         let status = resp.status();
-        let body: Value = resp.json().map_err(|e| format!("Failed to parse response: {}", e))?;
+        let body: Value = resp
+            .json()
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
         if status.is_success() {
             Ok(body)
         } else {

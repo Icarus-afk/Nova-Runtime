@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum SchedulerCommands {
@@ -38,12 +38,14 @@ impl SchedulerCommands {
                             output::print_table_from_json(
                                 &["Name", "Schedule", "Command", "Status"],
                                 arr,
-                                |j| vec![
-                                    j["name"].as_str().unwrap_or("-").to_string(),
-                                    j["schedule"].as_str().unwrap_or("-").to_string(),
-                                    j["command"].as_str().unwrap_or("-").to_string(),
-                                    j["status"].as_str().unwrap_or("active").to_string(),
-                                ],
+                                |j| {
+                                    vec![
+                                        j["name"].as_str().unwrap_or("-").to_string(),
+                                        j["schedule"].as_str().unwrap_or("-").to_string(),
+                                        j["command"].as_str().unwrap_or("-").to_string(),
+                                        j["status"].as_str().unwrap_or("active").to_string(),
+                                    ]
+                                },
                                 &ctx.output,
                             )?;
                         } else {
@@ -57,7 +59,11 @@ impl SchedulerCommands {
                 }
                 Ok(())
             }
-            SchedulerCommands::Create { name, schedule, command } => {
+            SchedulerCommands::Create {
+                name,
+                schedule,
+                command,
+            } => {
                 let body = serde_json::json!({
                     "name": name,
                     "schedule": schedule,
@@ -128,21 +134,33 @@ mod tests {
 
     #[test]
     fn test_create() {
-        assert!(matches!(parse(&["test", "create", "job", "* * * * *", "backup.sh"]), SchedulerCommands::Create { .. }));
+        assert!(matches!(
+            parse(&["test", "create", "job", "* * * * *", "backup.sh"]),
+            SchedulerCommands::Create { .. }
+        ));
     }
 
     #[test]
     fn test_delete() {
-        assert!(matches!(parse(&["test", "delete", "job"]), SchedulerCommands::Delete { .. }));
+        assert!(matches!(
+            parse(&["test", "delete", "job"]),
+            SchedulerCommands::Delete { .. }
+        ));
     }
 
     #[test]
     fn test_pause() {
-        assert!(matches!(parse(&["test", "pause", "job"]), SchedulerCommands::Pause { .. }));
+        assert!(matches!(
+            parse(&["test", "pause", "job"]),
+            SchedulerCommands::Pause { .. }
+        ));
     }
 
     #[test]
     fn test_resume() {
-        assert!(matches!(parse(&["test", "resume", "job"]), SchedulerCommands::Resume { .. }));
+        assert!(matches!(
+            parse(&["test", "resume", "job"]),
+            SchedulerCommands::Resume { .. }
+        ));
     }
 }

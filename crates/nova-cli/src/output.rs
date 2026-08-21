@@ -64,7 +64,12 @@ pub fn print_value(value: &Value, format: &OutputFormat) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn print_table_from_json(headers: &[&str], rows: &[Value], extract: fn(&Value) -> Vec<String>, format: &OutputFormat) -> anyhow::Result<()> {
+pub fn print_table_from_json(
+    headers: &[&str],
+    rows: &[Value],
+    extract: fn(&Value) -> Vec<String>,
+    format: &OutputFormat,
+) -> anyhow::Result<()> {
     match format {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&rows)?);

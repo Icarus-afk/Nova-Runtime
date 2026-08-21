@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum DbCommands {
@@ -44,10 +44,15 @@ impl DbCommands {
                             output::print_table_from_json(
                                 &["Name", "Collections"],
                                 arr,
-                                |d| vec![
-                                    d["name"].as_str().unwrap_or("-").to_string(),
-                                    d["collections"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-                                ],
+                                |d| {
+                                    vec![
+                                        d["name"].as_str().unwrap_or("-").to_string(),
+                                        d["collections"]
+                                            .as_u64()
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "-".to_string()),
+                                    ]
+                                },
                                 &ctx.output,
                             )?;
                         } else {
@@ -92,9 +97,15 @@ impl DbCommands {
                 }
                 Ok(())
             }
-            DbCommands::CreateCollection { database, collection } => {
+            DbCommands::CreateCollection {
+                database,
+                collection,
+            } => {
                 let body = serde_json::json!({"name": collection, "database": database});
-                match client.post(&format!("/v1/databases/{database}/collections"), Some(&body)) {
+                match client.post(
+                    &format!("/v1/databases/{database}/collections"),
+                    Some(&body),
+                ) {
                     Ok(resp) => output::print_value(&resp, &ctx.output)?,
                     Err(e) => {
                         eprintln!("Failed to create collection: {e}");
@@ -103,8 +114,13 @@ impl DbCommands {
                 }
                 Ok(())
             }
-            DbCommands::DropCollection { database, collection } => {
-                match client.delete(&format!("/v1/databases/{database}/collections/{collection}")) {
+            DbCommands::DropCollection {
+                database,
+                collection,
+            } => {
+                match client.delete(&format!(
+                    "/v1/databases/{database}/collections/{collection}"
+                )) {
                     Ok(resp) => output::print_value(&resp, &ctx.output)?,
                     Err(e) => {
                         eprintln!("Failed to drop collection: {e}");
@@ -153,32 +169,53 @@ mod tests {
 
     #[test]
     fn test_create() {
-        assert!(matches!(parse(&["test", "create", "mydb"]), DbCommands::Create { .. }));
+        assert!(matches!(
+            parse(&["test", "create", "mydb"]),
+            DbCommands::Create { .. }
+        ));
     }
 
     #[test]
     fn test_drop() {
-        assert!(matches!(parse(&["test", "drop", "mydb"]), DbCommands::Drop { .. }));
+        assert!(matches!(
+            parse(&["test", "drop", "mydb"]),
+            DbCommands::Drop { .. }
+        ));
     }
 
     #[test]
     fn test_collections() {
-        assert!(matches!(parse(&["test", "collections", "mydb"]), DbCommands::Collections { .. }));
+        assert!(matches!(
+            parse(&["test", "collections", "mydb"]),
+            DbCommands::Collections { .. }
+        ));
     }
 
     #[test]
     fn test_create_collection() {
-        assert!(matches!(parse(&["test", "create-collection", "mydb", "coll"]), DbCommands::CreateCollection { .. }));
+        assert!(matches!(
+            parse(&["test", "create-collection", "mydb", "coll"]),
+            DbCommands::CreateCollection { .. }
+        ));
     }
 
     #[test]
     fn test_drop_collection() {
-        assert!(matches!(parse(&["test", "drop-collection", "mydb", "coll"]), DbCommands::DropCollection { .. }));
+        assert!(matches!(
+            parse(&["test", "drop-collection", "mydb", "coll"]),
+            DbCommands::DropCollection { .. }
+        ));
     }
 
     #[test]
     fn test_stats() {
-        assert!(matches!(parse(&["test", "stats"]), DbCommands::Stats { database: None }));
-        assert!(matches!(parse(&["test", "stats", "mydb"]), DbCommands::Stats { database: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "stats"]),
+            DbCommands::Stats { database: None }
+        ));
+        assert!(matches!(
+            parse(&["test", "stats", "mydb"]),
+            DbCommands::Stats { database: Some(_) }
+        ));
     }
 }

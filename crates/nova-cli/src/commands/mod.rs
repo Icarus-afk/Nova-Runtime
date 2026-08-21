@@ -1,13 +1,13 @@
-pub mod runtime;
-pub mod config_cmd;
 pub mod auth;
+pub mod blob;
+pub mod cache;
+pub mod config_cmd;
+pub mod db;
 pub mod queue;
+pub mod runtime;
 pub mod scheduler;
 pub mod search;
-pub mod blob;
 pub mod sql;
-pub mod db;
-pub mod cache;
 
 #[cfg(test)]
 mod tests {

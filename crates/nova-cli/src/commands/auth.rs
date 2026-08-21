@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
@@ -37,11 +37,13 @@ impl AuthCommands {
                             output::print_table_from_json(
                                 &["Username", "Role", "Status"],
                                 arr,
-                                |u| vec![
-                                    u["username"].as_str().unwrap_or("-").to_string(),
-                                    u["role"].as_str().unwrap_or("-").to_string(),
-                                    u["status"].as_str().unwrap_or("active").to_string(),
-                                ],
+                                |u| {
+                                    vec![
+                                        u["username"].as_str().unwrap_or("-").to_string(),
+                                        u["role"].as_str().unwrap_or("-").to_string(),
+                                        u["status"].as_str().unwrap_or("active").to_string(),
+                                    ]
+                                },
                                 &ctx.output,
                             )?;
                         } else {
@@ -129,27 +131,51 @@ mod tests {
 
     #[test]
     fn test_create_user() {
-        assert!(matches!(parse(&["test", "create-user", "admin"]), AuthCommands::CreateUser { username: _, role: None }));
-        assert!(matches!(parse(&["test", "create-user", "admin", "readonly"]), AuthCommands::CreateUser { username: _, role: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "create-user", "admin"]),
+            AuthCommands::CreateUser {
+                username: _,
+                role: None
+            }
+        ));
+        assert!(matches!(
+            parse(&["test", "create-user", "admin", "readonly"]),
+            AuthCommands::CreateUser {
+                username: _,
+                role: Some(_)
+            }
+        ));
     }
 
     #[test]
     fn test_delete_user() {
-        assert!(matches!(parse(&["test", "delete-user", "admin"]), AuthCommands::DeleteUser { .. }));
+        assert!(matches!(
+            parse(&["test", "delete-user", "admin"]),
+            AuthCommands::DeleteUser { .. }
+        ));
     }
 
     #[test]
     fn test_list_users() {
-        assert!(matches!(parse(&["test", "list-users"]), AuthCommands::ListUsers));
+        assert!(matches!(
+            parse(&["test", "list-users"]),
+            AuthCommands::ListUsers
+        ));
     }
 
     #[test]
     fn test_create_api_key() {
-        assert!(matches!(parse(&["test", "create-api-key", "my-key"]), AuthCommands::CreateApiKey { .. }));
+        assert!(matches!(
+            parse(&["test", "create-api-key", "my-key"]),
+            AuthCommands::CreateApiKey { .. }
+        ));
     }
 
     #[test]
     fn test_revoke_api_key() {
-        assert!(matches!(parse(&["test", "revoke-api-key", "key-123"]), AuthCommands::RevokeApiKey { .. }));
+        assert!(matches!(
+            parse(&["test", "revoke-api-key", "key-123"]),
+            AuthCommands::RevokeApiKey { .. }
+        ));
     }
 }

@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum SearchCommands {
@@ -39,12 +39,20 @@ impl SearchCommands {
                             output::print_table_from_json(
                                 &["Name", "Collection", "Fields", "Documents"],
                                 arr,
-                                |i| vec![
-                                    i["name"].as_str().unwrap_or("-").to_string(),
-                                    i["collection"].as_str().unwrap_or("-").to_string(),
-                                    i["fields"].as_array().map(|f| f.len().to_string()).unwrap_or_else(|| "-".to_string()),
-                                    i["documents"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-                                ],
+                                |i| {
+                                    vec![
+                                        i["name"].as_str().unwrap_or("-").to_string(),
+                                        i["collection"].as_str().unwrap_or("-").to_string(),
+                                        i["fields"]
+                                            .as_array()
+                                            .map(|f| f.len().to_string())
+                                            .unwrap_or_else(|| "-".to_string()),
+                                        i["documents"]
+                                            .as_u64()
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "-".to_string()),
+                                    ]
+                                },
                                 &ctx.output,
                             )?;
                         } else {
@@ -58,7 +66,11 @@ impl SearchCommands {
                 }
                 Ok(())
             }
-            SearchCommands::CreateIndex { name, collection, fields } => {
+            SearchCommands::CreateIndex {
+                name,
+                collection,
+                fields,
+            } => {
                 let body = serde_json::json!({
                     "name": name,
                     "collection": collection,
@@ -83,7 +95,11 @@ impl SearchCommands {
                 }
                 Ok(())
             }
-            SearchCommands::Query { query, collection, limit } => {
+            SearchCommands::Query {
+                query,
+                collection,
+                limit,
+            } => {
                 let mut params: Vec<(String, String)> = vec![("q".into(), query.clone())];
                 if let Some(c) = collection {
                     params.push(("collection".into(), c.clone()));
@@ -91,7 +107,10 @@ impl SearchCommands {
                 if let Some(l) = limit {
                     params.push(("limit".into(), l.to_string()));
                 }
-                let str_params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                let str_params: Vec<(&str, &str)> = params
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
                 match client.get_with_query("/v1/search/query", &str_params) {
                     Ok(body) => output::print_value(&body, &ctx.output)?,
                     Err(e) => {
@@ -122,9 +141,18 @@ mod tests {
 
     #[test]
     fn test_query() {
-        assert!(matches!(parse(&["test", "query", "find"]), SearchCommands::Query { .. }));
-        assert!(matches!(parse(&["test", "query", "find", "--collection", "docs"]), SearchCommands::Query { .. }));
-        assert!(matches!(parse(&["test", "query", "find", "--limit", "10"]), SearchCommands::Query { .. }));
+        assert!(matches!(
+            parse(&["test", "query", "find"]),
+            SearchCommands::Query { .. }
+        ));
+        assert!(matches!(
+            parse(&["test", "query", "find", "--collection", "docs"]),
+            SearchCommands::Query { .. }
+        ));
+        assert!(matches!(
+            parse(&["test", "query", "find", "--limit", "10"]),
+            SearchCommands::Query { .. }
+        ));
     }
 
     #[test]
@@ -135,11 +163,17 @@ mod tests {
 
     #[test]
     fn test_drop_index() {
-        assert!(matches!(parse(&["test", "drop-index", "idx"]), SearchCommands::DropIndex { .. }));
+        assert!(matches!(
+            parse(&["test", "drop-index", "idx"]),
+            SearchCommands::DropIndex { .. }
+        ));
     }
 
     #[test]
     fn test_list_indexes() {
-        assert!(matches!(parse(&["test", "list-indexes"]), SearchCommands::ListIndexes));
+        assert!(matches!(
+            parse(&["test", "list-indexes"]),
+            SearchCommands::ListIndexes
+        ));
     }
 }

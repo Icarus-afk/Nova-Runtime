@@ -1,23 +1,14 @@
-use clap::Subcommand;
 use crate::app::CommandContext;
 use crate::client::ApiClient;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
-    Show {
-        section: Option<String>,
-    },
-    Get {
-        key: String,
-    },
-    Set {
-        key: String,
-        value: String,
-    },
-    Validate {
-        path: String,
-    },
+    Show { section: Option<String> },
+    Get { key: String },
+    Set { key: String, value: String },
+    Validate { path: String },
     Default,
 }
 
@@ -29,7 +20,9 @@ impl ConfigCommands {
                 match client.get("/admin/config") {
                     Ok(body) => {
                         let result = match section {
-                            Some(s) => body.get(s).cloned().unwrap_or(serde_json::json!({"error": format!("section '{s}' not found")})),
+                            Some(s) => body.get(s).cloned().unwrap_or(
+                                serde_json::json!({"error": format!("section '{s}' not found")}),
+                            ),
                             None => body,
                         };
                         output::print_value(&result, &ctx.output)?;
@@ -39,7 +32,9 @@ impl ConfigCommands {
                         let config = loader.load(None)?;
                         let cfg_value = serde_json::to_value(&config)?;
                         let result = match section {
-                            Some(s) => cfg_value.get(s).cloned().unwrap_or(serde_json::json!({"error": format!("section '{s}' not found")})),
+                            Some(s) => cfg_value.get(s).cloned().unwrap_or(
+                                serde_json::json!({"error": format!("section '{s}' not found")}),
+                            ),
                             None => cfg_value,
                         };
                         output::print_value(&result, &ctx.output)?;
@@ -50,11 +45,14 @@ impl ConfigCommands {
             ConfigCommands::Validate { path } => {
                 match nova_config::ConfigLoader::parse_file(std::path::Path::new(path)) {
                     Ok(config) => {
-                        output::print_value(&serde_json::json!({
-                            "valid": true,
-                            "listen": format!("{}:{}", config.networking.listen_address, config.networking.listen_port),
-                            "data_dir": config.general.data_dir,
-                        }), &ctx.output)?;
+                        output::print_value(
+                            &serde_json::json!({
+                                "valid": true,
+                                "listen": format!("{}:{}", config.networking.listen_address, config.networking.listen_port),
+                                "data_dir": config.general.data_dir,
+                            }),
+                            &ctx.output,
+                        )?;
                     }
                     Err(e) => {
                         eprintln!("Config invalid: {e}");
@@ -114,11 +112,14 @@ impl ConfigCommands {
                 }
                 match client.put("/admin/config", Some(&patch)) {
                     Ok(_body) => {
-                        output::print_value(&serde_json::json!({
-                            "status": "updated",
-                            "key": key,
-                            "value": value,
-                        }), &ctx.output)?;
+                        output::print_value(
+                            &serde_json::json!({
+                                "status": "updated",
+                                "key": key,
+                                "value": value,
+                            }),
+                            &ctx.output,
+                        )?;
                     }
                     Err(e) => {
                         eprintln!("Failed to set config: {e}");
@@ -152,27 +153,45 @@ mod tests {
 
     #[test]
     fn test_show() {
-        assert!(matches!(parse(&["test", "show"]), ConfigCommands::Show { section: None }));
-        assert!(matches!(parse(&["test", "show", "storage"]), ConfigCommands::Show { section: Some(_) }));
+        assert!(matches!(
+            parse(&["test", "show"]),
+            ConfigCommands::Show { section: None }
+        ));
+        assert!(matches!(
+            parse(&["test", "show", "storage"]),
+            ConfigCommands::Show { section: Some(_) }
+        ));
     }
 
     #[test]
     fn test_get() {
-        assert!(matches!(parse(&["test", "get", "storage.page_size"]), ConfigCommands::Get { .. }));
+        assert!(matches!(
+            parse(&["test", "get", "storage.page_size"]),
+            ConfigCommands::Get { .. }
+        ));
     }
 
     #[test]
     fn test_set() {
-        assert!(matches!(parse(&["test", "set", "key", "value"]), ConfigCommands::Set { .. }));
+        assert!(matches!(
+            parse(&["test", "set", "key", "value"]),
+            ConfigCommands::Set { .. }
+        ));
     }
 
     #[test]
     fn test_validate() {
-        assert!(matches!(parse(&["test", "validate", "/tmp/cfg.toml"]), ConfigCommands::Validate { .. }));
+        assert!(matches!(
+            parse(&["test", "validate", "/tmp/cfg.toml"]),
+            ConfigCommands::Validate { .. }
+        ));
     }
 
     #[test]
     fn test_default() {
-        assert!(matches!(parse(&["test", "default"]), ConfigCommands::Default));
+        assert!(matches!(
+            parse(&["test", "default"]),
+            ConfigCommands::Default
+        ));
     }
 }
