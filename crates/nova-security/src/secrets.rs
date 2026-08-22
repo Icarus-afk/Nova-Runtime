@@ -73,16 +73,20 @@ impl SecretsManager {
             }
             SecretsProvider::File { directory } => {
                 let base = PathBuf::from(directory);
-                let canonical_base = fs::canonicalize(&base)
-                    .map_err(|e| SecurityError::Internal(e.to_string()))?;
+                let canonical_base =
+                    fs::canonicalize(&base).map_err(|e| SecurityError::Internal(e.to_string()))?;
                 let path = base.join(format!("{}.secret", name));
-                let canonical_path = fs::canonicalize(&path)
-                    .map_err(|_| SecurityError::SecretNotFound(path.to_string_lossy().to_string()))?;
+                let canonical_path = fs::canonicalize(&path).map_err(|_| {
+                    SecurityError::SecretNotFound(path.to_string_lossy().to_string())
+                })?;
                 if !canonical_path.starts_with(&canonical_base) {
-                    return Err(SecurityError::Internal("path traversal detected".to_string()));
+                    return Err(SecurityError::Internal(
+                        "path traversal detected".to_string(),
+                    ));
                 }
-                let data = fs::read(&canonical_path)
-                    .map_err(|_| SecurityError::SecretNotFound(canonical_path.to_string_lossy().to_string()))?;
+                let data = fs::read(&canonical_path).map_err(|_| {
+                    SecurityError::SecretNotFound(canonical_path.to_string_lossy().to_string())
+                })?;
                 Ok(SecretValue::new(data))
             }
         }
@@ -100,15 +104,14 @@ impl SecretsManager {
             }
             SecretsProvider::File { directory } => {
                 let base = PathBuf::from(directory);
-                let canonical_base = fs::canonicalize(&base)
-                    .map_err(|e| SecurityError::Internal(e.to_string()))?;
+                let canonical_base =
+                    fs::canonicalize(&base).map_err(|e| SecurityError::Internal(e.to_string()))?;
                 let path = canonical_base.join(format!("{}.secret", name));
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)
                         .map_err(|e| SecurityError::Internal(e.to_string()))?;
                 }
-                fs::write(&path, value)
-                    .map_err(|e| SecurityError::Internal(e.to_string()))?;
+                fs::write(&path, value).map_err(|e| SecurityError::Internal(e.to_string()))?;
                 Ok(())
             }
         }

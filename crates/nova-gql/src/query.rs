@@ -23,15 +23,13 @@ impl QueryRoot {
             status: HealthState::Healthy,
             uptime_seconds: uptime,
             version: env!("CARGO_PKG_VERSION").to_string(),
-            subsystems: vec![
-                SubsystemHealth {
-                    name: "storage".into(),
-                    status: HealthState::Healthy,
-                    latency_ms: 0.0,
-                    last_error: None,
-                    last_checked: now.clone(),
-                },
-            ],
+            subsystems: vec![SubsystemHealth {
+                name: "storage".into(),
+                status: HealthState::Healthy,
+                latency_ms: 0.0,
+                last_error: None,
+                last_checked: now.clone(),
+            }],
             last_startup: now,
         })
     }
@@ -41,7 +39,11 @@ impl QueryRoot {
         let cfg = app.config.read();
         Ok(ServerConfiguration {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            build_mode: if cfg!(debug_assertions) { "DEBUG".into() } else { "RELEASE".into() },
+            build_mode: if cfg!(debug_assertions) {
+                "DEBUG".into()
+            } else {
+                "RELEASE".into()
+            },
             log_level: cfg.logging.level.clone(),
             max_connections: cfg.general.max_connections as i32,
             query_timeout_ms: cfg.execution.default_operation_timeout_ms as i32,
@@ -60,7 +62,8 @@ impl QueryRoot {
                 },
                 queue: QueueConfig {
                     max_queues: cfg.queue.max_queues as i32,
-                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32 * 1000,
+                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32
+                        * 1000,
                     max_message_size_bytes: cfg.queue.max_message_size as i32,
                     message_retention_ms: (cfg.queue.message_ttl_secs as i64) * 1000,
                     dead_letter_max_receives: cfg.queue.max_receive_count as i32,
@@ -93,13 +96,20 @@ impl QueryRoot {
         })
     }
 
-    async fn metrics(&self, ctx: &Context<'_>, _input: Option<MetricsInput>) -> Result<MetricsSnapshot> {
+    async fn metrics(
+        &self,
+        ctx: &Context<'_>,
+        _input: Option<MetricsInput>,
+    ) -> Result<MetricsSnapshot> {
         let app = ctx.app()?;
         let snap = app.pipeline.metrics().snapshot();
         let now = Utc::now().to_rfc3339();
         Ok(MetricsSnapshot {
             collected_at: now.clone(),
-            time_range: MetricsTimeRange { start: now.clone(), end: now },
+            time_range: MetricsTimeRange {
+                start: now.clone(),
+                end: now,
+            },
             system: SystemMetrics {
                 cpu_usage_percent: 0.0,
                 memory_usage_bytes: 0,
@@ -153,7 +163,9 @@ impl QueryRoot {
         _params: Option<Vec<Option<serde_json::Value>>>,
     ) -> Result<SqlQueryResult> {
         let app = ctx.app()?;
-        let result = app.sql.execute(&query)
+        let result = app
+            .sql
+            .execute(&query)
             .map_err(|e| FieldError::new(format!("SQL error: {}", e)))?;
         match result {
             nova_sql::engine::SQLResult::Query { batches, stats } => {
@@ -162,37 +174,60 @@ impl QueryRoot {
                 } else {
                     batch_columns(&batches[0])
                 };
-                let col_infos: Vec<ColumnInfo> = columns.iter().map(|(name, _sql_type)| ColumnInfo {
-                    name: name.clone(),
-                    data_type: "TEXT".into(),
-                    nullable: true,
-                    primary_key: false,
-                    default_value: None,
-                    comment: None,
-                }).collect();
-                let rows: Vec<serde_json::Value> = batches.iter().flat_map(|batch| {
-                    (0..batch.num_rows).map(|row_idx| {
-                        let mut map = serde_json::Map::new();
-                        for (col_idx, (name, _)) in columns.iter().enumerate() {
-                            if col_idx < batch.columns.len() {
-                                use nova_sql::result::Column;
-                                let val = match &batch.columns[col_idx] {
-                                    Column::Integer(v) => v.get(row_idx).copied().flatten()
-                                        .map(|x| serde_json::Value::Number(x.into())),
-                                    Column::Float(v) => v.get(row_idx).copied().flatten()
-                                        .map(|x| serde_json::json!(x)),
-                                    Column::Boolean(v) => v.get(row_idx).copied().flatten()
-                                        .map(serde_json::Value::Bool),
-                                    Column::String(v) => v.get(row_idx).cloned().flatten()
-                                        .map(serde_json::Value::String),
-                                    Column::Null(_) => None,
-                                };
-                                map.insert(name.clone(), val.unwrap_or(serde_json::Value::Null));
-                            }
-                        }
-                        serde_json::Value::Object(map)
-                    }).collect::<Vec<_>>()
-                }).collect();
+                let col_infos: Vec<ColumnInfo> = columns
+                    .iter()
+                    .map(|(name, _sql_type)| ColumnInfo {
+                        name: name.clone(),
+                        data_type: "TEXT".into(),
+                        nullable: true,
+                        primary_key: false,
+                        default_value: None,
+                        comment: None,
+                    })
+                    .collect();
+                let rows: Vec<serde_json::Value> = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        (0..batch.num_rows)
+                            .map(|row_idx| {
+                                let mut map = serde_json::Map::new();
+                                for (col_idx, (name, _)) in columns.iter().enumerate() {
+                                    if col_idx < batch.columns.len() {
+                                        use nova_sql::result::Column;
+                                        let val = match &batch.columns[col_idx] {
+                                            Column::Integer(v) => v
+                                                .get(row_idx)
+                                                .copied()
+                                                .flatten()
+                                                .map(|x| serde_json::Value::Number(x.into())),
+                                            Column::Float(v) => v
+                                                .get(row_idx)
+                                                .copied()
+                                                .flatten()
+                                                .map(|x| serde_json::json!(x)),
+                                            Column::Boolean(v) => v
+                                                .get(row_idx)
+                                                .copied()
+                                                .flatten()
+                                                .map(serde_json::Value::Bool),
+                                            Column::String(v) => v
+                                                .get(row_idx)
+                                                .cloned()
+                                                .flatten()
+                                                .map(serde_json::Value::String),
+                                            Column::Null(_) => None,
+                                        };
+                                        map.insert(
+                                            name.clone(),
+                                            val.unwrap_or(serde_json::Value::Null),
+                                        );
+                                    }
+                                }
+                                serde_json::Value::Object(map)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
                 Ok(SqlQueryResult {
                     columns: col_infos,
                     row_count: rows.len() as i32,
@@ -201,15 +236,16 @@ impl QueryRoot {
                     warnings: Vec::new(),
                 })
             }
-            nova_sql::engine::SQLResult::Exec { rows_affected, stats } => {
-                Ok(SqlQueryResult {
-                    columns: Vec::new(),
-                    rows: Vec::new(),
-                    row_count: rows_affected as i32,
-                    execution_time_ms: stats.execution_time_ms as f64,
-                    warnings: Vec::new(),
-                })
-            }
+            nova_sql::engine::SQLResult::Exec {
+                rows_affected,
+                stats,
+            } => Ok(SqlQueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: rows_affected as i32,
+                execution_time_ms: stats.execution_time_ms as f64,
+                warnings: Vec::new(),
+            }),
         }
     }
 
@@ -275,7 +311,9 @@ impl QueryRoot {
 
     async fn cache_exists(&self, ctx: &Context<'_>, key: String) -> Result<bool> {
         let app = ctx.app()?;
-        app.cache.exists(&key).await
+        app.cache
+            .exists(&key)
+            .await
             .map_err(|e| FieldError::new(format!("Cache error: {}", e)))
     }
 
@@ -312,7 +350,10 @@ impl QueryRoot {
 
     async fn queues(&self, ctx: &Context<'_>) -> Result<Vec<Queue>> {
         let app = ctx.app()?;
-        let summaries = app.queue.list_queues().await
+        let summaries = app
+            .queue
+            .list_queues()
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         let mut queues = Vec::new();
         for s in summaries {
@@ -346,7 +387,10 @@ impl QueryRoot {
 
     async fn queue_stats(&self, ctx: &Context<'_>) -> Result<QueueOverallStats> {
         let app = ctx.app()?;
-        let summaries = app.queue.list_queues().await
+        let summaries = app
+            .queue
+            .list_queues()
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         let total_messages: i64 = summaries.iter().map(|s| s.total as i64).sum();
         Ok(QueueOverallStats {
@@ -355,12 +399,20 @@ impl QueryRoot {
             total_messages_sent: total_messages,
             total_messages_received: 0,
             total_messages_dead_lettered: 0,
-            avg_queue_depth: if summaries.is_empty() { 0.0 } else { total_messages as f64 / summaries.len() as f64 },
+            avg_queue_depth: if summaries.is_empty() {
+                0.0
+            } else {
+                total_messages as f64 / summaries.len() as f64
+            },
             avg_processing_time_ms: 0.0,
         })
     }
 
-    async fn dead_letter_stats(&self, _ctx: &Context<'_>, _queue: String) -> Result<DeadLetterStats> {
+    async fn dead_letter_stats(
+        &self,
+        _ctx: &Context<'_>,
+        _queue: String,
+    ) -> Result<DeadLetterStats> {
         Ok(DeadLetterStats {
             total_dead_lettered: 0,
             total_dead_letter_queues: 0,
@@ -374,7 +426,10 @@ impl QueryRoot {
 
     async fn jobs(&self, ctx: &Context<'_>) -> Result<Vec<Job>> {
         let app = ctx.app()?;
-        let summaries = app.scheduler.list_jobs(None).await
+        let summaries = app
+            .scheduler
+            .list_jobs(None)
+            .await
             .map_err(|e| FieldError::new(format!("Scheduler error: {}", e)))?;
         let mut jobs = Vec::new();
         for s in summaries {
@@ -402,11 +457,15 @@ impl QueryRoot {
                 timeout_ms: 300000,
                 created_at: String::new(),
                 updated_at: String::new(),
-                last_executed_at: s.last_run_at
-                    .and_then(|t| chrono::DateTime::from_timestamp_millis(t).map(|d| d.to_rfc3339())),
+                last_executed_at: s.last_run_at.and_then(|t| {
+                    chrono::DateTime::from_timestamp_millis(t).map(|d| d.to_rfc3339())
+                }),
                 last_error: None,
-                next_execution_at: Some(chrono::DateTime::from_timestamp_millis(s.next_run_at)
-                    .map(|d| d.to_rfc3339()).unwrap_or_default()),
+                next_execution_at: Some(
+                    chrono::DateTime::from_timestamp_millis(s.next_run_at)
+                        .map(|d| d.to_rfc3339())
+                        .unwrap_or_default(),
+                ),
                 tags: Vec::new(),
                 input: None,
                 metadata: JobMetadata {
@@ -424,7 +483,10 @@ impl QueryRoot {
 
     async fn job(&self, ctx: &Context<'_>, id: Uuid) -> Result<Job> {
         let app = ctx.app()?;
-        let job = app.scheduler.get_job(&id).await
+        let job = app
+            .scheduler
+            .get_job(&id)
+            .await
             .map_err(|e| FieldError::new(format!("Job not found: {}", e)))?;
         Ok(Job {
             id: job.id,
@@ -436,7 +498,9 @@ impl QueryRoot {
                 nova_scheduler::ScheduleType::Cron => JobType::Cron,
             },
             state: match job.state {
-                nova_scheduler::JobState::Pending | nova_scheduler::JobState::Running => JobStateEnum::Active,
+                nova_scheduler::JobState::Pending | nova_scheduler::JobState::Running => {
+                    JobStateEnum::Active
+                }
                 nova_scheduler::JobState::Completed => JobStateEnum::Completed,
                 nova_scheduler::JobState::Failed => JobStateEnum::Failed,
                 nova_scheduler::JobState::Cancelled => JobStateEnum::Cancelled,
@@ -448,14 +512,20 @@ impl QueryRoot {
             retry_count: job.retry_count as i32,
             timeout_ms: job.timeout_secs as i32 * 1000,
             created_at: chrono::DateTime::from_timestamp_millis(job.created_at)
-                .map(|d| d.to_rfc3339()).unwrap_or_default(),
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_default(),
             updated_at: chrono::DateTime::from_timestamp_millis(job.updated_at)
-                .map(|d| d.to_rfc3339()).unwrap_or_default(),
-            last_executed_at: job.last_run_at
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_default(),
+            last_executed_at: job
+                .last_run_at
                 .and_then(|t| chrono::DateTime::from_timestamp_millis(t).map(|d| d.to_rfc3339())),
             last_error: None,
-            next_execution_at: Some(chrono::DateTime::from_timestamp_millis(job.next_run_at)
-                .map(|d| d.to_rfc3339()).unwrap_or_default()),
+            next_execution_at: Some(
+                chrono::DateTime::from_timestamp_millis(job.next_run_at)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
+            ),
             tags: job.tags.into_values().collect(),
             input: serde_json::from_slice(&job.payload).ok(),
             metadata: JobMetadata {
@@ -472,10 +542,22 @@ impl QueryRoot {
     async fn scheduler_stats(&self, ctx: &Context<'_>) -> Result<SchedulerStats> {
         let app = ctx.app()?;
         let jobs = app.scheduler.list_jobs(None).await.unwrap_or_default();
-        let running = jobs.iter().filter(|j| j.state == nova_scheduler::JobState::Running).count() as i32;
-        let pending = jobs.iter().filter(|j| j.state == nova_scheduler::JobState::Pending).count() as i32;
-        let failed = jobs.iter().filter(|j| j.state == nova_scheduler::JobState::Failed).count() as i32;
-        let completed = jobs.iter().filter(|j| j.state == nova_scheduler::JobState::Completed).count() as i32;
+        let running = jobs
+            .iter()
+            .filter(|j| j.state == nova_scheduler::JobState::Running)
+            .count() as i32;
+        let pending = jobs
+            .iter()
+            .filter(|j| j.state == nova_scheduler::JobState::Pending)
+            .count() as i32;
+        let failed = jobs
+            .iter()
+            .filter(|j| j.state == nova_scheduler::JobState::Failed)
+            .count() as i32;
+        let completed = jobs
+            .iter()
+            .filter(|j| j.state == nova_scheduler::JobState::Completed)
+            .count() as i32;
         Ok(SchedulerStats {
             total_jobs: jobs.len() as i32,
             active_jobs: running,
@@ -487,7 +569,11 @@ impl QueryRoot {
             avg_execution_time_ms: 0.0,
             p95_execution_time_ms: 0.0,
             p99_execution_time_ms: 0.0,
-            success_rate: if jobs.is_empty() { 1.0 } else { completed as f64 / jobs.len() as f64 },
+            success_rate: if jobs.is_empty() {
+                1.0
+            } else {
+                completed as f64 / jobs.len() as f64
+            },
             triggers_fired_total: 0,
         })
     }
@@ -505,8 +591,10 @@ impl QueryRoot {
     ) -> Result<SearchResultConnection> {
         let app = ctx.app()?;
         let results = app.search.search(&query, 25).unwrap_or_default();
-        let edges: Vec<SearchResultEdge> = results.iter().enumerate().map(|(i, r)| {
-            SearchResultEdge {
+        let edges: Vec<SearchResultEdge> = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| SearchResultEdge {
                 node: SearchResult {
                     id: Uuid::new_v4(),
                     index: index.clone(),
@@ -518,8 +606,8 @@ impl QueryRoot {
                     format!("cursor:{}", i),
                 ),
                 score: r.score,
-            }
-        }).collect();
+            })
+            .collect();
         let start_cursor = edges.first().map(|e| e.cursor.clone());
         let end_cursor = edges.last().map(|e| e.cursor.clone());
         Ok(SearchResultConnection {
@@ -606,7 +694,10 @@ impl QueryRoot {
 }
 
 fn batch_columns(batch: &nova_sql::result::RecordBatch) -> Vec<(String, String)> {
-    batch.columns.iter().enumerate().map(|(i, _col)| {
-        (format!("col_{}", i), "TEXT".into())
-    }).collect()
+    batch
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, _col)| (format!("col_{}", i), "TEXT".into()))
+        .collect()
 }

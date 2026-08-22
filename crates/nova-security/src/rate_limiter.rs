@@ -1,4 +1,3 @@
-
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -69,10 +68,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new(
-        global_rate: Option<(f64, f64)>,
-        endpoint_limits: Vec<EndpointRateLimit>,
-    ) -> Self {
+    pub fn new(global_rate: Option<(f64, f64)>, endpoint_limits: Vec<EndpointRateLimit>) -> Self {
         let global_bucket = global_rate.map(|(tps, burst)| TokenBucket::new(tps, burst));
 
         RateLimiter {
@@ -204,7 +200,11 @@ mod tests {
     #[test]
     fn test_rate_limiter_per_key() {
         let limiter = RateLimiter::new(None, vec![]);
-        assert!(limiter.check("127.0.0.1", "/api/test", 1.0, ms(0.0)).is_ok());
+        assert!(
+            limiter
+                .check("127.0.0.1", "/api/test", 1.0, ms(0.0))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -213,7 +213,9 @@ mod tests {
         for _ in 0..10 {
             assert!(limiter.check("1.2.3.4", "/api/test", 1.0, ms(0.0)).is_ok());
         }
-        let err = limiter.check("5.6.7.8", "/api/other", 1.0, ms(0.0)).unwrap_err();
+        let err = limiter
+            .check("5.6.7.8", "/api/other", 1.0, ms(0.0))
+            .unwrap_err();
         assert!(err > 0);
     }
 
@@ -229,7 +231,9 @@ mod tests {
         for _ in 0..5 {
             assert!(limiter.check("1.2.3.4", "/api/data", 1.0, ms(0.0)).is_ok());
         }
-        let err = limiter.check("1.2.3.4", "/api/data", 1.0, ms(0.0)).unwrap_err();
+        let err = limiter
+            .check("1.2.3.4", "/api/data", 1.0, ms(0.0))
+            .unwrap_err();
         assert!(err > 0);
     }
 

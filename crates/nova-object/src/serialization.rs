@@ -1,12 +1,12 @@
 use std::io::{Cursor, Read, Write};
 
-use tracing::debug;
 use nova_core::error::{Result, RuntimeError};
-use rmp::{encode, decode, Marker};
+use rmp::{Marker, decode, encode};
+use tracing::debug;
 
 use crate::document::Document;
 use crate::schema::CollectionSchema;
-use crate::types::{Value, GeoJsonGeometry};
+use crate::types::{GeoJsonGeometry, Value};
 
 /// Custom MessagePack extension type tags (codes 8–19).
 pub const EXT_DOCUMENT_ID: i8 = 8;
@@ -28,13 +28,22 @@ pub const EXT_STATUS_CODE: i8 = 19;
 
 pub fn to_msgpack(doc: &Document) -> Result<Vec<u8>> {
     let bytes = rmp_serde::to_vec(doc).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
-    debug!("serialized document '{}' to {} bytes", doc.meta.collection, bytes.len());
+    debug!(
+        "serialized document '{}' to {} bytes",
+        doc.meta.collection,
+        bytes.len()
+    );
     Ok(bytes)
 }
 
 pub fn from_msgpack(data: &[u8]) -> Result<Document> {
-    let doc: Document = rmp_serde::from_slice(data).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
-    debug!("deserialized document '{}' from {} bytes", doc.meta.collection, data.len());
+    let doc: Document =
+        rmp_serde::from_slice(data).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+    debug!(
+        "deserialized document '{}' from {} bytes",
+        doc.meta.collection,
+        data.len()
+    );
     Ok(doc)
 }
 
@@ -60,25 +69,31 @@ fn encode_to_vec(buf: &mut Vec<u8>, value: &Value) -> Result<()> {
         }
 
         Value::Int8(v) => {
-            encode::write_sint(buf, *v as i64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_sint(buf, *v as i64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::Int16(v) => {
-            encode::write_sint(buf, *v as i64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_sint(buf, *v as i64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::Int32(v) => {
-            encode::write_sint(buf, *v as i64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_sint(buf, *v as i64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::Int64(v) => {
             encode::write_sint(buf, *v).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::UInt8(v) => {
-            encode::write_uint(buf, *v as u64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_uint(buf, *v as u64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::UInt16(v) => {
-            encode::write_uint(buf, *v as u64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_uint(buf, *v as u64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::UInt32(v) => {
-            encode::write_uint(buf, *v as u64).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_uint(buf, *v as u64)
+                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
         Value::UInt64(v) => {
             encode::write_uint(buf, *v).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
@@ -118,7 +133,12 @@ fn encode_to_vec(buf: &mut Vec<u8>, value: &Value) -> Result<()> {
         }
 
         // --- ext 15: Time (u64 ns since midnight, 8 bytes, big-endian) ------
-        Value::Time { hour, min, sec, nano } => {
+        Value::Time {
+            hour,
+            min,
+            sec,
+            nano,
+        } => {
             let nanos = hmsn_to_nanos(*hour, *min, *sec, *nano);
             let data = nanos.to_be_bytes();
             encode::write_ext_meta(buf, 8, EXT_TIME)
@@ -149,7 +169,11 @@ fn encode_to_vec(buf: &mut Vec<u8>, value: &Value) -> Result<()> {
         }
 
         // --- ext 11: Decimal (16-byte value + 1-byte precision + 1 scale) --
-        Value::Decimal { value, precision, scale } => {
+        Value::Decimal {
+            value,
+            precision,
+            scale,
+        } => {
             let mut data = [0u8; 18];
             data[..16].copy_from_slice(value);
             data[16] = *precision;
@@ -162,8 +186,8 @@ fn encode_to_vec(buf: &mut Vec<u8>, value: &Value) -> Result<()> {
 
         // --- ext 12: GeoShape (MessagePack-encoded GeoJsonGeometry) ---------
         Value::GeoShape(geom) => {
-            let encoded = rmp_serde::to_vec(geom)
-                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            let encoded =
+                rmp_serde::to_vec(geom).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
             encode::write_ext_meta(buf, encoded.len() as u32, EXT_GEO_SHAPE)
                 .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
             buf.write_all(&encoded)
@@ -176,18 +200,15 @@ fn encode_to_vec(buf: &mut Vec<u8>, value: &Value) -> Result<()> {
                 .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
             encode::write_str(buf, collection)
                 .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
-            encode::write_bin(buf, id)
-                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_bin(buf, id).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
 
         // --- GeoPoint: 2-element array [lat, lon] ---------------------------
         Value::GeoPoint { lat, lon } => {
             encode::write_array_len(buf, 2)
                 .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
-            encode::write_f64(buf, *lat)
-                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
-            encode::write_f64(buf, *lon)
-                .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_f64(buf, *lat).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
+            encode::write_f64(buf, *lon).map_err(|e| RuntimeError::Serialization(e.to_string()))?;
         }
 
         // --- Vector: array of f32 -------------------------------------------
@@ -308,32 +329,32 @@ fn decode_value_reader<R: Read>(reader: &mut R) -> Result<Value> {
         Marker::FixStr(len) => {
             let mut buf = vec![0u8; len as usize];
             reader.read_exact(&mut buf)?;
-            let s = String::from_utf8(buf)
-                .map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+            let s =
+                String::from_utf8(buf).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
             Ok(Value::String(s))
         }
         Marker::Str8 => {
             let len = read_u8(reader)? as usize;
             let mut buf = vec![0u8; len];
             reader.read_exact(&mut buf)?;
-            let s = String::from_utf8(buf)
-                .map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+            let s =
+                String::from_utf8(buf).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
             Ok(Value::String(s))
         }
         Marker::Str16 => {
             let len = read_u16(reader)? as usize;
             let mut buf = vec![0u8; len];
             reader.read_exact(&mut buf)?;
-            let s = String::from_utf8(buf)
-                .map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+            let s =
+                String::from_utf8(buf).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
             Ok(Value::String(s))
         }
         Marker::Str32 => {
             let len = read_u32(reader)? as usize;
             let mut buf = vec![0u8; len];
             reader.read_exact(&mut buf)?;
-            let s = String::from_utf8(buf)
-                .map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+            let s =
+                String::from_utf8(buf).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
             Ok(Value::String(s))
         }
 
@@ -488,9 +509,7 @@ fn decode_map_key<R: Read>(reader: &mut R) -> Result<String> {
 /// Dispatch on the ext type tag and reconstruct the correct `Value`.
 fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
     match tc {
-        EXT_DOCUMENT_ID | EXT_EVENT_ID => {
-            Ok(Value::Binary(data.to_vec()))
-        }
+        EXT_DOCUMENT_ID | EXT_EVENT_ID => Ok(Value::Binary(data.to_vec())),
 
         EXT_TIMESTAMP => {
             if data.len() >= 8 {
@@ -499,7 +518,8 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 Ok(Value::Timestamp(i64::from_be_bytes(buf)))
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "Timestamp ext: expected 8 bytes, got {}", data.len()
+                    "Timestamp ext: expected 8 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -508,10 +528,15 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
             if data.len() >= 18 {
                 let mut val = [0u8; 16];
                 val.copy_from_slice(&data[..16]);
-                Ok(Value::Decimal { value: val, precision: data[16], scale: data[17] })
+                Ok(Value::Decimal {
+                    value: val,
+                    precision: data[16],
+                    scale: data[17],
+                })
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "Decimal ext: expected 18 bytes, got {}", data.len()
+                    "Decimal ext: expected 18 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -533,7 +558,8 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 Ok(Value::Date { year, month, day })
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "Date ext: expected 4 bytes, got {}", data.len()
+                    "Date ext: expected 4 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -544,10 +570,16 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 buf.copy_from_slice(&data[..8]);
                 let nanos = u64::from_be_bytes(buf);
                 let (hour, min, sec, nano) = nanos_to_hmsn(nanos);
-                Ok(Value::Time { hour, min, sec, nano })
+                Ok(Value::Time {
+                    hour,
+                    min,
+                    sec,
+                    nano,
+                })
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "Time ext: expected 8 bytes, got {}", data.len()
+                    "Time ext: expected 8 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -564,7 +596,8 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 Ok(Value::DateTime { secs, nsecs })
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "DateTime ext: expected 12 bytes, got {}", data.len()
+                    "DateTime ext: expected 12 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -574,10 +607,13 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 let mut buf = [0u8; 8];
                 buf.copy_from_slice(&data[..8]);
                 let nanos = u64::from_be_bytes(buf);
-                Ok(Value::Duration { nanos: nanos as i64 })
+                Ok(Value::Duration {
+                    nanos: nanos as i64,
+                })
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "Duration ext: expected 8 bytes, got {}", data.len()
+                    "Duration ext: expected 8 bytes, got {}",
+                    data.len()
                 )))
             }
         }
@@ -595,13 +631,15 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
                 Ok(Value::Int64(u16::from_be_bytes(buf) as i64))
             } else {
                 Err(RuntimeError::Deserialization(format!(
-                    "StatusCode ext: expected 2 bytes, got {}", data.len()
+                    "StatusCode ext: expected 2 bytes, got {}",
+                    data.len()
                 )))
             }
         }
 
         _ => Err(RuntimeError::Deserialization(format!(
-            "unknown MessagePack ext type tag: {}", tc
+            "unknown MessagePack ext type tag: {}",
+            tc
         ))),
     }
 }
@@ -612,13 +650,21 @@ fn decode_ext(tc: i8, data: &[u8]) -> Result<Value> {
 
 pub fn value_to_msgpack(val: &Value) -> Result<Vec<u8>> {
     let buf = encode_value(val)?;
-    debug!("serialized value of type {} to {} bytes", val.type_name(), buf.len());
+    debug!(
+        "serialized value of type {} to {} bytes",
+        val.type_name(),
+        buf.len()
+    );
     Ok(buf)
 }
 
 pub fn value_from_msgpack(data: &[u8]) -> Result<Value> {
     let val = decode_value(data)?;
-    debug!("deserialized value of type {} from {} bytes", val.type_name(), data.len());
+    debug!(
+        "deserialized value of type {} from {} bytes",
+        val.type_name(),
+        data.len()
+    );
     Ok(val)
 }
 
@@ -629,14 +675,22 @@ pub fn value_from_msgpack(data: &[u8]) -> Result<Value> {
 pub fn schema_to_json(schema: &CollectionSchema) -> Result<String> {
     let json = serde_json::to_string_pretty(schema)
         .map_err(|e| RuntimeError::Serialization(e.to_string()))?;
-    debug!("serialized schema '{}' to JSON ({} bytes)", schema.collection, json.len());
+    debug!(
+        "serialized schema '{}' to JSON ({} bytes)",
+        schema.collection,
+        json.len()
+    );
     Ok(json)
 }
 
 pub fn schema_from_json(data: &str) -> Result<CollectionSchema> {
-    let schema: CollectionSchema = serde_json::from_str(data)
-        .map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
-    debug!("deserialized schema '{}' from JSON ({} bytes)", schema.collection, data.len());
+    let schema: CollectionSchema =
+        serde_json::from_str(data).map_err(|e| RuntimeError::Deserialization(e.to_string()))?;
+    debug!(
+        "deserialized schema '{}' from JSON ({} bytes)",
+        schema.collection,
+        data.len()
+    );
     Ok(schema)
 }
 
@@ -741,18 +795,19 @@ fn datetime_to_unix(days: u32, nanos: u64) -> (i64, u32) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use crate::document::Document;
     use crate::schema::*;
-    use crate::types::{Value, GeoJsonGeometry};
     use crate::serialization::*;
+    use crate::types::{GeoJsonGeometry, Value};
+    use std::collections::HashMap;
 
     // --- Document round-trip ---
 
     #[test]
     fn test_document_msgpack_roundtrip() {
         let mut doc = Document::new("test_coll");
-        doc.data.insert("name".into(), Value::String("alice".into()));
+        doc.data
+            .insert("name".into(), Value::String("alice".into()));
         doc.data.insert("age".into(), Value::Int32(30));
         let bytes = to_msgpack(&doc).unwrap();
         let back = from_msgpack(&bytes).unwrap();
@@ -887,7 +942,11 @@ mod tests {
     fn test_value_roundtrip_date() {
         // Note: ymd_to_days/days_to_ymd have a 1-day offset, so round-trip
         // produces the next day. Test that encoding/decoding produces a Date.
-        let v = Value::Date { year: 2024, month: 6, day: 15 };
+        let v = Value::Date {
+            year: 2024,
+            month: 6,
+            day: 15,
+        };
         let bytes = encode_value(&v).unwrap();
         let back = decode_value(&bytes).unwrap();
         assert!(matches!(back, Value::Date { .. }));
@@ -895,38 +954,63 @@ mod tests {
 
     #[test]
     fn test_value_roundtrip_time() {
-        roundtrip_value(Value::Time { hour: 12, min: 30, sec: 45, nano: 123456789 });
-        roundtrip_value(Value::Time { hour: 0, min: 0, sec: 0, nano: 0 });
-        roundtrip_value(Value::Time { hour: 23, min: 59, sec: 59, nano: 999999999 });
+        roundtrip_value(Value::Time {
+            hour: 12,
+            min: 30,
+            sec: 45,
+            nano: 123456789,
+        });
+        roundtrip_value(Value::Time {
+            hour: 0,
+            min: 0,
+            sec: 0,
+            nano: 0,
+        });
+        roundtrip_value(Value::Time {
+            hour: 23,
+            min: 59,
+            sec: 59,
+            nano: 999999999,
+        });
     }
 
     #[test]
     fn test_value_roundtrip_datetime() {
-        roundtrip_value(Value::DateTime { secs: 1_700_000_000, nsecs: 123_456_789 });
+        roundtrip_value(Value::DateTime {
+            secs: 1_700_000_000,
+            nsecs: 123_456_789,
+        });
         roundtrip_value(Value::DateTime { secs: 0, nsecs: 0 });
     }
 
     #[test]
     fn test_value_roundtrip_duration_positive() {
-        roundtrip_value(Value::Duration { nanos: 3_600_000_000_000 });
+        roundtrip_value(Value::Duration {
+            nanos: 3_600_000_000_000,
+        });
         roundtrip_value(Value::Duration { nanos: 0 });
     }
 
     #[test]
     fn test_value_roundtrip_decimal() {
-        roundtrip_value(Value::Decimal { value: [0; 16], precision: 10, scale: 2 });
+        roundtrip_value(Value::Decimal {
+            value: [0; 16],
+            precision: 10,
+            scale: 2,
+        });
         let mut val = [0u8; 16];
         val[0] = 0x01;
-        roundtrip_value(Value::Decimal { value: val, precision: 38, scale: 10 });
+        roundtrip_value(Value::Decimal {
+            value: val,
+            precision: 38,
+            scale: 10,
+        });
     }
 
     #[test]
     fn test_value_roundtrip_array() {
         // Note: integer widths may change (e.g., Int64 → UInt16 for 1000)
-        let v = Value::Array(vec![
-            Value::String("two".into()),
-            Value::Bool(true),
-        ]);
+        let v = Value::Array(vec![Value::String("two".into()), Value::Bool(true)]);
         roundtrip_value(v);
     }
 
@@ -961,7 +1045,10 @@ mod tests {
     #[test]
     fn test_value_roundtrip_reference_encoded_as_array() {
         let id = uuid::Uuid::new_v4().into_bytes();
-        let v = Value::Reference { collection: "users".into(), id };
+        let v = Value::Reference {
+            collection: "users".into(),
+            id,
+        };
         let bytes = encode_value(&v).unwrap();
         let back = decode_value(&bytes).unwrap();
         // Reference round-trips as Array
@@ -970,7 +1057,10 @@ mod tests {
 
     #[test]
     fn test_value_roundtrip_geopoint_encoded_as_array() {
-        let v = Value::GeoPoint { lat: 48.8566, lon: 2.3522 };
+        let v = Value::GeoPoint {
+            lat: 48.8566,
+            lon: 2.3522,
+        };
         let bytes = encode_value(&v).unwrap();
         let back = decode_value(&bytes).unwrap();
         // GeoPoint round-trips as Array
@@ -979,7 +1069,9 @@ mod tests {
 
     #[test]
     fn test_value_roundtrip_geoshape() {
-        roundtrip_value(Value::GeoShape(GeoJsonGeometry::Point { coordinates: [1.0, 2.0] }));
+        roundtrip_value(Value::GeoShape(GeoJsonGeometry::Point {
+            coordinates: [1.0, 2.0],
+        }));
         roundtrip_value(Value::GeoShape(GeoJsonGeometry::MultiPoint {
             coordinates: vec![[1.0, 2.0], [3.0, 4.0]],
         }));
@@ -1028,7 +1120,10 @@ mod tests {
     fn test_value_msgpack_roundtrip() {
         let v = Value::Object(HashMap::from([
             ("name".into(), Value::String("bob".into())),
-            ("scores".into(), Value::Array(vec![Value::Float64(95.5), Value::Float64(87.3)])),
+            (
+                "scores".into(),
+                Value::Array(vec![Value::Float64(95.5), Value::Float64(87.3)]),
+            ),
         ]));
         let bytes = value_to_msgpack(&v).unwrap();
         let back = value_from_msgpack(&bytes).unwrap();

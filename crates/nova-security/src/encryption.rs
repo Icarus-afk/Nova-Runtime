@@ -64,12 +64,18 @@ impl EncryptionEngine {
         let key_wrapper = self.active_key.read().clone();
         match key_wrapper.algorithm {
             EncryptionAlgorithm::Aes256Gcm => self.encrypt_aes256gcm(&key_wrapper, plaintext),
-            EncryptionAlgorithm::Aes256GcmSiv => self.encrypt_aes256gcm_siv(&key_wrapper, plaintext),
+            EncryptionAlgorithm::Aes256GcmSiv => {
+                self.encrypt_aes256gcm_siv(&key_wrapper, plaintext)
+            }
             EncryptionAlgorithm::ChaCha20Poly1305 => self.encrypt_chacha20(&key_wrapper, plaintext),
         }
     }
 
-    fn encrypt_aes256gcm(&self, key_wrapper: &KeyWrapper, plaintext: &[u8]) -> Result<EncryptedData> {
+    fn encrypt_aes256gcm(
+        &self,
+        key_wrapper: &KeyWrapper,
+        plaintext: &[u8],
+    ) -> Result<EncryptedData> {
         let key = Key::<Aes256Gcm>::from_slice(&key_wrapper.key);
         let cipher = Aes256Gcm::new(key);
 
@@ -96,9 +102,15 @@ impl EncryptionEngine {
         })
     }
 
-    fn encrypt_aes256gcm_siv(&self, key_wrapper: &KeyWrapper, plaintext: &[u8]) -> Result<EncryptedData> {
+    fn encrypt_aes256gcm_siv(
+        &self,
+        key_wrapper: &KeyWrapper,
+        plaintext: &[u8],
+    ) -> Result<EncryptedData> {
         use aes_gcm_siv::aead::{Aead, NewAead};
-        use aes_gcm_siv::{Aes256GcmSiv as Aes256GcmSivCipher, Key as AesGcmSivKey, Nonce as AesGcmSivNonce};
+        use aes_gcm_siv::{
+            Aes256GcmSiv as Aes256GcmSivCipher, Key as AesGcmSivKey, Nonce as AesGcmSivNonce,
+        };
 
         let key = AesGcmSivKey::from_slice(&key_wrapper.key);
         let cipher = Aes256GcmSivCipher::new(key);
@@ -126,7 +138,11 @@ impl EncryptionEngine {
         })
     }
 
-    fn encrypt_chacha20(&self, key_wrapper: &KeyWrapper, plaintext: &[u8]) -> Result<EncryptedData> {
+    fn encrypt_chacha20(
+        &self,
+        key_wrapper: &KeyWrapper,
+        plaintext: &[u8],
+    ) -> Result<EncryptedData> {
         use chacha20poly1305::aead::{Aead, KeyInit};
         use chacha20poly1305::{ChaCha20Poly1305, Key as ChaChaKey, Nonce as ChaChaNonce};
 
@@ -197,9 +213,15 @@ impl EncryptionEngine {
             .map_err(|e| SecurityError::Decryption(e.to_string()))
     }
 
-    fn decrypt_aes256gcm_siv(&self, key_wrapper: &KeyWrapper, data: &EncryptedData) -> Result<Vec<u8>> {
+    fn decrypt_aes256gcm_siv(
+        &self,
+        key_wrapper: &KeyWrapper,
+        data: &EncryptedData,
+    ) -> Result<Vec<u8>> {
         use aes_gcm_siv::aead::{Aead, NewAead};
-        use aes_gcm_siv::{Aes256GcmSiv as Aes256GcmSivCipher, Key as AesGcmSivKey, Nonce as AesGcmSivNonce};
+        use aes_gcm_siv::{
+            Aes256GcmSiv as Aes256GcmSivCipher, Key as AesGcmSivKey, Nonce as AesGcmSivNonce,
+        };
 
         let key = AesGcmSivKey::from_slice(&key_wrapper.key);
         let cipher = Aes256GcmSivCipher::new(key);
@@ -314,7 +336,9 @@ mod tests {
         let key = generate_key();
         let engine = EncryptionEngine::new(key);
         let encrypted = engine.encrypt(b"integrity check").unwrap();
-        let mut tampered = EncryptedData { ..encrypted.clone() };
+        let mut tampered = EncryptedData {
+            ..encrypted.clone()
+        };
         tampered.tag[0] ^= 0x01;
         let result = engine.decrypt(&tampered);
         assert!(result.is_err());
@@ -325,7 +349,9 @@ mod tests {
         let key = generate_key();
         let engine = EncryptionEngine::new(key);
         let encrypted = engine.encrypt(b"sensitive data").unwrap();
-        let mut tampered = EncryptedData { ..encrypted.clone() };
+        let mut tampered = EncryptedData {
+            ..encrypted.clone()
+        };
         tampered.ciphertext[0] ^= 0xFF;
         let result = engine.decrypt(&tampered);
         assert!(result.is_err());
@@ -336,7 +362,9 @@ mod tests {
         let key = generate_key();
         let engine = EncryptionEngine::new(key);
         let encrypted = engine.encrypt(b"nonce protected").unwrap();
-        let mut tampered = EncryptedData { ..encrypted.clone() };
+        let mut tampered = EncryptedData {
+            ..encrypted.clone()
+        };
         tampered.nonce[0] ^= 0x01;
         let result = engine.decrypt(&tampered);
         assert!(result.is_err());

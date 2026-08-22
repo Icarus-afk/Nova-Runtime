@@ -37,7 +37,11 @@ impl MutationRoot {
         let cfg = ctx.config.read();
         Ok(ServerConfiguration {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            build_mode: if cfg!(debug_assertions) { "DEBUG".into() } else { "RELEASE".into() },
+            build_mode: if cfg!(debug_assertions) {
+                "DEBUG".into()
+            } else {
+                "RELEASE".into()
+            },
             log_level: cfg.logging.level.clone(),
             max_connections: cfg.general.max_connections as i32,
             query_timeout_ms: cfg.execution.default_operation_timeout_ms as i32,
@@ -56,7 +60,8 @@ impl MutationRoot {
                 },
                 queue: QueueConfig {
                     max_queues: cfg.queue.max_queues as i32,
-                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32 * 1000,
+                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32
+                        * 1000,
                     max_message_size_bytes: cfg.queue.max_message_size as i32,
                     message_retention_ms: (cfg.queue.message_ttl_secs as i64) * 1000,
                     dead_letter_max_receives: cfg.queue.max_receive_count as i32,
@@ -98,7 +103,11 @@ impl MutationRoot {
         let cfg = app.config.read();
         Ok(ServerConfiguration {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            build_mode: if cfg!(debug_assertions) { "DEBUG".into() } else { "RELEASE".into() },
+            build_mode: if cfg!(debug_assertions) {
+                "DEBUG".into()
+            } else {
+                "RELEASE".into()
+            },
             log_level: cfg.logging.level.clone(),
             max_connections: cfg.general.max_connections as i32,
             query_timeout_ms: cfg.execution.default_operation_timeout_ms as i32,
@@ -117,7 +126,8 @@ impl MutationRoot {
                 },
                 queue: QueueConfig {
                     max_queues: cfg.queue.max_queues as i32,
-                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32 * 1000,
+                    default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32
+                        * 1000,
                     max_message_size_bytes: cfg.queue.max_message_size as i32,
                     message_retention_ms: (cfg.queue.message_ttl_secs as i64) * 1000,
                     dead_letter_max_receives: cfg.queue.max_receive_count as i32,
@@ -161,19 +171,22 @@ impl MutationRoot {
         _params: Option<Vec<Option<serde_json::Value>>>,
     ) -> Result<SqlQueryResult> {
         let app = ctx.app()?;
-        let result = app.sql.execute(&query)
+        let result = app
+            .sql
+            .execute(&query)
             .map_err(|e| FieldError::new(format!("SQL error: {}", e)))?;
 
         match result {
-            nova_sql::engine::SQLResult::Exec { rows_affected, stats } => {
-                Ok(SqlQueryResult {
-                    columns: Vec::new(),
-                    rows: Vec::new(),
-                    row_count: rows_affected as i32,
-                    execution_time_ms: stats.execution_time_ms as f64,
-                    warnings: Vec::new(),
-                })
-            }
+            nova_sql::engine::SQLResult::Exec {
+                rows_affected,
+                stats,
+            } => Ok(SqlQueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: rows_affected as i32,
+                execution_time_ms: stats.execution_time_ms as f64,
+                warnings: Vec::new(),
+            }),
             _ => Err(FieldError::new("Query did not return an execution result")),
         }
     }
@@ -202,16 +215,16 @@ impl MutationRoot {
     // Cache
     // ============================================================
 
-    async fn cache_set(
-        &self,
-        ctx: &Context<'_>,
-        input: CacheSetInput,
-    ) -> Result<CacheEntry> {
+    async fn cache_set(&self, ctx: &Context<'_>, input: CacheSetInput) -> Result<CacheEntry> {
         let app = ctx.app()?;
         let value = serde_json::to_vec(&input.value)
             .map_err(|e| FieldError::new(format!("Serialization error: {}", e)))?;
-        let ttl = input.ttl_ms.map(|ms| std::time::Duration::from_millis(ms as u64));
-        app.cache.set(input.key.clone(), value, ttl).await
+        let ttl = input
+            .ttl_ms
+            .map(|ms| std::time::Duration::from_millis(ms as u64));
+        app.cache
+            .set(input.key.clone(), value, ttl)
+            .await
             .map_err(|e| FieldError::new(format!("Cache error: {}", e)))?;
         let now = Utc::now().to_rfc3339();
         Ok(CacheEntry {
@@ -227,19 +240,19 @@ impl MutationRoot {
         })
     }
 
-    async fn cache_delete(
-        &self,
-        ctx: &Context<'_>,
-        key: String,
-    ) -> Result<bool> {
+    async fn cache_delete(&self, ctx: &Context<'_>, key: String) -> Result<bool> {
         let app = ctx.app()?;
-        app.cache.delete(&key).await
+        app.cache
+            .delete(&key)
+            .await
             .map_err(|e| FieldError::new(format!("Cache error: {}", e)))
     }
 
     async fn cache_flush(&self, ctx: &Context<'_>) -> Result<bool> {
         let app = ctx.app()?;
-        app.cache.flush().await
+        app.cache
+            .flush()
+            .await
             .map_err(|e| FieldError::new(format!("Cache error: {}", e)))?;
         Ok(true)
     }
@@ -248,13 +261,11 @@ impl MutationRoot {
     // Queue
     // ============================================================
 
-    async fn create_queue(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateQueueInput,
-    ) -> Result<Queue> {
+    async fn create_queue(&self, ctx: &Context<'_>, input: CreateQueueInput) -> Result<Queue> {
         let app = ctx.app()?;
-        app.queue.create_queue(&input.name).await
+        app.queue
+            .create_queue(&input.name)
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         let now = Utc::now().to_rfc3339();
         Ok(Queue {
@@ -279,13 +290,11 @@ impl MutationRoot {
         })
     }
 
-    async fn delete_queue(
-        &self,
-        ctx: &Context<'_>,
-        name: String,
-    ) -> Result<bool> {
+    async fn delete_queue(&self, ctx: &Context<'_>, name: String) -> Result<bool> {
         let app = ctx.app()?;
-        app.queue.delete_queue(&name).await
+        app.queue
+            .delete_queue(&name)
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         Ok(true)
     }
@@ -299,25 +308,32 @@ impl MutationRoot {
         let app = ctx.app()?;
         let body = serde_json::to_vec(&input.body)
             .map_err(|e| FieldError::new(format!("Serialization error: {}", e)))?;
-        app.queue.enqueue(&queue, body).await
+        app.queue
+            .enqueue(&queue, body)
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         let now = Utc::now().to_rfc3339();
         Ok(QueueMessage {
             id: Uuid::new_v4(),
             body: input.body,
-            content_type: input.content_type.unwrap_or_else(|| "application/json".into()),
+            content_type: input
+                .content_type
+                .unwrap_or_else(|| "application/json".into()),
             sent_at: now.clone(),
             first_received_at: None,
             receive_count: 0,
             visibility_timeout_expires_at: None,
             delay_until: None,
             attributes: MessageAttributes {
-                priority: input.priority.map(|p| match p {
-                    MessagePriorityInput::Low => MessagePriority::Low,
-                    MessagePriorityInput::Normal => MessagePriority::Normal,
-                    MessagePriorityInput::High => MessagePriority::High,
-                    MessagePriorityInput::Critical => MessagePriority::Critical,
-                }).unwrap_or(MessagePriority::Normal),
+                priority: input
+                    .priority
+                    .map(|p| match p {
+                        MessagePriorityInput::Low => MessagePriority::Low,
+                        MessagePriorityInput::Normal => MessagePriority::Normal,
+                        MessagePriorityInput::High => MessagePriority::High,
+                        MessagePriorityInput::Critical => MessagePriority::Critical,
+                    })
+                    .unwrap_or(MessagePriority::Normal),
                 deduplication_id: input.deduplication_id,
                 group_id: input.group_id,
                 sender: None,
@@ -334,23 +350,28 @@ impl MutationRoot {
     ) -> Result<Vec<QueueMessage>> {
         let app = ctx.app()?;
         let count = max_messages.unwrap_or(1).max(1) as u32;
-        let messages = app.queue.dequeue(&queue, count).await
+        let messages = app
+            .queue
+            .dequeue(&queue, count)
+            .await
             .map_err(|e| FieldError::new(format!("Queue error: {}", e)))?;
         let mut result = Vec::new();
         for msg in messages {
-            let body: serde_json::Value = serde_json::from_slice(&msg.body)
-                .unwrap_or(serde_json::Value::Null);
+            let body: serde_json::Value =
+                serde_json::from_slice(&msg.body).unwrap_or(serde_json::Value::Null);
             result.push(QueueMessage {
                 id: msg.id,
                 body,
                 content_type: "application/json".into(),
                 sent_at: chrono::DateTime::from_timestamp_millis(msg.enqueued_at)
-                    .map(|d| d.to_rfc3339()).unwrap_or_default(),
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_default(),
                 first_received_at: None,
                 receive_count: msg.attempt_count as i32,
                 visibility_timeout_expires_at: None,
-                delay_until: msg.delay_until
-                    .and_then(|t| chrono::DateTime::from_timestamp_millis(t).map(|d| d.to_rfc3339())),
+                delay_until: msg.delay_until.and_then(|t| {
+                    chrono::DateTime::from_timestamp_millis(t).map(|d| d.to_rfc3339())
+                }),
                 attributes: MessageAttributes {
                     priority: match msg.priority {
                         nova_queue::MessagePriority::Low => MessagePriority::Low,
@@ -375,22 +396,21 @@ impl MutationRoot {
         message_id: Uuid,
     ) -> Result<bool> {
         let _app = ctx.app()?;
-        Err(FieldError::new(format!("Message {} not found in queue '{}'", message_id, queue)))
+        Err(FieldError::new(format!(
+            "Message {} not found in queue '{}'",
+            message_id, queue
+        )))
     }
 
     // ============================================================
     // Scheduler
     // ============================================================
 
-    async fn create_job(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateJobInput,
-    ) -> Result<Job> {
+    async fn create_job(&self, ctx: &Context<'_>, input: CreateJobInput) -> Result<Job> {
         let app = ctx.app()?;
         let scheduled_at = chrono::Utc::now().timestamp_millis();
-        let payload = serde_json::to_vec(&input.input.unwrap_or(serde_json::Value::Null))
-            .unwrap_or_default();
+        let payload =
+            serde_json::to_vec(&input.input.unwrap_or(serde_json::Value::Null)).unwrap_or_default();
         let mut job = nova_scheduler::Job::new(&input.name, scheduled_at, payload);
         job.max_retries = input.max_retries.unwrap_or(3).max(0) as u32;
         job.timeout_secs = (input.timeout_ms.unwrap_or(30000) / 1000).max(1) as u32;
@@ -402,36 +422,28 @@ impl MutationRoot {
         if let Some(schedule) = input.schedule {
             job.cron_expression = Some(schedule);
         }
-        app.scheduler.schedule_job(job).await
+        app.scheduler
+            .schedule_job(job)
+            .await
             .map_err(|e| FieldError::new(format!("Scheduler error: {}", e)))?;
         Err(FieldError::new("Job creation stub"))
     }
 
-    async fn delete_job(
-        &self,
-        ctx: &Context<'_>,
-        id: Uuid,
-    ) -> Result<bool> {
+    async fn delete_job(&self, ctx: &Context<'_>, id: Uuid) -> Result<bool> {
         let app = ctx.app()?;
-        app.scheduler.cancel_job(&id).await
+        app.scheduler
+            .cancel_job(&id)
+            .await
             .map_err(|e| FieldError::new(format!("Scheduler error: {}", e)))?;
         Ok(true)
     }
 
-    async fn pause_job(
-        &self,
-        ctx: &Context<'_>,
-        id: Uuid,
-    ) -> Result<Job> {
+    async fn pause_job(&self, ctx: &Context<'_>, id: Uuid) -> Result<Job> {
         let _app = ctx.app()?;
         Err(FieldError::new(format!("Job {} not found", id)))
     }
 
-    async fn resume_job(
-        &self,
-        ctx: &Context<'_>,
-        id: Uuid,
-    ) -> Result<Job> {
+    async fn resume_job(&self, ctx: &Context<'_>, id: Uuid) -> Result<Job> {
         let _app = ctx.app()?;
         Err(FieldError::new(format!("Job {} not found", id)))
     }
@@ -470,12 +482,7 @@ impl MutationRoot {
         Err(FieldError::new("Document indexing not supported"))
     }
 
-    async fn delete_document(
-        &self,
-        ctx: &Context<'_>,
-        _index: String,
-        _id: Uuid,
-    ) -> Result<bool> {
+    async fn delete_document(&self, ctx: &Context<'_>, _index: String, _id: Uuid) -> Result<bool> {
         let _app = ctx.app()?;
         Err(FieldError::new("Document deletion not supported"))
     }
@@ -484,44 +491,45 @@ impl MutationRoot {
     // Blob
     // ============================================================
 
-    async fn blob_upload(
-        &self,
-        ctx: &Context<'_>,
-        input: BlobUploadInput,
-    ) -> Result<Blob> {
+    async fn blob_upload(&self, ctx: &Context<'_>, input: BlobUploadInput) -> Result<Blob> {
         let _app = ctx.app()?;
         let now = Utc::now().to_rfc3339();
         Ok(Blob {
             key: input.key,
             size_bytes: input.content.len() as i64,
-            content_type: input.content_type.unwrap_or_else(|| "application/octet-stream".into()),
+            content_type: input
+                .content_type
+                .unwrap_or_else(|| "application/octet-stream".into()),
             content_encoding: input.content_encoding,
             etag: String::new(),
             md5: String::new(),
             sha256: String::new(),
-            storage_tier: input.storage_tier.map(|t| match t {
-                StorageTierInput::Hot => StorageTier::Hot,
-                StorageTierInput::Warm => StorageTier::Warm,
-                StorageTierInput::Cold => StorageTier::Cold,
-            }).unwrap_or(StorageTier::Hot),
+            storage_tier: input
+                .storage_tier
+                .map(|t| match t {
+                    StorageTierInput::Hot => StorageTier::Hot,
+                    StorageTierInput::Warm => StorageTier::Warm,
+                    StorageTierInput::Cold => StorageTier::Cold,
+                })
+                .unwrap_or(StorageTier::Hot),
             created_at: now.clone(),
             updated_at: now,
             expires_at: input.expires_at,
             metadata: BlobMetadata {
                 filename: input.metadata.as_ref().and_then(|m| m.filename.clone()),
                 description: input.metadata.as_ref().and_then(|m| m.description.clone()),
-                tags: input.metadata.as_ref().map(|m| m.tags.clone().unwrap_or_default()).unwrap_or_default(),
+                tags: input
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.tags.clone().unwrap_or_default())
+                    .unwrap_or_default(),
                 custom: input.metadata.as_ref().and_then(|m| m.custom.clone()),
             },
             url: String::new(),
         })
     }
 
-    async fn blob_delete(
-        &self,
-        ctx: &Context<'_>,
-        _key: String,
-    ) -> Result<bool> {
+    async fn blob_delete(&self, ctx: &Context<'_>, _key: String) -> Result<bool> {
         let _app = ctx.app()?;
         Ok(true)
     }
@@ -530,11 +538,7 @@ impl MutationRoot {
     // Auth
     // ============================================================
 
-    async fn login(
-        &self,
-        ctx: &Context<'_>,
-        _input: LoginInput,
-    ) -> Result<AuthResult> {
+    async fn login(&self, ctx: &Context<'_>, _input: LoginInput) -> Result<AuthResult> {
         let _app = ctx.app()?;
         Err(FieldError::new("Invalid credentials"))
     }
@@ -553,11 +557,7 @@ impl MutationRoot {
         Err(FieldError::new("API key creation not supported"))
     }
 
-    async fn revoke_api_key(
-        &self,
-        ctx: &Context<'_>,
-        _id: Uuid,
-    ) -> Result<bool> {
+    async fn revoke_api_key(&self, ctx: &Context<'_>, _id: Uuid) -> Result<bool> {
         let _app = ctx.app()?;
         Err(FieldError::new("API key not found"))
     }

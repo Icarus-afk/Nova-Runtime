@@ -1,5 +1,5 @@
-use std::cell::Cell;
 use nova_core::{Result, RuntimeError};
+use std::cell::Cell;
 
 const DEFAULT_ALIGNMENT: usize = 8;
 
@@ -17,10 +17,16 @@ pub struct Arena {
 impl Arena {
     pub fn new(name: String, capacity: usize) -> Result<Self> {
         let mut data = Vec::new();
-        data.try_reserve_exact(capacity)
-            .map_err(|e| RuntimeError::OutOfMemory(format!("Failed to allocate arena '{}': {}", name, e)))?;
+        data.try_reserve_exact(capacity).map_err(|e| {
+            RuntimeError::OutOfMemory(format!("Failed to allocate arena '{}': {}", name, e))
+        })?;
         data.resize(capacity, 0);
-        Ok(Arena { name, data, cursor: Cell::new(0), capacity })
+        Ok(Arena {
+            name,
+            data,
+            cursor: Cell::new(0),
+            capacity,
+        })
     }
 
     pub fn allocate(&mut self, size: usize) -> Result<*mut u8> {
@@ -57,7 +63,9 @@ impl Arena {
         // - `ptr` is properly aligned (guaranteed by `align_up` and `DEFAULT_ALIGNMENT`)
         // - The memory is initialized to zero, ensuring safe access after this operation
         // - No other references to this memory exist (exclusive access guaranteed by arena)
-        unsafe { std::ptr::write_bytes(ptr, 0, aligned); }
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, aligned);
+        }
         Ok(ptr)
     }
 
@@ -204,7 +212,9 @@ mod tests {
     fn allocate_after_reset_reuses_memory() {
         let mut arena = Arena::new("test".into(), 256).unwrap();
         let ptr1 = arena.allocate(128).unwrap();
-        unsafe { std::ptr::write(ptr1 as *mut u64, 42); }
+        unsafe {
+            std::ptr::write(ptr1 as *mut u64, 42);
+        }
         arena.reset();
         let ptr2 = arena.allocate(128).unwrap();
         assert_eq!(ptr1, ptr2);

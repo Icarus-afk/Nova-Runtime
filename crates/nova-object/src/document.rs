@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::debug;
 
 use crate::types::Value;
@@ -101,16 +101,18 @@ impl Document {
                     current = map;
                 }
                 Some(_) => {
-                    return Err(RuntimeError::InvalidArgument(
-                        format!("cannot descend into non-object field '{}'", key),
-                    ));
+                    return Err(RuntimeError::InvalidArgument(format!(
+                        "cannot descend into non-object field '{}'",
+                        key
+                    )));
                 }
                 None => {
                     let mut new_map = HashMap::new();
                     new_map.insert(parts[i + 1].to_string(), value);
-                    return Err(RuntimeError::InvalidArgument(
-                        format!("intermediate field '{}' does not exist", key),
-                    ));
+                    return Err(RuntimeError::InvalidArgument(format!(
+                        "intermediate field '{}' does not exist",
+                        key
+                    )));
                 }
             }
         }
@@ -177,9 +179,9 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use crate::document::*;
     use crate::types::Value;
+    use std::collections::HashMap;
 
     // --- Document creation ---
 
@@ -222,7 +224,8 @@ mod tests {
     #[test]
     fn test_get_field_top_level() {
         let mut doc = Document::new("t");
-        doc.data.insert("name".into(), Value::String("alice".into()));
+        doc.data
+            .insert("name".into(), Value::String("alice".into()));
         assert_eq!(doc.get_field("name"), Some(&Value::String("alice".into())));
     }
 
@@ -384,7 +387,8 @@ mod tests {
     #[test]
     fn test_compute_size_with_data() {
         let mut doc = Document::new("t");
-        doc.data.insert("data".into(), Value::String("hello".repeat(100)));
+        doc.data
+            .insert("data".into(), Value::String("hello".repeat(100)));
         let size = doc.compute_size();
         assert!(size > 0);
     }
@@ -438,7 +442,8 @@ mod tests {
     fn test_document_serialization_roundtrip() {
         let mut doc = Document::new("roundtrip");
         doc.meta.document_type = "profile".into();
-        doc.data.insert("name".into(), Value::String("alice".into()));
+        doc.data
+            .insert("name".into(), Value::String("alice".into()));
         doc.data.insert("age".into(), Value::Int32(30));
 
         let bytes = rmp_serde::to_vec(&doc).unwrap();

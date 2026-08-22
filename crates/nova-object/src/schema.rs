@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub use crate::types::{NovaType, Value};
 
@@ -44,12 +44,24 @@ pub struct FieldDef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IndexHint {
-    BTree { order: u8 },
+    BTree {
+        order: u8,
+    },
     Hash,
-    FullText { language: String, tokenizer: String },
+    FullText {
+        language: String,
+        tokenizer: String,
+    },
     Geospatial,
-    Vector { m: u16, ef_construction: u16, distance: DistanceMetric },
-    Composite { fields: Vec<String>, order: Vec<SortOrder> },
+    Vector {
+        m: u16,
+        ef_construction: u16,
+        distance: DistanceMetric,
+    },
+    Composite {
+        fields: Vec<String>,
+        order: Vec<SortOrder>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,12 +116,35 @@ impl Default for IndexOptions {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ValidationRule {
-    Pattern { field: String, regex: String, error_message: String },
-    Range { field: String, min: Option<Value>, max: Option<Value> },
-    Length { field: String, min: Option<u32>, max: Option<u32> },
-    ItemCount { field: String, min: Option<u32>, max: Option<u32> },
-    Compare { field_a: String, op: ComparisonOp, field_b: String },
-    Unique { field: String, scope: Option<String> },
+    Pattern {
+        field: String,
+        regex: String,
+        error_message: String,
+    },
+    Range {
+        field: String,
+        min: Option<Value>,
+        max: Option<Value>,
+    },
+    Length {
+        field: String,
+        min: Option<u32>,
+        max: Option<u32>,
+    },
+    ItemCount {
+        field: String,
+        min: Option<u32>,
+        max: Option<u32>,
+    },
+    Compare {
+        field_a: String,
+        op: ComparisonOp,
+        field_b: String,
+    },
+    Unique {
+        field: String,
+        scope: Option<String>,
+    },
     Custom(String),
 }
 
@@ -134,13 +169,37 @@ pub struct SchemaChange {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SchemaChangeOp {
-    AddField { field: FieldDef, reason: String },
-    MakeOptional { field: String, reason: String },
-    WidenField { field: String, new_type: NovaType, reason: String },
-    AddIndex { index: IndexDef, reason: String },
-    AddDefault { field: String, default: Value, reason: String },
-    DeprecateField { field: String, deprecation_message: String, removal_version: Option<u32> },
-    AddEnumValue { field: String, value: String },
+    AddField {
+        field: FieldDef,
+        reason: String,
+    },
+    MakeOptional {
+        field: String,
+        reason: String,
+    },
+    WidenField {
+        field: String,
+        new_type: NovaType,
+        reason: String,
+    },
+    AddIndex {
+        index: IndexDef,
+        reason: String,
+    },
+    AddDefault {
+        field: String,
+        default: Value,
+        reason: String,
+    },
+    DeprecateField {
+        field: String,
+        deprecation_message: String,
+        removal_version: Option<u32>,
+    },
+    AddEnumValue {
+        field: String,
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,7 +237,9 @@ mod tests {
 
     #[test]
     fn test_schema_mode_mixed() {
-        let m = SchemaMode::Mixed { max_dynamic_fields: 20 };
+        let m = SchemaMode::Mixed {
+            max_dynamic_fields: 20,
+        };
         assert_eq!(format!("{:?}", m), "Mixed { max_dynamic_fields: 20 }");
     }
 
@@ -276,7 +337,10 @@ mod tests {
 
     #[test]
     fn test_index_hint_fulltext() {
-        let h = IndexHint::FullText { language: "en".into(), tokenizer: "standard".into() };
+        let h = IndexHint::FullText {
+            language: "en".into(),
+            tokenizer: "standard".into(),
+        };
         assert!(format!("{:?}", h).contains("FullText"));
     }
 
@@ -287,7 +351,11 @@ mod tests {
 
     #[test]
     fn test_index_hint_vector() {
-        let h = IndexHint::Vector { m: 16, ef_construction: 200, distance: DistanceMetric::Cosine };
+        let h = IndexHint::Vector {
+            m: 16,
+            ef_construction: 200,
+            distance: DistanceMetric::Cosine,
+        };
         assert!(format!("{:?}", h).contains("Vector"));
     }
 
@@ -323,7 +391,10 @@ mod tests {
     fn test_index_def_creation() {
         let idx = IndexDef {
             name: "idx_name".into(),
-            fields: vec![IndexField { field: "name".into(), order: SortOrder::Ascending }],
+            fields: vec![IndexField {
+                field: "name".into(),
+                order: SortOrder::Ascending,
+            }],
             unique: true,
             sparse: false,
             index_type: IndexHint::BTree { order: 1 },
@@ -389,7 +460,10 @@ mod tests {
 
     #[test]
     fn test_validation_rule_unique() {
-        let r = ValidationRule::Unique { field: "email".into(), scope: Some("global".into()) };
+        let r = ValidationRule::Unique {
+            field: "email".into(),
+            scope: Some("global".into()),
+        };
         assert!(format!("{:?}", r).contains("Unique"));
     }
 
@@ -406,9 +480,15 @@ mod tests {
         assert_eq!(format!("{:?}", ComparisonOp::Equals), "Equals");
         assert_eq!(format!("{:?}", ComparisonOp::NotEquals), "NotEquals");
         assert_eq!(format!("{:?}", ComparisonOp::LessThan), "LessThan");
-        assert_eq!(format!("{:?}", ComparisonOp::LessThanOrEqual), "LessThanOrEqual");
+        assert_eq!(
+            format!("{:?}", ComparisonOp::LessThanOrEqual),
+            "LessThanOrEqual"
+        );
         assert_eq!(format!("{:?}", ComparisonOp::GreaterThan), "GreaterThan");
-        assert_eq!(format!("{:?}", ComparisonOp::GreaterThanOrEqual), "GreaterThanOrEqual");
+        assert_eq!(
+            format!("{:?}", ComparisonOp::GreaterThanOrEqual),
+            "GreaterThanOrEqual"
+        );
     }
 
     // --- SchemaChange / SchemaChangeOp ---
@@ -435,7 +515,10 @@ mod tests {
 
     #[test]
     fn test_schema_change_op_make_optional() {
-        let op = SchemaChangeOp::MakeOptional { field: "old_field".into(), reason: "relaxing".into() };
+        let op = SchemaChangeOp::MakeOptional {
+            field: "old_field".into(),
+            reason: "relaxing".into(),
+        };
         assert!(format!("{:?}", op).contains("MakeOptional"));
     }
 
@@ -487,7 +570,10 @@ mod tests {
 
     #[test]
     fn test_schema_change_op_add_enum_value() {
-        let op = SchemaChangeOp::AddEnumValue { field: "color".into(), value: "blue".into() };
+        let op = SchemaChangeOp::AddEnumValue {
+            field: "color".into(),
+            value: "blue".into(),
+        };
         assert!(format!("{:?}", op).contains("AddEnumValue"));
     }
 
@@ -523,20 +609,20 @@ mod tests {
             collection: "products".into(),
             description: "".into(),
             mode: SchemaMode::Typed,
-            fields: vec![
-                FieldDef {
-                    name: "sku".into(),
-                    field_type: NovaType::String { max_length: Some(50) },
-                    required: true,
-                    default: None,
-                    computed: None,
-                    description: "Stock keeping unit".into(),
-                    index: Some(IndexHint::Hash),
-                    unique: true,
-                    sensitive: false,
-                    validate: vec![],
+            fields: vec![FieldDef {
+                name: "sku".into(),
+                field_type: NovaType::String {
+                    max_length: Some(50),
                 },
-            ],
+                required: true,
+                default: None,
+                computed: None,
+                description: "Stock keeping unit".into(),
+                index: Some(IndexHint::Hash),
+                unique: true,
+                sensitive: false,
+                validate: vec![],
+            }],
             computed_fields: vec![],
             indexes: vec![],
             defaults: HashMap::new(),

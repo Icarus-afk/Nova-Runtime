@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use tracing::debug;
 
+use crate::schema::{CollectionSchema, NovaType, SchemaChange, SchemaChangeOp};
 use nova_core::error::{Result, RuntimeError};
-use crate::schema::{
-    CollectionSchema, SchemaChange, SchemaChangeOp, NovaType,
-};
 
 pub struct SchemaRegistry {
     schemas: RwLock<HashMap<String, CollectionSchema>>,
@@ -27,7 +25,10 @@ impl SchemaRegistry {
                 name
             )));
         }
-        debug!("registered schema for collection '{}' v{}", name, schema.version);
+        debug!(
+            "registered schema for collection '{}' v{}",
+            name, schema.version
+        );
         schemas.insert(name, schema);
         Ok(())
     }
@@ -47,7 +48,10 @@ impl SchemaRegistry {
                 collection
             )));
         }
-        debug!("updated schema for collection '{}' to v{}", collection, new_schema.version);
+        debug!(
+            "updated schema for collection '{}' to v{}",
+            collection, new_schema.version
+        );
         schemas.insert(collection.to_string(), new_schema);
         Ok(())
     }
@@ -112,7 +116,13 @@ impl SchemaRegistry {
 
         new_schema.changelog.push(schema_change);
         let result = new_schema.clone();
-        debug!("evolved schema '{}' from v{} to v{} ({} changes)", collection, old.version, new_schema.version, new_schema.changelog.len());
+        debug!(
+            "evolved schema '{}' from v{} to v{} ({} changes)",
+            collection,
+            old.version,
+            new_schema.version,
+            new_schema.changelog.len()
+        );
         schemas.insert(collection.to_string(), new_schema);
         Ok(result)
     }
@@ -149,7 +159,9 @@ fn apply_schema_change(schema: &mut CollectionSchema, op: &SchemaChangeOp) -> Re
             f.required = false;
             Ok(())
         }
-        SchemaChangeOp::WidenField { field, new_type, .. } => {
+        SchemaChangeOp::WidenField {
+            field, new_type, ..
+        } => {
             let f = schema
                 .fields
                 .iter_mut()
@@ -186,12 +198,13 @@ fn apply_schema_change(schema: &mut CollectionSchema, op: &SchemaChangeOp) -> Re
             schema.defaults.insert(field.clone(), default.clone());
             Ok(())
         }
-        SchemaChangeOp::DeprecateField { .. } => {
-            Ok(())
-        }
+        SchemaChangeOp::DeprecateField { .. } => Ok(()),
         SchemaChangeOp::AddEnumValue { field, value } => {
             // Enum value addition — requires storage-level validation
-            debug!("add enum value '{}' to field '{}' (tracked in changelog)", value, field);
+            debug!(
+                "add enum value '{}' to field '{}' (tracked in changelog)",
+                value, field
+            );
             Ok(())
         }
     }
@@ -252,27 +265,21 @@ fn is_type_widening(old: &NovaType, new: &NovaType) -> bool {
         | (NovaType::UInt32, NovaType::UInt64)
         | (NovaType::Float32, NovaType::Float64) => true,
 
-        (NovaType::String { max_length: a }, NovaType::String { max_length: b }) => {
-            match (a, b) {
-                (Some(a_len), Some(b_len)) => b_len >= a_len,
-                (None, _) => true,
-                (Some(_), None) => true,
-            }
-        }
-        (NovaType::Binary { max_length: a }, NovaType::Binary { max_length: b }) => {
-            match (a, b) {
-                (Some(a_len), Some(b_len)) => b_len >= a_len,
-                (None, _) => true,
-                (Some(_), None) => true,
-            }
-        }
+        (NovaType::String { max_length: a }, NovaType::String { max_length: b }) => match (a, b) {
+            (Some(a_len), Some(b_len)) => b_len >= a_len,
+            (None, _) => true,
+            (Some(_), None) => true,
+        },
+        (NovaType::Binary { max_length: a }, NovaType::Binary { max_length: b }) => match (a, b) {
+            (Some(a_len), Some(b_len)) => b_len >= a_len,
+            (None, _) => true,
+            (Some(_), None) => true,
+        },
 
         (NovaType::Optional(old_inner), NovaType::Optional(new_inner)) => {
             is_type_widening(old_inner, new_inner)
         }
-        (old_inner, NovaType::Optional(new_inner)) => {
-            is_type_widening(old_inner, new_inner)
-        }
+        (old_inner, NovaType::Optional(new_inner)) => is_type_widening(old_inner, new_inner),
 
         _ => false,
     }
@@ -286,11 +293,11 @@ impl Default for SchemaRegistry {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use crate::registry::SchemaRegistry;
     use crate::schema::*;
     use crate::types::NovaType;
-    use crate::registry::SchemaRegistry;
     use nova_core::error::RuntimeError;
+    use std::collections::HashMap;
 
     fn make_schema(name: &str, version: u32) -> CollectionSchema {
         CollectionSchema {
@@ -352,7 +359,9 @@ mod tests {
     #[test]
     fn test_update_nonexistent_errors() {
         let registry = SchemaRegistry::new();
-        let err = registry.update("ghost", make_schema("ghost", 1)).unwrap_err();
+        let err = registry
+            .update("ghost", make_schema("ghost", 1))
+            .unwrap_err();
         assert!(matches!(err, RuntimeError::NotFound(_)));
     }
 
@@ -397,26 +406,28 @@ mod tests {
         let registry = SchemaRegistry::new();
         registry.register(make_schema("items", 1)).unwrap();
 
-        let evolved = registry.evolve(
-            "items",
-            vec![SchemaChangeOp::AddField {
-                field: FieldDef {
-                    name: "new_field".into(),
-                    field_type: NovaType::String { max_length: None },
-                    required: false,
-                    default: None,
-                    computed: None,
-                    description: "".into(),
-                    index: None,
-                    unique: false,
-                    sensitive: false,
-                    validate: vec![],
-                },
-                reason: "needed".into(),
-            }],
-            "add new field",
-            "dev",
-        ).unwrap();
+        let evolved = registry
+            .evolve(
+                "items",
+                vec![SchemaChangeOp::AddField {
+                    field: FieldDef {
+                        name: "new_field".into(),
+                        field_type: NovaType::String { max_length: None },
+                        required: false,
+                        default: None,
+                        computed: None,
+                        description: "".into(),
+                        index: None,
+                        unique: false,
+                        sensitive: false,
+                        validate: vec![],
+                    },
+                    reason: "needed".into(),
+                }],
+                "add new field",
+                "dev",
+            )
+            .unwrap();
 
         assert_eq!(evolved.version, 2);
         assert_eq!(evolved.fields.len(), 1);
@@ -444,23 +455,21 @@ mod tests {
 
         let result = registry.evolve(
             "items",
-            vec![
-                SchemaChangeOp::AddField {
-                    field: FieldDef {
-                        name: "age".into(),
-                        field_type: NovaType::Int32,
-                        required: false,
-                        default: None,
-                        computed: None,
-                        description: "".into(),
-                        index: None,
-                        unique: false,
-                        sensitive: false,
-                        validate: vec![],
-                    },
-                    reason: "add age".into(),
+            vec![SchemaChangeOp::AddField {
+                field: FieldDef {
+                    name: "age".into(),
+                    field_type: NovaType::Int32,
+                    required: false,
+                    default: None,
+                    computed: None,
+                    description: "".into(),
+                    index: None,
+                    unique: false,
+                    sensitive: false,
+                    validate: vec![],
                 },
-            ],
+                reason: "add age".into(),
+            }],
             "add age field",
             "dev",
         );
@@ -496,10 +505,10 @@ mod tests {
         });
         registry.register(schema).unwrap();
 
-        let err = registry.evolve(
-            "items",
-            vec![
-                SchemaChangeOp::AddField {
+        let err = registry
+            .evolve(
+                "items",
+                vec![SchemaChangeOp::AddField {
                     field: FieldDef {
                         name: "name".into(),
                         field_type: NovaType::String { max_length: None },
@@ -513,11 +522,11 @@ mod tests {
                         validate: vec![],
                     },
                     reason: "dup".into(),
-                },
-            ],
-            "dup",
-            "dev",
-        ).unwrap_err();
+                }],
+                "dup",
+                "dev",
+            )
+            .unwrap_err();
         assert!(matches!(err, RuntimeError::InvalidArgument(_)));
     }
 
@@ -560,7 +569,9 @@ mod tests {
             validate: vec![],
         });
         let new = make_schema("t", 2);
-        let err = SchemaRegistry::new().check_compatibility(&old, &new).unwrap_err();
+        let err = SchemaRegistry::new()
+            .check_compatibility(&old, &new)
+            .unwrap_err();
         assert!(matches!(err, RuntimeError::InvalidArgument(_)));
     }
 

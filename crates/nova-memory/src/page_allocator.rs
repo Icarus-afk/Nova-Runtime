@@ -1,6 +1,6 @@
-use std::alloc::{alloc, dealloc, Layout};
+use nova_core::{PAGE_SIZE, Result, RuntimeError};
+use std::alloc::{Layout, alloc, dealloc};
 use std::collections::BTreeMap;
-use nova_core::{Result, RuntimeError, PAGE_SIZE};
 
 pub struct PageAllocator {
     allocations: BTreeMap<*mut u8, usize>,
@@ -30,8 +30,8 @@ impl PageAllocator {
         let size = count
             .checked_mul(PAGE_SIZE)
             .ok_or_else(|| RuntimeError::OutOfMemory("Page allocation overflow".into()))?;
-        let layout =
-            Layout::from_size_align(size, PAGE_SIZE).expect("PAGE_SIZE alignment is a power of two");
+        let layout = Layout::from_size_align(size, PAGE_SIZE)
+            .expect("PAGE_SIZE alignment is a power of two");
         // SAFETY: The following invariants hold:
         // - `layout` is valid (size > 0, alignment is power of two)
         // - `size` is a multiple of `PAGE_SIZE` (guaranteed by caller)
@@ -80,14 +80,18 @@ mod tests {
         let ptr = allocator.allocate_pages(1).unwrap();
         assert!(!ptr.is_null());
         assert_eq!(allocator.total_allocated(), PAGE_SIZE);
-        unsafe { allocator.free_pages(ptr, 1); }
+        unsafe {
+            allocator.free_pages(ptr, 1);
+        }
     }
 
     #[test]
     fn free_pages_reclaims_memory() {
         let mut allocator = PageAllocator::new();
         let ptr = allocator.allocate_pages(1).unwrap();
-        unsafe { allocator.free_pages(ptr, 1); }
+        unsafe {
+            allocator.free_pages(ptr, 1);
+        }
         assert_eq!(allocator.total_allocated(), 0);
     }
 
@@ -99,9 +103,13 @@ mod tests {
         assert_eq!(allocator.total_allocated(), 2 * PAGE_SIZE);
         let p2 = allocator.allocate_pages(3).unwrap();
         assert_eq!(allocator.total_allocated(), 5 * PAGE_SIZE);
-        unsafe { allocator.free_pages(p1, 2); }
+        unsafe {
+            allocator.free_pages(p1, 2);
+        }
         assert_eq!(allocator.total_allocated(), 3 * PAGE_SIZE);
-        unsafe { allocator.free_pages(p2, 3); }
+        unsafe {
+            allocator.free_pages(p2, 3);
+        }
         assert_eq!(allocator.total_allocated(), 0);
     }
 
@@ -123,7 +131,9 @@ mod tests {
                 assert_eq!(*ptr.add(i), 0xAA);
             }
         }
-        unsafe { allocator.free_pages(ptr, 1); }
+        unsafe {
+            allocator.free_pages(ptr, 1);
+        }
     }
 
     #[test]
@@ -135,7 +145,9 @@ mod tests {
         }
         assert_eq!(allocator.total_allocated(), 5 * PAGE_SIZE);
         for ptr in ptrs {
-            unsafe { allocator.free_pages(ptr, 1); }
+            unsafe {
+                allocator.free_pages(ptr, 1);
+            }
         }
         assert_eq!(allocator.total_allocated(), 0);
     }
@@ -146,6 +158,8 @@ mod tests {
         let ptr = allocator.allocate_pages(100).unwrap();
         assert!(!ptr.is_null());
         assert_eq!(allocator.total_allocated(), 100 * PAGE_SIZE);
-        unsafe { allocator.free_pages(ptr, 100); }
+        unsafe {
+            allocator.free_pages(ptr, 100);
+        }
     }
 }

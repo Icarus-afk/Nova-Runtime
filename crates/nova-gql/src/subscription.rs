@@ -73,7 +73,9 @@ impl SubscriptionRoot {
                     },
                     queue: QueueConfig {
                         max_queues: cfg.queue.max_queues as i32,
-                        default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs as i32 * 1000,
+                        default_visibility_timeout_ms: cfg.queue.default_visibility_timeout_secs
+                            as i32
+                            * 1000,
                         max_message_size_bytes: cfg.queue.max_message_size as i32,
                         message_retention_ms: (cfg.queue.message_ttl_secs as i64) * 1000,
                         dead_letter_max_receives: cfg.queue.max_receive_count as i32,
@@ -107,7 +109,11 @@ impl SubscriptionRoot {
         };
         let config = ServerConfiguration {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            build_mode: if cfg!(debug_assertions) { "DEBUG".into() } else { "RELEASE".into() },
+            build_mode: if cfg!(debug_assertions) {
+                "DEBUG".into()
+            } else {
+                "RELEASE".into()
+            },
             log_level,
             max_connections,
             query_timeout_ms,

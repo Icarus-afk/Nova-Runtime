@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Generation {
@@ -155,8 +155,12 @@ mod tests {
     fn register_root_no_crash() {
         struct TestRoot(usize);
         impl GcRoot for TestRoot {
-            fn root_size(&self) -> usize { self.0 }
-            fn is_root_alive(&self) -> bool { true }
+            fn root_size(&self) -> usize {
+                self.0
+            }
+            fn is_root_alive(&self) -> bool {
+                true
+            }
         }
 
         let gc = GenerationalGC::new(100, 1000);

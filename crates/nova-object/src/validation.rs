@@ -3,7 +3,7 @@ use thiserror::Error;
 use tracing::debug;
 
 use crate::document::Document;
-use crate::schema::{CollectionSchema, NovaType, SchemaMode, ValidationRule, ComparisonOp};
+use crate::schema::{CollectionSchema, ComparisonOp, NovaType, SchemaMode, ValidationRule};
 use crate::types::Value;
 
 #[derive(Debug, Clone, Error)]
@@ -27,7 +27,10 @@ pub enum ValidationError {
 pub struct ValidationEngine;
 
 impl ValidationEngine {
-    pub fn validate(doc: &Document, schema: &CollectionSchema) -> Result<Vec<ValidationError>, String> {
+    pub fn validate(
+        doc: &Document,
+        schema: &CollectionSchema,
+    ) -> Result<Vec<ValidationError>, String> {
         let mut errors = Vec::new();
 
         match &schema.mode {
@@ -92,7 +95,11 @@ impl ValidationEngine {
             errors.push(ValidationError::RuleFailed(err));
         }
 
-        debug!("validated document '{}': {} errors", doc.meta.collection, errors.len());
+        debug!(
+            "validated document '{}': {} errors",
+            doc.meta.collection,
+            errors.len()
+        );
         Ok(errors)
     }
 
@@ -129,7 +136,11 @@ impl ValidationEngine {
 
         for rule in rules {
             match rule {
-                ValidationRule::Pattern { field, regex, error_message } => {
+                ValidationRule::Pattern {
+                    field,
+                    regex,
+                    error_message,
+                } => {
                     if let Some(Value::String(val)) = doc.data.get(field) {
                         match Regex::new(regex) {
                             Ok(re) => {
@@ -212,8 +223,14 @@ impl ValidationEngine {
                         }
                     }
                 }
-                ValidationRule::Compare { field_a, op, field_b } => {
-                    if let (Some(val_a), Some(val_b)) = (doc.data.get(field_a), doc.data.get(field_b)) {
+                ValidationRule::Compare {
+                    field_a,
+                    op,
+                    field_b,
+                } => {
+                    if let (Some(val_a), Some(val_b)) =
+                        (doc.data.get(field_a), doc.data.get(field_b))
+                    {
                         if !value_compare(val_a, val_b, op.clone()) {
                             errors.push(format!(
                                 "Compare rule failed: {:?} {:?} {:?}",
@@ -259,7 +276,12 @@ fn value_type(value: &Value) -> NovaType {
         Value::DateTime { .. } => NovaType::DateTime,
         Value::Duration { .. } => NovaType::Duration,
         Value::Timestamp(_) => NovaType::Timestamp,
-        Value::Decimal { precision, scale, .. } => NovaType::Decimal { precision: *precision, scale: *scale },
+        Value::Decimal {
+            precision, scale, ..
+        } => NovaType::Decimal {
+            precision: *precision,
+            scale: *scale,
+        },
         Value::Array(_) => NovaType::Array {
             element_type: Box::new(NovaType::Any),
             max_items: None,
@@ -325,11 +347,11 @@ fn value_compare(a: &Value, b: &Value, op: ComparisonOp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use crate::document::Document;
     use crate::schema::*;
     use crate::types::Value;
     use crate::validation::{ValidationEngine, ValidationError};
+    use std::collections::HashMap;
 
     fn make_schema(mode: SchemaMode, fields: Vec<FieldDef>) -> CollectionSchema {
         CollectionSchema {
@@ -369,9 +391,14 @@ mod tests {
 
     #[test]
     fn test_validate_missing_required_field() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("name", NovaType::String { max_length: None }, true),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field(
+                "name",
+                NovaType::String { max_length: None },
+                true,
+            )],
+        );
         let doc = Document::new("test");
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
         assert!(!errors.is_empty());
@@ -380,20 +407,31 @@ mod tests {
 
     #[test]
     fn test_validate_required_field_present() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("name", NovaType::String { max_length: None }, true),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field(
+                "name",
+                NovaType::String { max_length: None },
+                true,
+            )],
+        );
         let mut doc = Document::new("test");
-        doc.data.insert("name".into(), Value::String("alice".into()));
+        doc.data
+            .insert("name".into(), Value::String("alice".into()));
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
         assert!(errors.is_empty());
     }
 
     #[test]
     fn test_validate_optional_field_missing() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("name", NovaType::String { max_length: None }, false),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field(
+                "name",
+                NovaType::String { max_length: None },
+                false,
+            )],
+        );
         let doc = Document::new("test");
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
         assert!(errors.is_empty());
@@ -403,11 +441,13 @@ mod tests {
 
     #[test]
     fn test_validate_type_mismatch() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("count", NovaType::Int32, true),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field("count", NovaType::Int32, true)],
+        );
         let mut doc = Document::new("test");
-        doc.data.insert("count".into(), Value::String("not_a_number".into()));
+        doc.data
+            .insert("count".into(), Value::String("not_a_number".into()));
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
         assert!(!errors.is_empty());
         assert!(matches!(errors[0], ValidationError::TypeMismatch { .. }));
@@ -415,9 +455,10 @@ mod tests {
 
     #[test]
     fn test_validate_type_correct() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("count", NovaType::Int32, true),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field("count", NovaType::Int32, true)],
+        );
         let mut doc = Document::new("test");
         doc.data.insert("count".into(), Value::Int32(42));
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
@@ -438,9 +479,14 @@ mod tests {
 
     #[test]
     fn test_validate_unknown_field_not_reported_for_known() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("known", NovaType::String { max_length: None }, false),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![make_field(
+                "known",
+                NovaType::String { max_length: None },
+                false,
+            )],
+        );
         let mut doc = Document::new("test");
         doc.data.insert("known".into(), Value::String("val".into()));
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
@@ -475,9 +521,12 @@ mod tests {
 
     #[test]
     fn test_validate_mixed_mode_within_dynamic_limit() {
-        let schema = make_schema(SchemaMode::Mixed { max_dynamic_fields: 5 }, vec![
-            make_field("fixed1", NovaType::Int64, false),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Mixed {
+                max_dynamic_fields: 5,
+            },
+            vec![make_field("fixed1", NovaType::Int64, false)],
+        );
         let mut doc = Document::new("test");
         doc.data.insert("fixed1".into(), Value::Int64(1));
         doc.data.insert("dyn1".into(), Value::Int64(2));
@@ -488,9 +537,12 @@ mod tests {
 
     #[test]
     fn test_validate_mixed_mode_exceeds_dynamic_limit() {
-        let schema = make_schema(SchemaMode::Mixed { max_dynamic_fields: 1 }, vec![
-            make_field("fixed1", NovaType::Int64, false),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Mixed {
+                max_dynamic_fields: 1,
+            },
+            vec![make_field("fixed1", NovaType::Int64, false)],
+        );
         let mut doc = Document::new("test");
         doc.data.insert("fixed1".into(), Value::Int64(1));
         doc.data.insert("dyn1".into(), Value::Int64(2));
@@ -518,7 +570,9 @@ mod tests {
         let doc = Document::new("test");
         let errors = ValidationEngine::validate(&doc, &schema).unwrap();
         // Size won't be exceeded for a small document
-        let size_exceeded = errors.iter().any(|e| matches!(e, ValidationError::SizeExceeded(_)));
+        let size_exceeded = errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::SizeExceeded(_)));
         assert!(!size_exceeded);
     }
 
@@ -531,20 +585,18 @@ mod tests {
             collection: "test".into(),
             description: "".into(),
             mode: SchemaMode::Typed,
-            fields: vec![
-                FieldDef {
-                    name: "status".into(),
-                    field_type: NovaType::String { max_length: None },
-                    required: false,
-                    default: Some(Value::String("active".into())),
-                    computed: None,
-                    description: "".into(),
-                    index: None,
-                    unique: false,
-                    sensitive: false,
-                    validate: vec![],
-                },
-            ],
+            fields: vec![FieldDef {
+                name: "status".into(),
+                field_type: NovaType::String { max_length: None },
+                required: false,
+                default: Some(Value::String("active".into())),
+                computed: None,
+                description: "".into(),
+                index: None,
+                unique: false,
+                sensitive: false,
+                validate: vec![],
+            }],
             computed_fields: vec![],
             indexes: vec![],
             defaults: HashMap::new(),
@@ -557,7 +609,10 @@ mod tests {
         };
         let mut doc = Document::new("test");
         ValidationEngine::apply_defaults(&mut doc, &schema);
-        assert_eq!(doc.data.get("status"), Some(&Value::String("active".into())));
+        assert_eq!(
+            doc.data.get("status"),
+            Some(&Value::String("active".into()))
+        );
     }
 
     #[test]
@@ -567,20 +622,18 @@ mod tests {
             collection: "test".into(),
             description: "".into(),
             mode: SchemaMode::Typed,
-            fields: vec![
-                FieldDef {
-                    name: "name".into(),
-                    field_type: NovaType::String { max_length: None },
-                    required: false,
-                    default: Some(Value::String("default".into())),
-                    computed: None,
-                    description: "".into(),
-                    index: None,
-                    unique: false,
-                    sensitive: false,
-                    validate: vec![],
-                },
-            ],
+            fields: vec![FieldDef {
+                name: "name".into(),
+                field_type: NovaType::String { max_length: None },
+                required: false,
+                default: Some(Value::String("default".into())),
+                computed: None,
+                description: "".into(),
+                index: None,
+                unique: false,
+                sensitive: false,
+                validate: vec![],
+            }],
             computed_fields: vec![],
             indexes: vec![],
             defaults: HashMap::new(),
@@ -592,26 +645,41 @@ mod tests {
             updated_at: 0,
         };
         let mut doc = Document::new("test");
-        doc.data.insert("name".into(), Value::String("existing".into()));
+        doc.data
+            .insert("name".into(), Value::String("existing".into()));
         ValidationEngine::apply_defaults(&mut doc, &schema);
-        assert_eq!(doc.data.get("name"), Some(&Value::String("existing".into())));
+        assert_eq!(
+            doc.data.get("name"),
+            Some(&Value::String("existing".into()))
+        );
     }
 
     #[test]
     fn test_apply_defaults_schema_level() {
         let mut schema = make_schema(SchemaMode::Typed, vec![]);
-        schema.defaults.insert("region".into(), Value::String("us-east".into()));
+        schema
+            .defaults
+            .insert("region".into(), Value::String("us-east".into()));
         let mut doc = Document::new("test");
         ValidationEngine::apply_defaults(&mut doc, &schema);
-        assert_eq!(doc.data.get("region"), Some(&Value::String("us-east".into())));
+        assert_eq!(
+            doc.data.get("region"),
+            Some(&Value::String("us-east".into()))
+        );
     }
 
     // --- validate_type ---
 
     #[test]
     fn test_validate_type_delegates() {
-        assert!(ValidationEngine::validate_type(&Value::Int64(5), &NovaType::Int64));
-        assert!(!ValidationEngine::validate_type(&Value::Int64(5), &NovaType::String { max_length: None }));
+        assert!(ValidationEngine::validate_type(
+            &Value::Int64(5),
+            &NovaType::Int64
+        ));
+        assert!(!ValidationEngine::validate_type(
+            &Value::Int64(5),
+            &NovaType::String { max_length: None }
+        ));
     }
 
     // --- validate_rules: Pattern ---
@@ -786,10 +854,10 @@ mod tests {
 
     #[test]
     fn test_validate_item_count_within_bounds() {
-        let doc = doc_with("tags", Value::Array(vec![
-            Value::String("a".into()),
-            Value::String("b".into()),
-        ]));
+        let doc = doc_with(
+            "tags",
+            Value::Array(vec![Value::String("a".into()), Value::String("b".into())]),
+        );
         let rules = vec![ValidationRule::ItemCount {
             field: "tags".into(),
             min: Some(1),
@@ -814,11 +882,14 @@ mod tests {
 
     #[test]
     fn test_validate_item_count_above_max() {
-        let doc = doc_with("tags", Value::Array(vec![
-            Value::String("a".into()),
-            Value::String("b".into()),
-            Value::String("c".into()),
-        ]));
+        let doc = doc_with(
+            "tags",
+            Value::Array(vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into()),
+            ]),
+        );
         let rules = vec![ValidationRule::ItemCount {
             field: "tags".into(),
             min: None,
@@ -876,7 +947,10 @@ mod tests {
     #[test]
     fn test_validate_unique_does_not_error() {
         let doc = doc_with("email", Value::String("a@b.com".into()));
-        let rules = vec![ValidationRule::Unique { field: "email".into(), scope: None }];
+        let rules = vec![ValidationRule::Unique {
+            field: "email".into(),
+            scope: None,
+        }];
         let errors = ValidationEngine::validate_rules(&doc, &rules);
         assert!(errors.is_empty());
     }
@@ -896,10 +970,13 @@ mod tests {
 
     #[test]
     fn test_validate_multiple_errors() {
-        let schema = make_schema(SchemaMode::Typed, vec![
-            make_field("name", NovaType::String { max_length: None }, true),
-            make_field("age", NovaType::Int32, true),
-        ]);
+        let schema = make_schema(
+            SchemaMode::Typed,
+            vec![
+                make_field("name", NovaType::String { max_length: None }, true),
+                make_field("age", NovaType::Int32, true),
+            ],
+        );
         let mut doc = Document::new("test");
         doc.data.insert("name".into(), Value::Int64(42)); // wrong type
         // age is missing
@@ -912,13 +989,11 @@ mod tests {
     #[test]
     fn test_validate_nested_object() {
         let mut schema = make_schema(SchemaMode::Typed, vec![]);
-        schema.validation = vec![
-            ValidationRule::Pattern {
-                field: "nested.email".into(),
-                regex: r"^.+@.+$".into(),
-                error_message: "nested email invalid".into(),
-            },
-        ];
+        schema.validation = vec![ValidationRule::Pattern {
+            field: "nested.email".into(),
+            regex: r"^.+@.+$".into(),
+            error_message: "nested email invalid".into(),
+        }];
         let mut doc = Document::new("test");
         let mut nested = HashMap::new();
         nested.insert("email".into(), Value::String("bad".into()));

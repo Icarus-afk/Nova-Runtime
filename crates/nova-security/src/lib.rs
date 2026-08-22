@@ -1,15 +1,15 @@
-pub mod encryption;
-pub mod secrets;
 pub mod audit;
+pub mod encryption;
 pub mod rate_limiter;
 pub mod rng;
+pub mod secrets;
 pub mod validator;
 
-pub use encryption::*;
-pub use secrets::*;
 pub use audit::*;
+pub use encryption::*;
 pub use rate_limiter::*;
 pub use rng::*;
+pub use secrets::*;
 pub use validator::*;
 
 #[derive(Debug, thiserror::Error)]

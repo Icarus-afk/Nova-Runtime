@@ -122,7 +122,10 @@ pub enum LogRotation {
 #[derive(Debug, Clone)]
 pub enum AuditOutput {
     Stdout,
-    File { path: PathBuf, rotation: LogRotation },
+    File {
+        path: PathBuf,
+        rotation: LogRotation,
+    },
 }
 
 pub struct AuditLogger {
@@ -152,24 +155,25 @@ fn write_event_to_output(output: &AuditOutput, event: &AuditEvent) {
     }
 }
 
-fn write_to_file_with_rotation(path: &PathBuf, rotation: &LogRotation, line: &str) -> std::io::Result<()> {
+fn write_to_file_with_rotation(
+    path: &PathBuf,
+    rotation: &LogRotation,
+    line: &str,
+) -> std::io::Result<()> {
     match rotation {
         LogRotation::None => {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
+            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
             writeln!(file, "{}", line)?;
             file.flush()?;
         }
-        LogRotation::Size { max_bytes, max_files } => {
+        LogRotation::Size {
+            max_bytes,
+            max_files,
+        } => {
             if path.exists() && fs::metadata(path)?.len() >= *max_bytes {
                 rotate_files(path, *max_files)?;
             }
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
+            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
             writeln!(file, "{}", line)?;
             file.flush()?;
         }
@@ -177,10 +181,7 @@ fn write_to_file_with_rotation(path: &PathBuf, rotation: &LogRotation, line: &st
             if should_rotate_daily(path) {
                 rotate_files(path, 7)?;
             }
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
+            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
             writeln!(file, "{}", line)?;
             file.flush()?;
         }

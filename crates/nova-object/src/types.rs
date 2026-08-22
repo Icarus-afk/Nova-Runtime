@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 
 use crate::schema::FieldDef;
 
@@ -18,35 +18,68 @@ pub enum NovaType {
     UInt64,
     Float32,
     Float64,
-    String { max_length: Option<u32> },
-    Binary { max_length: Option<u32> },
+    String {
+        max_length: Option<u32>,
+    },
+    Binary {
+        max_length: Option<u32>,
+    },
     Date,
     Time,
     DateTime,
     Duration,
     Timestamp,
-    Decimal { precision: u8, scale: u8 },
-    Array { element_type: Box<NovaType>, max_items: Option<u32> },
-    Object { fields: Vec<FieldDef>, additional_fields: bool },
-    Map { value_type: Box<NovaType> },
-    Reference { collection: String },
+    Decimal {
+        precision: u8,
+        scale: u8,
+    },
+    Array {
+        element_type: Box<NovaType>,
+        max_items: Option<u32>,
+    },
+    Object {
+        fields: Vec<FieldDef>,
+        additional_fields: bool,
+    },
+    Map {
+        value_type: Box<NovaType>,
+    },
+    Reference {
+        collection: String,
+    },
     Any,
     Union(Vec<NovaType>),
     Optional(Box<NovaType>),
     GeoPoint,
     GeoShape,
-    Vector { dimensions: u16 },
+    Vector {
+        dimensions: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GeoJsonGeometry {
-    Point { coordinates: [f64; 2] },
-    MultiPoint { coordinates: Vec<[f64; 2]> },
-    LineString { coordinates: Vec<[f64; 2]> },
-    MultiLineString { coordinates: Vec<Vec<[f64; 2]>> },
-    Polygon { coordinates: Vec<Vec<[f64; 2]>> },
-    MultiPolygon { coordinates: Vec<Vec<Vec<[f64; 2]>>> },
-    GeometryCollection { geometries: Vec<GeoJsonGeometry> },
+    Point {
+        coordinates: [f64; 2],
+    },
+    MultiPoint {
+        coordinates: Vec<[f64; 2]>,
+    },
+    LineString {
+        coordinates: Vec<[f64; 2]>,
+    },
+    MultiLineString {
+        coordinates: Vec<Vec<[f64; 2]>>,
+    },
+    Polygon {
+        coordinates: Vec<Vec<[f64; 2]>>,
+    },
+    MultiPolygon {
+        coordinates: Vec<Vec<Vec<[f64; 2]>>>,
+    },
+    GeometryCollection {
+        geometries: Vec<GeoJsonGeometry>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,17 +98,41 @@ pub enum Value {
     Float64(f64),
     String(String),
     Binary(Vec<u8>),
-    Date { year: i32, month: u8, day: u8 },
-    Time { hour: u8, min: u8, sec: u8, nano: u32 },
-    DateTime { secs: i64, nsecs: u32 },
-    Duration { nanos: i64 },
+    Date {
+        year: i32,
+        month: u8,
+        day: u8,
+    },
+    Time {
+        hour: u8,
+        min: u8,
+        sec: u8,
+        nano: u32,
+    },
+    DateTime {
+        secs: i64,
+        nsecs: u32,
+    },
+    Duration {
+        nanos: i64,
+    },
     Timestamp(i64),
-    Decimal { value: [u8; 16], precision: u8, scale: u8 },
+    Decimal {
+        value: [u8; 16],
+        precision: u8,
+        scale: u8,
+    },
     Array(Vec<Value>),
     Object(HashMap<String, Value>),
     Map(HashMap<String, Value>),
-    Reference { collection: String, id: [u8; 16] },
-    GeoPoint { lat: f64, lon: f64 },
+    Reference {
+        collection: String,
+        id: [u8; 16],
+    },
+    GeoPoint {
+        lat: f64,
+        lon: f64,
+    },
     GeoShape(GeoJsonGeometry),
     Vector(Vec<f32>),
 }
@@ -177,42 +234,55 @@ impl Value {
             Value::UInt32(v) => JsonValue::Number((*v as u64).into()),
             Value::UInt64(v) => JsonValue::Number((*v).into()),
             Value::Float32(v) => {
-                let n = serde_json::Number::from_f64(*v as f64).unwrap_or(serde_json::Number::from_f64(0.0).unwrap());
+                let n = serde_json::Number::from_f64(*v as f64)
+                    .unwrap_or(serde_json::Number::from_f64(0.0).unwrap());
                 JsonValue::Number(n)
             }
             Value::Float64(v) => {
-                let n = serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from_f64(0.0).unwrap());
+                let n = serde_json::Number::from_f64(*v)
+                    .unwrap_or(serde_json::Number::from_f64(0.0).unwrap());
                 JsonValue::Number(n)
             }
             Value::String(s) => JsonValue::String(s.clone()),
-            Value::Binary(b) => JsonValue::Array(b.iter().map(|&x| JsonValue::Number(x.into())).collect()),
+            Value::Binary(b) => {
+                JsonValue::Array(b.iter().map(|&x| JsonValue::Number(x.into())).collect())
+            }
             Value::Date { year, month, day } => {
                 JsonValue::String(format!("{:04}-{:02}-{:02}", year, month, day))
             }
-            Value::Time { hour, min, sec, nano } => {
+            Value::Time {
+                hour,
+                min,
+                sec,
+                nano,
+            } => {
                 if *nano > 0 {
                     JsonValue::String(format!("{:02}:{:02}:{:02}.{:09}", hour, min, sec, nano))
                 } else {
                     JsonValue::String(format!("{:02}:{:02}:{:02}", hour, min, sec))
                 }
             }
-            Value::DateTime { secs, nsecs } => {
-                JsonValue::Object(serde_json::Map::from_iter([
-                    ("secs".to_string(), JsonValue::Number((*secs).into())),
-                    ("nsecs".to_string(), JsonValue::Number((*nsecs).into())),
-                ]))
-            }
-            Value::Duration { nanos } => {
-                JsonValue::Object(serde_json::Map::from_iter([
-                    ("nanos".to_string(), JsonValue::Number((*nanos).into())),
-                ]))
-            }
+            Value::DateTime { secs, nsecs } => JsonValue::Object(serde_json::Map::from_iter([
+                ("secs".to_string(), JsonValue::Number((*secs).into())),
+                ("nsecs".to_string(), JsonValue::Number((*nsecs).into())),
+            ])),
+            Value::Duration { nanos } => JsonValue::Object(serde_json::Map::from_iter([(
+                "nanos".to_string(),
+                JsonValue::Number((*nanos).into()),
+            )])),
             Value::Timestamp(ts) => JsonValue::Number((*ts).into()),
-            Value::Decimal { value, precision, scale } => {
+            Value::Decimal {
+                value,
+                precision,
+                scale,
+            } => {
                 let hex_str = hex::encode(value);
                 JsonValue::Object(serde_json::Map::from_iter([
                     ("value".to_string(), JsonValue::String(hex_str)),
-                    ("precision".to_string(), JsonValue::Number((*precision).into())),
+                    (
+                        "precision".to_string(),
+                        JsonValue::Number((*precision).into()),
+                    ),
                     ("scale".to_string(), JsonValue::Number((*scale).into())),
                 ]))
             }
@@ -226,26 +296,44 @@ impl Value {
             Value::Reference { collection, id } => {
                 let id_str = uuid::Uuid::from_bytes(*id).to_string();
                 JsonValue::Object(serde_json::Map::from_iter([
-                    ("$ref".to_string(), JsonValue::String(format!("{}/{}", collection, id_str))),
-                    ("collection".to_string(), JsonValue::String(collection.clone())),
+                    (
+                        "$ref".to_string(),
+                        JsonValue::String(format!("{}/{}", collection, id_str)),
+                    ),
+                    (
+                        "collection".to_string(),
+                        JsonValue::String(collection.clone()),
+                    ),
                     ("id".to_string(), JsonValue::String(id_str)),
                 ]))
             }
-            Value::GeoPoint { lat, lon } => {
-                JsonValue::Object(serde_json::Map::from_iter([
-                    ("type".to_string(), JsonValue::String("Point".to_string())),
-                    ("coordinates".to_string(), JsonValue::Array(vec![
-                        JsonValue::Number(serde_json::Number::from_f64(*lon).unwrap_or(serde_json::Number::from_f64(0.0).unwrap())),
-                        JsonValue::Number(serde_json::Number::from_f64(*lat).unwrap_or(serde_json::Number::from_f64(0.0).unwrap())),
-                    ])),
-                ]))
-            }
+            Value::GeoPoint { lat, lon } => JsonValue::Object(serde_json::Map::from_iter([
+                ("type".to_string(), JsonValue::String("Point".to_string())),
+                (
+                    "coordinates".to_string(),
+                    JsonValue::Array(vec![
+                        JsonValue::Number(
+                            serde_json::Number::from_f64(*lon)
+                                .unwrap_or(serde_json::Number::from_f64(0.0).unwrap()),
+                        ),
+                        JsonValue::Number(
+                            serde_json::Number::from_f64(*lat)
+                                .unwrap_or(serde_json::Number::from_f64(0.0).unwrap()),
+                        ),
+                    ]),
+                ),
+            ])),
             Value::GeoShape(geom) => serde_json::to_value(geom).unwrap_or(JsonValue::Null),
-            Value::Vector(vec) => {
-                JsonValue::Array(vec.iter().map(|&x| {
-                    JsonValue::Number(serde_json::Number::from_f64(x as f64).unwrap_or(serde_json::Number::from_f64(0.0).unwrap()))
-                }).collect())
-            }
+            Value::Vector(vec) => JsonValue::Array(
+                vec.iter()
+                    .map(|&x| {
+                        JsonValue::Number(
+                            serde_json::Number::from_f64(x as f64)
+                                .unwrap_or(serde_json::Number::from_f64(0.0).unwrap()),
+                        )
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -272,29 +360,34 @@ impl Value {
             }
             JsonValue::String(s) => Ok(Value::String(s)),
             JsonValue::Array(items) => {
-                let values: Result<Vec<Value>, String> = items.into_iter().map(Value::from_json).collect();
+                let values: Result<Vec<Value>, String> =
+                    items.into_iter().map(Value::from_json).collect();
                 Ok(Value::Array(values?))
             }
             JsonValue::Object(map) => {
                 if map.contains_key("$timestamp") {
-                    let ts = map.get("$timestamp")
+                    let ts = map
+                        .get("$timestamp")
                         .and_then(|v| v.as_i64())
                         .ok_or_else(|| "$timestamp must be an i64".to_string())?;
                     Ok(Value::Timestamp(ts))
                 } else if map.contains_key("$ref") {
-                    let collection = map.get("collection")
+                    let collection = map
+                        .get("collection")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let id_str = map.get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let id_str = map.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     let uuid = uuid::Uuid::parse_str(id_str).map_err(|e| e.to_string())?;
-                    Ok(Value::Reference { collection, id: *uuid.as_bytes() })
+                    Ok(Value::Reference {
+                        collection,
+                        id: *uuid.as_bytes(),
+                    })
                 } else if let Some(geom_type) = map.get("type").and_then(|v| v.as_str()) {
                     match geom_type {
                         "Point" => {
-                            if let Some(coords) = map.get("coordinates").and_then(|v| v.as_array()) {
+                            if let Some(coords) = map.get("coordinates").and_then(|v| v.as_array())
+                            {
                                 if coords.len() >= 2 {
                                     let lon = coords[0].as_f64().unwrap_or(0.0);
                                     let lat = coords[1].as_f64().unwrap_or(0.0);
@@ -303,14 +396,18 @@ impl Value {
                             }
                             Err("Invalid GeoPoint coordinates".to_string())
                         }
-                        "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon" | "GeometryCollection" => {
+                        "MultiPoint" | "LineString" | "MultiLineString" | "Polygon"
+                        | "MultiPolygon" | "GeometryCollection" => {
                             let json_val = JsonValue::Object(map);
-                            serde_json::from_value(json_val).map(Value::GeoShape).map_err(|e| e.to_string())
+                            serde_json::from_value(json_val)
+                                .map(Value::GeoShape)
+                                .map_err(|e| e.to_string())
                         }
                         _ => {
                             if map.contains_key("secs") && map.contains_key("nsecs") {
                                 let secs = map.get("secs").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let nsecs = map.get("nsecs").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let nsecs =
+                                    map.get("nsecs").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 Ok(Value::DateTime { secs, nsecs })
                             } else {
                                 let values: Result<HashMap<String, Value>, String> = map
@@ -366,70 +463,68 @@ impl Value {
             NovaType::Duration => matches!(self, Value::Duration { .. }),
             NovaType::Timestamp => matches!(self, Value::Timestamp(_)),
             NovaType::Decimal { .. } => matches!(self, Value::Decimal { .. }),
-            NovaType::Array { element_type, max_items } => {
-                match self {
-                    Value::Array(items) => {
-                        if let Some(max) = max_items {
-                            if items.len() > *max as usize {
+            NovaType::Array {
+                element_type,
+                max_items,
+            } => match self {
+                Value::Array(items) => {
+                    if let Some(max) = max_items {
+                        if items.len() > *max as usize {
+                            return false;
+                        }
+                    }
+                    items.iter().all(|item| item.validate_type(element_type))
+                }
+                _ => false,
+            },
+            NovaType::Object {
+                fields,
+                additional_fields,
+            } => match self {
+                Value::Object(map) => {
+                    for field in fields {
+                        if field.required {
+                            if !map.contains_key(&field.name) {
                                 return false;
                             }
                         }
-                        items.iter().all(|item| item.validate_type(element_type))
-                    }
-                    _ => false,
-                }
-            }
-            NovaType::Object { fields, additional_fields } => {
-                match self {
-                    Value::Object(map) => {
-                        for field in fields {
-                            if field.required {
-                                if !map.contains_key(&field.name) {
-                                    return false;
-                                }
-                            }
-                            if let Some(val) = map.get(&field.name) {
-                                if !val.validate_type(&field.field_type) {
-                                    return false;
-                                }
+                        if let Some(val) = map.get(&field.name) {
+                            if !val.validate_type(&field.field_type) {
+                                return false;
                             }
                         }
-                        if !additional_fields {
-                            for key in map.keys() {
-                                if !fields.iter().any(|f| f.name == *key) {
-                                    return false;
-                                }
+                    }
+                    if !additional_fields {
+                        for key in map.keys() {
+                            if !fields.iter().any(|f| f.name == *key) {
+                                return false;
                             }
                         }
-                        true
                     }
-                    _ => false,
+                    true
                 }
-            }
-            NovaType::Map { value_type } => {
-                match self {
-                    Value::Map(map) => map.values().all(|v| v.validate_type(value_type)),
-                    _ => false,
-                }
-            }
+                _ => false,
+            },
+            NovaType::Map { value_type } => match self {
+                Value::Map(map) => map.values().all(|v| v.validate_type(value_type)),
+                _ => false,
+            },
             NovaType::Reference { .. } => matches!(self, Value::Reference { .. }),
             NovaType::GeoPoint => matches!(self, Value::GeoPoint { .. }),
             NovaType::GeoShape => matches!(self, Value::GeoShape(_)),
-            NovaType::Vector { dimensions } => {
-                match self {
-                    Value::Vector(vec) => vec.len() == *dimensions as usize,
-                    _ => false,
-                }
-            }
+            NovaType::Vector { dimensions } => match self {
+                Value::Vector(vec) => vec.len() == *dimensions as usize,
+                _ => false,
+            },
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use crate::types::*;
     use crate::schema::FieldDef;
+    use crate::types::*;
+    use std::collections::HashMap;
 
     // --- NovaType variants ---
 
@@ -467,7 +562,9 @@ mod tests {
 
     #[test]
     fn test_novatype_string() {
-        let t = NovaType::String { max_length: Some(100) };
+        let t = NovaType::String {
+            max_length: Some(100),
+        };
         assert_eq!(format!("{:?}", t), "String { max_length: Some(100) }");
         let t2 = NovaType::String { max_length: None };
         assert_eq!(format!("{:?}", t2), "String { max_length: None }");
@@ -475,7 +572,9 @@ mod tests {
 
     #[test]
     fn test_novatype_binary() {
-        let t = NovaType::Binary { max_length: Some(256) };
+        let t = NovaType::Binary {
+            max_length: Some(256),
+        };
         assert_eq!(format!("{:?}", t), "Binary { max_length: Some(256) }");
     }
 
@@ -490,45 +589,56 @@ mod tests {
 
     #[test]
     fn test_novatype_decimal() {
-        let t = NovaType::Decimal { precision: 10, scale: 2 };
+        let t = NovaType::Decimal {
+            precision: 10,
+            scale: 2,
+        };
         assert_eq!(format!("{:?}", t), "Decimal { precision: 10, scale: 2 }");
     }
 
     #[test]
     fn test_novatype_array() {
-        let t = NovaType::Array { element_type: Box::new(NovaType::Int32), max_items: Some(10) };
+        let t = NovaType::Array {
+            element_type: Box::new(NovaType::Int32),
+            max_items: Some(10),
+        };
         assert!(format!("{:?}", t).contains("Array"));
     }
 
     #[test]
     fn test_novatype_object() {
-        let fields = vec![
-            FieldDef {
-                name: "name".into(),
-                field_type: NovaType::String { max_length: None },
-                required: true,
-                default: None,
-                computed: None,
-                description: "".into(),
-                index: None,
-                unique: false,
-                sensitive: false,
-                validate: vec![],
-            },
-        ];
-        let t = NovaType::Object { fields, additional_fields: false };
+        let fields = vec![FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: true,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        }];
+        let t = NovaType::Object {
+            fields,
+            additional_fields: false,
+        };
         assert!(format!("{:?}", t).contains("Object"));
     }
 
     #[test]
     fn test_novatype_map() {
-        let t = NovaType::Map { value_type: Box::new(NovaType::String { max_length: None }) };
+        let t = NovaType::Map {
+            value_type: Box::new(NovaType::String { max_length: None }),
+        };
         assert!(format!("{:?}", t).contains("Map"));
     }
 
     #[test]
     fn test_novatype_reference() {
-        let t = NovaType::Reference { collection: "users".into() };
+        let t = NovaType::Reference {
+            collection: "users".into(),
+        };
         assert!(format!("{:?}", t).contains("Reference"));
     }
 
@@ -607,17 +717,37 @@ mod tests {
 
     #[test]
     fn test_value_type_name_date() {
-        assert_eq!(Value::Date { year: 2024, month: 1, day: 15 }.type_name(), "date");
+        assert_eq!(
+            Value::Date {
+                year: 2024,
+                month: 1,
+                day: 15
+            }
+            .type_name(),
+            "date"
+        );
     }
 
     #[test]
     fn test_value_type_name_time() {
-        assert_eq!(Value::Time { hour: 10, min: 30, sec: 0, nano: 0 }.type_name(), "time");
+        assert_eq!(
+            Value::Time {
+                hour: 10,
+                min: 30,
+                sec: 0,
+                nano: 0
+            }
+            .type_name(),
+            "time"
+        );
     }
 
     #[test]
     fn test_value_type_name_datetime() {
-        assert_eq!(Value::DateTime { secs: 0, nsecs: 0 }.type_name(), "datetime");
+        assert_eq!(
+            Value::DateTime { secs: 0, nsecs: 0 }.type_name(),
+            "datetime"
+        );
     }
 
     #[test]
@@ -632,7 +762,15 @@ mod tests {
 
     #[test]
     fn test_value_type_name_decimal() {
-        assert_eq!(Value::Decimal { value: [0; 16], precision: 10, scale: 2 }.type_name(), "decimal");
+        assert_eq!(
+            Value::Decimal {
+                value: [0; 16],
+                precision: 10,
+                scale: 2
+            }
+            .type_name(),
+            "decimal"
+        );
     }
 
     #[test]
@@ -652,17 +790,33 @@ mod tests {
 
     #[test]
     fn test_value_type_name_reference() {
-        assert_eq!(Value::Reference { collection: "c".into(), id: [0; 16] }.type_name(), "reference");
+        assert_eq!(
+            Value::Reference {
+                collection: "c".into(),
+                id: [0; 16]
+            }
+            .type_name(),
+            "reference"
+        );
     }
 
     #[test]
     fn test_value_type_name_geopoint() {
-        assert_eq!(Value::GeoPoint { lat: 1.0, lon: 2.0 }.type_name(), "geopoint");
+        assert_eq!(
+            Value::GeoPoint { lat: 1.0, lon: 2.0 }.type_name(),
+            "geopoint"
+        );
     }
 
     #[test]
     fn test_value_type_name_geoshape() {
-        assert_eq!(Value::GeoShape(GeoJsonGeometry::Point { coordinates: [1.0, 2.0] }).type_name(), "geo_shape");
+        assert_eq!(
+            Value::GeoShape(GeoJsonGeometry::Point {
+                coordinates: [1.0, 2.0]
+            })
+            .type_name(),
+            "geo_shape"
+        );
     }
 
     #[test]
@@ -736,7 +890,10 @@ mod tests {
     #[test]
     fn test_value_as_bytes() {
         let data = vec![1, 2, 3];
-        assert_eq!(Value::Binary(data.clone()).as_bytes(), Some(&[1u8, 2, 3][..]));
+        assert_eq!(
+            Value::Binary(data.clone()).as_bytes(),
+            Some(&[1u8, 2, 3][..])
+        );
     }
 
     #[test]
@@ -878,12 +1035,27 @@ mod tests {
 
     #[test]
     fn test_validate_type_date() {
-        assert!(Value::Date { year: 2024, month: 1, day: 1 }.validate_type(&NovaType::Date));
+        assert!(
+            Value::Date {
+                year: 2024,
+                month: 1,
+                day: 1
+            }
+            .validate_type(&NovaType::Date)
+        );
     }
 
     #[test]
     fn test_validate_type_time() {
-        assert!(Value::Time { hour: 12, min: 0, sec: 0, nano: 0 }.validate_type(&NovaType::Time));
+        assert!(
+            Value::Time {
+                hour: 12,
+                min: 0,
+                sec: 0,
+                nano: 0
+            }
+            .validate_type(&NovaType::Time)
+        );
     }
 
     #[test]
@@ -903,27 +1075,46 @@ mod tests {
 
     #[test]
     fn test_validate_type_decimal() {
-        assert!(Value::Decimal { value: [0; 16], precision: 10, scale: 2 }.validate_type(&NovaType::Decimal { precision: 10, scale: 2 }));
+        assert!(
+            Value::Decimal {
+                value: [0; 16],
+                precision: 10,
+                scale: 2
+            }
+            .validate_type(&NovaType::Decimal {
+                precision: 10,
+                scale: 2
+            })
+        );
     }
 
     #[test]
     fn test_validate_type_array() {
         let items = vec![Value::Int64(1), Value::Int64(2)];
-        let t = NovaType::Array { element_type: Box::new(NovaType::Int64), max_items: None };
+        let t = NovaType::Array {
+            element_type: Box::new(NovaType::Int64),
+            max_items: None,
+        };
         assert!(Value::Array(items.clone()).validate_type(&t));
     }
 
     #[test]
     fn test_validate_type_array_max_items() {
         let items = vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)];
-        let t = NovaType::Array { element_type: Box::new(NovaType::Int64), max_items: Some(2) };
+        let t = NovaType::Array {
+            element_type: Box::new(NovaType::Int64),
+            max_items: Some(2),
+        };
         assert!(!Value::Array(items).validate_type(&t));
     }
 
     #[test]
     fn test_validate_type_array_type_mismatch() {
         let items = vec![Value::String("hi".into())];
-        let t = NovaType::Array { element_type: Box::new(NovaType::Int64), max_items: None };
+        let t = NovaType::Array {
+            element_type: Box::new(NovaType::Int64),
+            max_items: None,
+        };
         assert!(!Value::Array(items).validate_type(&t));
     }
 
@@ -931,42 +1122,44 @@ mod tests {
     fn test_validate_type_object() {
         let mut map = HashMap::new();
         map.insert("name".into(), Value::String("alice".into()));
-        let fields = vec![
-            FieldDef {
-                name: "name".into(),
-                field_type: NovaType::String { max_length: None },
-                required: true,
-                default: None,
-                computed: None,
-                description: "".into(),
-                index: None,
-                unique: false,
-                sensitive: false,
-                validate: vec![],
-            },
-        ];
-        let t = NovaType::Object { fields, additional_fields: false };
+        let fields = vec![FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: true,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        }];
+        let t = NovaType::Object {
+            fields,
+            additional_fields: false,
+        };
         assert!(Value::Object(map).validate_type(&t));
     }
 
     #[test]
     fn test_validate_type_object_missing_required() {
         let map = HashMap::new();
-        let fields = vec![
-            FieldDef {
-                name: "name".into(),
-                field_type: NovaType::String { max_length: None },
-                required: true,
-                default: None,
-                computed: None,
-                description: "".into(),
-                index: None,
-                unique: false,
-                sensitive: false,
-                validate: vec![],
-            },
-        ];
-        let t = NovaType::Object { fields, additional_fields: false };
+        let fields = vec![FieldDef {
+            name: "name".into(),
+            field_type: NovaType::String { max_length: None },
+            required: true,
+            default: None,
+            computed: None,
+            description: "".into(),
+            index: None,
+            unique: false,
+            sensitive: false,
+            validate: vec![],
+        }];
+        let t = NovaType::Object {
+            fields,
+            additional_fields: false,
+        };
         assert!(!Value::Object(map).validate_type(&t));
     }
 
@@ -975,7 +1168,10 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("extra".into(), Value::Int64(1));
         let fields = vec![];
-        let t = NovaType::Object { fields, additional_fields: false };
+        let t = NovaType::Object {
+            fields,
+            additional_fields: false,
+        };
         assert!(!Value::Object(map).validate_type(&t));
     }
 
@@ -983,14 +1179,21 @@ mod tests {
     fn test_validate_type_map() {
         let mut map = HashMap::new();
         map.insert("k".into(), Value::Int64(1));
-        let t = NovaType::Map { value_type: Box::new(NovaType::Int64) };
+        let t = NovaType::Map {
+            value_type: Box::new(NovaType::Int64),
+        };
         assert!(Value::Map(map).validate_type(&t));
     }
 
     #[test]
     fn test_validate_type_reference() {
-        let v = Value::Reference { collection: "users".into(), id: [0; 16] };
-        assert!(v.validate_type(&NovaType::Reference { collection: "".into() }));
+        let v = Value::Reference {
+            collection: "users".into(),
+            id: [0; 16],
+        };
+        assert!(v.validate_type(&NovaType::Reference {
+            collection: "".into()
+        }));
     }
 
     #[test]
@@ -1001,7 +1204,9 @@ mod tests {
 
     #[test]
     fn test_validate_type_geoshape() {
-        let v = Value::GeoShape(GeoJsonGeometry::Point { coordinates: [1.0, 2.0] });
+        let v = Value::GeoShape(GeoJsonGeometry::Point {
+            coordinates: [1.0, 2.0],
+        });
         assert!(v.validate_type(&NovaType::GeoShape));
     }
 
@@ -1039,32 +1244,42 @@ mod tests {
 
     #[test]
     fn test_geojson_point() {
-        let g = GeoJsonGeometry::Point { coordinates: [1.0, 2.0] };
+        let g = GeoJsonGeometry::Point {
+            coordinates: [1.0, 2.0],
+        };
         assert!(format!("{:?}", g).contains("Point"));
     }
 
     #[test]
     fn test_geojson_multipoint() {
-        let g = GeoJsonGeometry::MultiPoint { coordinates: vec![[1.0, 2.0]] };
+        let g = GeoJsonGeometry::MultiPoint {
+            coordinates: vec![[1.0, 2.0]],
+        };
         assert!(format!("{:?}", g).contains("MultiPoint"));
     }
 
     #[test]
     fn test_geojson_linestring() {
-        let g = GeoJsonGeometry::LineString { coordinates: vec![[1.0, 2.0], [3.0, 4.0]] };
+        let g = GeoJsonGeometry::LineString {
+            coordinates: vec![[1.0, 2.0], [3.0, 4.0]],
+        };
         assert!(format!("{:?}", g).contains("LineString"));
     }
 
     #[test]
     fn test_geojson_polygon() {
-        let g = GeoJsonGeometry::Polygon { coordinates: vec![vec![[0.0, 0.0], [1.0, 1.0]]] };
+        let g = GeoJsonGeometry::Polygon {
+            coordinates: vec![vec![[0.0, 0.0], [1.0, 1.0]]],
+        };
         assert!(format!("{:?}", g).contains("Polygon"));
     }
 
     #[test]
     fn test_geojson_geometry_collection() {
         let g = GeoJsonGeometry::GeometryCollection {
-            geometries: vec![GeoJsonGeometry::Point { coordinates: [1.0, 2.0] }],
+            geometries: vec![GeoJsonGeometry::Point {
+                coordinates: [1.0, 2.0],
+            }],
         };
         assert!(format!("{:?}", g).contains("GeometryCollection"));
     }

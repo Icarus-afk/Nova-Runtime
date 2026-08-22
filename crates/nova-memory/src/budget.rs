@@ -1,7 +1,7 @@
+use nova_core::{PAGE_SIZE, Result, RuntimeError};
 use std::alloc::Layout;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use nova_core::{Result, RuntimeError, PAGE_SIZE};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 
 #[derive(Debug, Clone)]
@@ -79,7 +79,8 @@ impl MemoryBudget {
     }
 
     pub fn available(&self) -> u64 {
-        self.max_bytes.saturating_sub(self.used_bytes.load(Ordering::Relaxed))
+        self.max_bytes
+            .saturating_sub(self.used_bytes.load(Ordering::Relaxed))
     }
 
     pub fn utilization_pct(&self) -> f64 {
@@ -93,7 +94,8 @@ impl MemoryBudget {
     }
 
     pub fn reset_peak(&self) {
-        self.peak_bytes.store(self.used_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.peak_bytes
+            .store(self.used_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     pub fn is_pressured(&self, threshold_pct: u8) -> bool {
@@ -198,7 +200,9 @@ impl MemoryManager {
 
         if ptr.is_null() {
             self.total_used.fetch_sub(size as u64, Ordering::Relaxed);
-            return Err(RuntimeError::OutOfMemory("system allocator returned null".into()));
+            return Err(RuntimeError::OutOfMemory(
+                "system allocator returned null".into(),
+            ));
         }
 
         // SAFETY: The following invariants hold:
