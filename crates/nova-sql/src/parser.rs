@@ -58,10 +58,7 @@ impl Parser {
                 let dt = self.parse_drop_table()?;
                 Ok(Statement::DropTable(dt))
             }
-            t => Err(self.err_syntax(format!(
-                "unexpected token at start of statement: {:?}",
-                t
-            ))),
+            t => Err(self.err_syntax(format!("unexpected token at start of statement: {:?}", t))),
         }
     }
 
@@ -131,11 +128,16 @@ impl Parser {
             let saved = self.pos;
             let ident = self.parse_identifier()?;
             match self.peek() {
-                Token::Comma | Token::From | Token::Where
-                | Token::Group | Token::Order | Token::Having
-                | Token::Limit | Token::Offset | Token::Semicolon | Token::EOF => {
-                    Some(ident)
-                }
+                Token::Comma
+                | Token::From
+                | Token::Where
+                | Token::Group
+                | Token::Order
+                | Token::Having
+                | Token::Limit
+                | Token::Offset
+                | Token::Semicolon
+                | Token::EOF => Some(ident),
                 _ => {
                     self.pos = saved;
                     None
@@ -155,9 +157,15 @@ impl Parser {
             let saved = self.pos;
             let ident = self.parse_identifier()?;
             match self.peek() {
-                Token::Where | Token::Group | Token::Order
-                | Token::Having | Token::Limit | Token::Offset
-                | Token::Comma | Token::Semicolon | Token::EOF => Some(ident),
+                Token::Where
+                | Token::Group
+                | Token::Order
+                | Token::Having
+                | Token::Limit
+                | Token::Offset
+                | Token::Comma
+                | Token::Semicolon
+                | Token::EOF => Some(ident),
                 _ => {
                     self.pos = saved;
                     None
@@ -189,7 +197,11 @@ impl Parser {
         } else {
             None
         };
-        Ok(OrderByExpr { expr, asc, nulls_first })
+        Ok(OrderByExpr {
+            expr,
+            asc,
+            nulls_first,
+        })
     }
 
     fn parse_insert(&mut self) -> Result<InsertStatement> {
@@ -324,12 +336,18 @@ impl Parser {
     fn parse_sql_type(&mut self) -> Result<SQLType> {
         let ident = self.parse_identifier()?;
         match ident.to_lowercase().as_str() {
-            "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" => Ok(SQLType::Integer),
+            "int" | "integer" | "tinyint" | "smallint" | "mediumint" | "bigint" => {
+                Ok(SQLType::Integer)
+            }
             "float" | "double" | "real" | "decimal" | "numeric" => Ok(SQLType::Float),
-            "text" | "varchar" | "string" | "char" | "tinytext" | "mediumtext" | "longtext" => Ok(SQLType::Text),
+            "text" | "varchar" | "string" | "char" | "tinytext" | "mediumtext" | "longtext" => {
+                Ok(SQLType::Text)
+            }
             "bool" | "boolean" | "bit" => Ok(SQLType::Boolean),
             "timestamp" | "datetime" | "date" | "time" | "year" => Ok(SQLType::Text),
-            "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => Ok(SQLType::Text),
+            "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => {
+                Ok(SQLType::Text)
+            }
             other => Err(self.err_syntax(format!("unknown type: {}", other))),
         }
     }
@@ -586,22 +604,44 @@ impl Parser {
                     self.expect(Token::RParen)?;
                     expr = Expr::UnaryOp {
                         op: UnaryOperator::Not,
-                        expr: Box::new(Expr::In { expr: Box::new(expr), list }),
+                        expr: Box::new(Expr::In {
+                            expr: Box::new(expr),
+                            list,
+                        }),
                     };
                 } else if self.eat_if(Token::Between) {
                     let low = self.parse_comparison()?;
                     self.expect(Token::And)?;
                     let high = self.parse_expression()?;
-                    let between = Expr::Between { expr: Box::new(expr), low: Box::new(low), high: Box::new(high) };
-                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(between) };
+                    let between = Expr::Between {
+                        expr: Box::new(expr),
+                        low: Box::new(low),
+                        high: Box::new(high),
+                    };
+                    expr = Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(between),
+                    };
                 } else if self.eat_if(Token::Like) {
                     let pattern = self.parse_expression()?;
-                    let like = Expr::Like { expr: Box::new(expr), pattern: Box::new(pattern) };
-                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(like) };
+                    let like = Expr::Like {
+                        expr: Box::new(expr),
+                        pattern: Box::new(pattern),
+                    };
+                    expr = Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(like),
+                    };
                 } else if self.eat_if(Token::ILike) {
                     let pattern = self.parse_expression()?;
-                    let ilike = Expr::ILike { expr: Box::new(expr), pattern: Box::new(pattern) };
-                    expr = Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(ilike) };
+                    let ilike = Expr::ILike {
+                        expr: Box::new(expr),
+                        pattern: Box::new(pattern),
+                    };
+                    expr = Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(ilike),
+                    };
                 } else {
                     self.pos = saved;
                     // Check IS / IN / BETWEEN / LIKE / ILIKE normally
@@ -617,18 +657,31 @@ impl Parser {
                         self.expect(Token::LParen)?;
                         let list = self.parse_comma_separated(Self::parse_expression)?;
                         self.expect(Token::RParen)?;
-                        expr = Expr::In { expr: Box::new(expr), list };
+                        expr = Expr::In {
+                            expr: Box::new(expr),
+                            list,
+                        };
                     } else if self.eat_if(Token::Between) {
                         let low = self.parse_comparison()?;
                         self.expect(Token::And)?;
                         let high = self.parse_expression()?;
-                        expr = Expr::Between { expr: Box::new(expr), low: Box::new(low), high: Box::new(high) };
+                        expr = Expr::Between {
+                            expr: Box::new(expr),
+                            low: Box::new(low),
+                            high: Box::new(high),
+                        };
                     } else if self.eat_if(Token::Like) {
                         let pattern = self.parse_expression()?;
-                        expr = Expr::Like { expr: Box::new(expr), pattern: Box::new(pattern) };
+                        expr = Expr::Like {
+                            expr: Box::new(expr),
+                            pattern: Box::new(pattern),
+                        };
                     } else if self.eat_if(Token::ILike) {
                         let pattern = self.parse_expression()?;
-                        expr = Expr::ILike { expr: Box::new(expr), pattern: Box::new(pattern) };
+                        expr = Expr::ILike {
+                            expr: Box::new(expr),
+                            pattern: Box::new(pattern),
+                        };
                     }
                 }
             } else if self.eat_if(Token::Is) {
@@ -671,10 +724,7 @@ impl Parser {
             }
             return Ok(expr);
         }
-        Err(self.err_syntax(format!(
-            "unexpected token: {:?}",
-            self.peek()
-        )))
+        Err(self.err_syntax(format!("unexpected token: {:?}", self.peek())))
     }
 
     fn parse_case(&mut self) -> Result<Expr> {
@@ -691,9 +741,9 @@ impl Parser {
             } else if self.eat_if(Token::End) {
                 break;
             } else {
-                return Err(self.err_syntax(
-                    "expected WHEN, ELSE, or END in CASE expression".to_string(),
-                ));
+                return Err(
+                    self.err_syntax("expected WHEN, ELSE, or END in CASE expression".to_string())
+                );
             }
         }
         if whens.is_empty() {
@@ -764,7 +814,10 @@ impl Parser {
         self.expect(Token::RParen)?;
         Ok(Expr::Function {
             name: "exists".to_string(),
-            args: vec![Expr::Literal(LiteralValue::String(format!("{:?}", subquery)))],
+            args: vec![Expr::Literal(LiteralValue::String(format!(
+                "{:?}",
+                subquery
+            )))],
         })
     }
 
@@ -788,10 +841,7 @@ impl Parser {
                 self.advance();
                 Ok(s)
             }
-            t => Err(self.err_syntax(format!(
-                "expected identifier, got {:?}",
-                t
-            ))),
+            t => Err(self.err_syntax(format!("expected identifier, got {:?}", t))),
         }
     }
 
@@ -822,10 +872,7 @@ impl Parser {
             self.advance();
             return Ok(LiteralValue::String(s));
         }
-        Err(self.err_syntax(format!(
-            "unexpected token in literal: {:?}",
-            self.peek()
-        )))
+        Err(self.err_syntax(format!("unexpected token in literal: {:?}", self.peek())))
     }
 
     fn parse_usize(&mut self) -> Result<usize> {
@@ -840,10 +887,7 @@ impl Parser {
     }
 
     fn peek(&self) -> Token {
-        self.tokens
-            .get(self.pos)
-            .cloned()
-            .unwrap_or(Token::EOF)
+        self.tokens.get(self.pos).cloned().unwrap_or(Token::EOF)
     }
 
     fn advance(&mut self) {
@@ -856,10 +900,7 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(self.err_syntax(format!(
-                "expected {:?}, got {:?}",
-                expected, actual
-            )))
+            Err(self.err_syntax(format!("expected {:?}, got {:?}", expected, actual)))
         }
     }
 
@@ -900,6 +941,10 @@ impl Parser {
 
     fn err_syntax(&self, msg: String) -> SQLError {
         let (start, end) = self.positions.get(self.pos).copied().unwrap_or((0, 0));
-        SQLError::Syntax { message: msg, start, end }
+        SQLError::Syntax {
+            message: msg,
+            start,
+            end,
+        }
     }
 }

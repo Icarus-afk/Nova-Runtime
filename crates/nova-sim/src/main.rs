@@ -1,17 +1,19 @@
 mod engine;
 mod subsys;
 
+use crossterm::ExecutableCommand;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use engine::*;
-use subsys::*;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
-use ratatui::layout::{Layout, Direction, Constraint, Rect};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::ExecutableCommand;
 use std::io::stdout;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use subsys::*;
 
 fn level_style(level: &LogLevel) -> Style {
     match level {
@@ -58,16 +60,28 @@ fn render_header(frame: &mut Frame, area: Rect, eng: &SimEngine) {
         _ => " RUNNING ",
     };
     let state_style = match eng.state {
-        SimStateFlag::Paused | SimStateFlag::Maintenance => Style::default().fg(Color::Yellow).bg(Color::Blue),
+        SimStateFlag::Paused | SimStateFlag::Maintenance => {
+            Style::default().fg(Color::Yellow).bg(Color::Blue)
+        }
         _ => Style::default().fg(Color::Green).bg(Color::Black),
     };
 
     let text = Line::from(vec![
-        Span::styled(" Nova Runtime ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Nova Runtime ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(state_label, state_style),
-        Span::raw(format!(" Up:{uptime} Load:{load}% CPU:{cpu}% Mem:{mem}MB Req:{}", eng.metrics.requests_total.load(Ordering::Relaxed))),
+        Span::raw(format!(
+            " Up:{uptime} Load:{load}% CPU:{cpu}% Mem:{mem}MB Req:{}",
+            eng.metrics.requests_total.load(Ordering::Relaxed)
+        )),
     ]);
-    let block = Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray));
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(Color::DarkGray));
     let p = Paragraph::new(text).block(block).alignment(Alignment::Left);
     frame.render_widget(p, area);
 }
@@ -82,38 +96,47 @@ fn render_logs(frame: &mut Frame, area: Rect, eng: &SimEngine) {
         .title(" Logs ")
         .title_alignment(Alignment::Left);
 
-    let lines: Vec<Line> = eng.logs.iter().rev().take(max_rows).map(|entry| {
-        let ts = entry.timestamp.format("%H:%M:%S%.3f").to_string();
-        let lvl = level_label(&entry.level);
-        let sub = format!("[{}]", entry.subsystem);
-        let prefix = format!("{} {} {} ", ts, lvl, sub);
-        let prefix_len = prefix.len();
+    let lines: Vec<Line> = eng
+        .logs
+        .iter()
+        .rev()
+        .take(max_rows)
+        .map(|entry| {
+            let ts = entry.timestamp.format("%H:%M:%S%.3f").to_string();
+            let lvl = level_label(&entry.level);
+            let sub = format!("[{}]", entry.subsystem);
+            let prefix = format!("{} {} {} ", ts, lvl, sub);
+            let prefix_len = prefix.len();
 
-        let msg_text = &entry.message;
-        let suffix = match (&entry.request_id, entry.duration_ms) {
-            (Some(id), Some(d)) => format!(" ({id}) [{}ms]", d),
-            (Some(id), None) => format!(" ({id})"),
-            (None, Some(d)) => format!(" [{}ms]", d),
-            (None, None) => String::new(),
-        };
-        let msg_max = inner_w.saturating_sub(prefix_len);
-        let msg_trunc = truncate(msg_text, msg_max);
+            let msg_text = &entry.message;
+            let suffix = match (&entry.request_id, entry.duration_ms) {
+                (Some(id), Some(d)) => format!(" ({id}) [{}ms]", d),
+                (Some(id), None) => format!(" ({id})"),
+                (None, Some(d)) => format!(" [{}ms]", d),
+                (None, None) => String::new(),
+            };
+            let msg_max = inner_w.saturating_sub(prefix_len);
+            let msg_trunc = truncate(msg_text, msg_max);
 
-        Line::from(vec![
-            Span::styled(ts, Style::default().fg(Color::DarkGray)),
-            Span::raw(" "),
-            Span::styled(lvl, level_style(&entry.level)),
-            Span::raw(" "),
-            Span::styled(sub, Style::default().fg(Color::Rgb(120, 180, 240))),
-            Span::raw(" "),
-            Span::styled(msg_trunc, Style::default().fg(match entry.level {
-                LogLevel::Error => Color::Red,
-                LogLevel::Warn => Color::Yellow,
-                _ => Color::White,
-            })),
-            Span::styled(suffix, Style::default().fg(Color::DarkGray)),
-        ])
-    }).collect();
+            Line::from(vec![
+                Span::styled(ts, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(lvl, level_style(&entry.level)),
+                Span::raw(" "),
+                Span::styled(sub, Style::default().fg(Color::Rgb(120, 180, 240))),
+                Span::raw(" "),
+                Span::styled(
+                    msg_trunc,
+                    Style::default().fg(match entry.level {
+                        LogLevel::Error => Color::Red,
+                        LogLevel::Warn => Color::Yellow,
+                        _ => Color::White,
+                    }),
+                ),
+                Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
 
     let p = Paragraph::new(lines).block(block);
     frame.render_widget(p, area);
@@ -164,7 +187,10 @@ fn render_metrics(frame: &mut Frame, area: Rect, eng: &SimEngine) {
         format!("CPU: {cpu}%  Mem: {mu}/{mt}MB"),
     ];
 
-    let lines: Vec<Line> = items.into_iter().map(|l| Line::from(Span::raw(truncate(&l, inner_w)))).collect();
+    let lines: Vec<Line> = items
+        .into_iter()
+        .map(|l| Line::from(Span::raw(truncate(&l, inner_w))))
+        .collect();
     let p = Paragraph::new(lines).block(block);
     frame.render_widget(p, area);
 }
@@ -177,13 +203,23 @@ fn render_status_bar(frame: &mut Frame, area: Rect, eng: &SimEngine) {
     let speed = eng.clock.speed();
 
     let mut left = String::from(" Nova-Sim ");
-    if paused { left.push_str(" ⏸ PAUSED "); }
-    if maint { left.push_str(" 🛠 MAINT "); }
-    if fail { left.push_str(" ⚠ FAILURE "); }
-    if verbose { left.push_str(" VERBOSE "); }
+    if paused {
+        left.push_str(" ⏸ PAUSED ");
+    }
+    if maint {
+        left.push_str(" 🛠 MAINT ");
+    }
+    if fail {
+        left.push_str(" ⚠ FAILURE ");
+    }
+    if verbose {
+        left.push_str(" VERBOSE ");
+    }
     let _right = format!(" Speed: {speed:.1}x ");
 
-    let block = Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray));
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -192,9 +228,15 @@ fn render_status_bar(frame: &mut Frame, area: Rect, eng: &SimEngine) {
 
 fn render_controls_hint(frame: &mut Frame, area: Rect) {
     let text = "[Space] Pause  [+/-] Load  [s] Cycle speed  [/] Slower  [*] Faster  [f] Failure  [m] Maint  [v] Verbose  [c] Clear  [q] Quit";
-    let block = Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray));
-    let p = Paragraph::new(Line::from(Span::styled(text, Style::default().fg(Color::Cyan))))
-        .block(block).alignment(Alignment::Center);
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let p = Paragraph::new(Line::from(Span::styled(
+        text,
+        Style::default().fg(Color::Cyan),
+    )))
+    .block(block)
+    .alignment(Alignment::Center);
     frame.render_widget(p, area);
 }
 
@@ -212,14 +254,20 @@ fn run_headless(mut eng: SimEngine, ticks: u64, output: &str) -> anyhow::Result<
     let h2 = m.http_2xx.load(Ordering::Relaxed);
     let h4 = m.http_4xx.load(Ordering::Relaxed);
     let h5 = m.http_5xx.load(Ordering::Relaxed);
-    let logs: Vec<serde_json::Value> = eng.logs.iter().map(|e| serde_json::json!({
-        "ts": e.timestamp.to_rfc3339(),
-        "level": format!("{:?}", e.level),
-        "subsystem": e.subsystem,
-        "message": e.message,
-        "request_id": e.request_id,
-        "duration_ms": e.duration_ms,
-    })).collect();
+    let logs: Vec<serde_json::Value> = eng
+        .logs
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "ts": e.timestamp.to_rfc3339(),
+                "level": format!("{:?}", e.level),
+                "subsystem": e.subsystem,
+                "message": e.message,
+                "request_id": e.request_id,
+                "duration_ms": e.duration_ms,
+            })
+        })
+        .collect();
 
     let result = serde_json::json!({
         "summary": {
@@ -258,16 +306,47 @@ fn run_headless(mut eng: SimEngine, ticks: u64, output: &str) -> anyhow::Result<
     std::fs::write(output, &json)?;
 
     println!("═══ Nova Sim — Headless Results ═══");
-    println!("  Duration:  {wall_secs:.1}s wall  ({} virtual)", m.uptime_secs.load(Ordering::Relaxed));
+    println!(
+        "  Duration:  {wall_secs:.1}s wall  ({} virtual)",
+        m.uptime_secs.load(Ordering::Relaxed)
+    );
     println!("  Ticks:     {ticks}");
-    println!("  Requests:  {rps} total  ({:.1}/s)", rps as f64 / wall_secs);
+    println!(
+        "  Requests:  {rps} total  ({:.1}/s)",
+        rps as f64 / wall_secs
+    );
     println!("  HTTP 2xx:  {h2}  4xx: {h4}  5xx: {h5}");
-    println!("  Success:   {:.1}%", if rps > 0 { h2 as f64 / rps as f64 * 100.0 } else { 0.0 });
-    println!("  Cache:     {} hits / {} misses", m.cache_hits.load(Ordering::Relaxed), m.cache_misses.load(Ordering::Relaxed));
-    println!("  Auth:      {} ok / {} fail", m.auth_success.load(Ordering::Relaxed), m.auth_failure.load(Ordering::Relaxed));
-    println!("  Queue:     {} pub / {} con", m.queue_published.load(Ordering::Relaxed), m.queue_consumed.load(Ordering::Relaxed));
-    println!("  Scheduler: {} fired", m.scheduler_jobs_fired.load(Ordering::Relaxed));
-    println!("  Logs:      {} entries written to {output}", eng.logs.len());
+    println!(
+        "  Success:   {:.1}%",
+        if rps > 0 {
+            h2 as f64 / rps as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "  Cache:     {} hits / {} misses",
+        m.cache_hits.load(Ordering::Relaxed),
+        m.cache_misses.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Auth:      {} ok / {} fail",
+        m.auth_success.load(Ordering::Relaxed),
+        m.auth_failure.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Queue:     {} pub / {} con",
+        m.queue_published.load(Ordering::Relaxed),
+        m.queue_consumed.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Scheduler: {} fired",
+        m.scheduler_jobs_fired.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Logs:      {} entries written to {output}",
+        eng.logs.len()
+    );
     println!("═══════════════════════════════════");
     Ok(())
 }
@@ -284,8 +363,14 @@ fn main() -> anyhow::Result<()> {
         while i < args.len() {
             match args[i].as_str() {
                 "--headless" => headless = true,
-                "--ticks" if i + 1 < args.len() => { i += 1; ticks = args[i].parse().unwrap_or(100); }
-                "--output" if i + 1 < args.len() => { i += 1; output = args[i].clone(); }
+                "--ticks" if i + 1 < args.len() => {
+                    i += 1;
+                    ticks = args[i].parse().unwrap_or(100);
+                }
+                "--output" if i + 1 < args.len() => {
+                    i += 1;
+                    output = args[i].clone();
+                }
                 a if !a.starts_with("--") => api_target = a.to_string(),
                 _ => {}
             }
@@ -308,9 +393,21 @@ fn main() -> anyhow::Result<()> {
     eng.register(Box::new(StorageSubsystem::new()));
     eng.register(Box::new(EventBusSubsystem::new()));
 
-    eng.log(LogLevel::Info, "system", "Nova Runtime Simulation v0.1.0 starting...".into());
-    eng.log(LogLevel::Info, "system", format!("Seed: {} | Tick rate: {}ms", 42, eng.config.tick_rate_ms));
-    eng.log(LogLevel::Info, "system", format!("Target API: {api_target}").into());
+    eng.log(
+        LogLevel::Info,
+        "system",
+        "Nova Runtime Simulation v0.1.0 starting...".into(),
+    );
+    eng.log(
+        LogLevel::Info,
+        "system",
+        format!("Seed: {} | Tick rate: {}ms", 42, eng.config.tick_rate_ms),
+    );
+    eng.log(
+        LogLevel::Info,
+        "system",
+        format!("Target API: {api_target}").into(),
+    );
     eng.log(LogLevel::Info, "system", "Registered 11 subsystems".into());
 
     if headless {
@@ -322,7 +419,11 @@ fn main() -> anyhow::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    eng.log(LogLevel::Info, "system", "Initialization complete — entering run loop".into());
+    eng.log(
+        LogLevel::Info,
+        "system",
+        "Initialization complete — entering run loop".into(),
+    );
 
     let mut last_render = Instant::now();
     let tick_rate = Duration::from_millis(eng.config.tick_rate_ms);
@@ -360,75 +461,120 @@ fn main() -> anyhow::Result<()> {
 
         if event::poll(Duration::from_millis(10))? {
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char(' ') => {
-                            eng.state = match eng.state {
-                                SimStateFlag::Running => {
-                                    eng.log(LogLevel::Info, "system", "Simulation paused".into());
-                                    SimStateFlag::Paused
-                                }
-                                _ => {
-                                    eng.log(LogLevel::Info, "system", "Simulation resumed".into());
-                                    SimStateFlag::Running
-                                }
-                            };
-                        }
-                        KeyCode::Char('+') | KeyCode::Char('=') => {
-                            eng.load = (eng.load + 10).min(100);
-                            eng.log(LogLevel::Info, "system", format!("Load increased to {}%", eng.load));
-                        }
-                        KeyCode::Char('-') | KeyCode::Char('_') => {
-                            eng.load = eng.load.saturating_sub(10).max(5);
-                            eng.log(LogLevel::Info, "system", format!("Load decreased to {}%", eng.load));
-                        }
-                        KeyCode::Char('s') => {
-                            eng.clock.cycle_speed();
-                            eng.log(LogLevel::Info, "system", format!("Speed: {:.2}x", eng.clock.speed()));
-                        }
-                        KeyCode::Char('/') => {
-                            let s = (eng.clock.speed() * 0.5).max(0.125);
-                            eng.clock.set_speed(s);
-                            eng.log(LogLevel::Info, "system", format!("Speed: {:.2}x", eng.clock.speed()));
-                        }
-                        KeyCode::Char('*') => {
-                            let s = (eng.clock.speed() * 2.0).min(8.0);
-                            eng.clock.set_speed(s);
-                            eng.log(LogLevel::Info, "system", format!("Speed: {:.2}x", eng.clock.speed()));
-                        }
-                        KeyCode::Char('f') => {
-                            if eng.failure_injected { eng.clear_failure(); } else { eng.inject_failure(); }
-                        }
-                        KeyCode::Char('m') => {
-                            eng.state = match eng.state {
-                                SimStateFlag::Maintenance => {
-                                    eng.log(LogLevel::Info, "system", "Maintenance mode deactivated".into());
-                                    SimStateFlag::Running
-                                }
-                                _ => {
-                                    eng.log(LogLevel::Info, "system", "Maintenance mode activated".into());
-                                    SimStateFlag::Maintenance
-                                }
-                            };
-                        }
-                        KeyCode::Char('v') => {
-                            eng.verbose = !eng.verbose;
-                            eng.log(LogLevel::Info, "system", if eng.verbose { "Verbose logging enabled" } else { "Verbose logging disabled" }.into());
-                        }
-                        KeyCode::Char('c') => {
-                            eng.logs = LogBuffer::new(eng.config.log_capacity);
-                        }
-                        _ => {}
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char(' ') => {
+                        eng.state = match eng.state {
+                            SimStateFlag::Running => {
+                                eng.log(LogLevel::Info, "system", "Simulation paused".into());
+                                SimStateFlag::Paused
+                            }
+                            _ => {
+                                eng.log(LogLevel::Info, "system", "Simulation resumed".into());
+                                SimStateFlag::Running
+                            }
+                        };
                     }
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        eng.load = (eng.load + 10).min(100);
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            format!("Load increased to {}%", eng.load),
+                        );
+                    }
+                    KeyCode::Char('-') | KeyCode::Char('_') => {
+                        eng.load = eng.load.saturating_sub(10).max(5);
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            format!("Load decreased to {}%", eng.load),
+                        );
+                    }
+                    KeyCode::Char('s') => {
+                        eng.clock.cycle_speed();
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            format!("Speed: {:.2}x", eng.clock.speed()),
+                        );
+                    }
+                    KeyCode::Char('/') => {
+                        let s = (eng.clock.speed() * 0.5).max(0.125);
+                        eng.clock.set_speed(s);
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            format!("Speed: {:.2}x", eng.clock.speed()),
+                        );
+                    }
+                    KeyCode::Char('*') => {
+                        let s = (eng.clock.speed() * 2.0).min(8.0);
+                        eng.clock.set_speed(s);
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            format!("Speed: {:.2}x", eng.clock.speed()),
+                        );
+                    }
+                    KeyCode::Char('f') => {
+                        if eng.failure_injected {
+                            eng.clear_failure();
+                        } else {
+                            eng.inject_failure();
+                        }
+                    }
+                    KeyCode::Char('m') => {
+                        eng.state = match eng.state {
+                            SimStateFlag::Maintenance => {
+                                eng.log(
+                                    LogLevel::Info,
+                                    "system",
+                                    "Maintenance mode deactivated".into(),
+                                );
+                                SimStateFlag::Running
+                            }
+                            _ => {
+                                eng.log(
+                                    LogLevel::Info,
+                                    "system",
+                                    "Maintenance mode activated".into(),
+                                );
+                                SimStateFlag::Maintenance
+                            }
+                        };
+                    }
+                    KeyCode::Char('v') => {
+                        eng.verbose = !eng.verbose;
+                        eng.log(
+                            LogLevel::Info,
+                            "system",
+                            if eng.verbose {
+                                "Verbose logging enabled"
+                            } else {
+                                "Verbose logging disabled"
+                            }
+                            .into(),
+                        );
+                    }
+                    KeyCode::Char('c') => {
+                        eng.logs = LogBuffer::new(eng.config.log_capacity);
+                    }
+                    _ => {}
+                },
+                Event::Resize(_, _) => {
+                    terminal.autoresize()?;
                 }
-                Event::Resize(_, _) => { terminal.autoresize()?; }
                 _ => {}
             }
         }
     }
 
-    eng.log(LogLevel::Info, "system", "Shutting down gracefully...".into());
+    eng.log(
+        LogLevel::Info,
+        "system",
+        "Shutting down gracefully...".into(),
+    );
     let _ = terminal.draw(|f| {
         let size = f.area();
         render_header(f, size, &eng);
@@ -437,8 +583,17 @@ fn main() -> anyhow::Result<()> {
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
     println!("Nova Runtime Simulation stopped.");
-    println!("  Simulated uptime: {}s", eng.metrics.uptime_secs.load(Ordering::Relaxed));
-    println!("  Requests handled: {}", eng.metrics.requests_total.load(Ordering::Relaxed));
-    println!("  Events published: {}", eng.metrics.events_published.load(Ordering::Relaxed));
+    println!(
+        "  Simulated uptime: {}s",
+        eng.metrics.uptime_secs.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Requests handled: {}",
+        eng.metrics.requests_total.load(Ordering::Relaxed)
+    );
+    println!(
+        "  Events published: {}",
+        eng.metrics.events_published.load(Ordering::Relaxed)
+    );
     Ok(())
 }

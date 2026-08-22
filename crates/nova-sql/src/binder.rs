@@ -32,11 +32,7 @@ impl Binder {
         Binder
     }
 
-    pub fn bind(
-        &self,
-        stmt: &SelectStatement,
-        schema: &Schema,
-    ) -> Result<BoundSelect> {
+    pub fn bind(&self, stmt: &SelectStatement, schema: &Schema) -> Result<BoundSelect> {
         let mut columns = Vec::new();
         let mut select_list = Vec::new();
 

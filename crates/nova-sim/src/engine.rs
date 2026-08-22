@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use nova_event::EventBus;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
-use std::sync::atomic::{AtomicU64, Ordering};
+use rand::rngs::StdRng;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 pub struct SimClock {
     started: Instant,
@@ -15,17 +15,27 @@ pub struct SimClock {
 
 impl SimClock {
     pub fn new() -> Self {
-        Self { started: Instant::now(), virtual_elapsed: Duration::ZERO, speed: 1.0 }
+        Self {
+            started: Instant::now(),
+            virtual_elapsed: Duration::ZERO,
+            speed: 1.0,
+        }
     }
     pub fn tick(&mut self, real_dt: Duration) {
         self.virtual_elapsed += real_dt.mul_f64(self.speed);
     }
-    pub fn elapsed(&self) -> Duration { self.virtual_elapsed }
+    pub fn elapsed(&self) -> Duration {
+        self.virtual_elapsed
+    }
     pub fn datetime(&self) -> DateTime<Utc> {
         Utc::now() - self.started.elapsed() + self.virtual_elapsed
     }
-    pub fn speed(&self) -> f64 { self.speed }
-    pub fn set_speed(&mut self, s: f64) { self.speed = s; }
+    pub fn speed(&self) -> f64 {
+        self.speed
+    }
+    pub fn set_speed(&mut self, s: f64) {
+        self.speed = s;
+    }
     pub fn cycle_speed(&mut self) {
         let next = match (self.speed * 100.0).round() as u64 {
             25 => 50,
@@ -44,7 +54,9 @@ pub struct SimRng {
 
 impl SimRng {
     pub fn new(seed: u64) -> Self {
-        Self { rng: StdRng::seed_from_u64(seed) }
+        Self {
+            rng: StdRng::seed_from_u64(seed),
+        }
     }
     pub fn f64(&mut self) -> f64 {
         rand::Rng::r#gen(&mut self.rng)
@@ -143,7 +155,12 @@ impl SimMetrics {
 }
 
 #[derive(Clone, Debug)]
-pub enum LogLevel { Debug, Info, Warn, Error }
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
 
 #[derive(Clone, Debug)]
 pub struct LogEntry {
@@ -162,7 +179,10 @@ pub struct LogBuffer {
 
 impl LogBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self { entries: Vec::with_capacity(capacity), capacity }
+        Self {
+            entries: Vec::with_capacity(capacity),
+            capacity,
+        }
     }
     pub fn push(&mut self, entry: LogEntry) {
         if self.entries.len() >= self.capacity {
@@ -173,7 +193,9 @@ impl LogBuffer {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &LogEntry> + ExactSizeIterator {
         self.entries.iter()
     }
-    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -191,7 +213,11 @@ pub struct SimConfig {
 
 impl Default for SimConfig {
     fn default() -> Self {
-        Self { seed: 42, tick_rate_ms: 200, log_capacity: 500 }
+        Self {
+            seed: 42,
+            tick_rate_ms: 200,
+            log_capacity: 500,
+        }
     }
 }
 
@@ -231,7 +257,12 @@ pub struct SimEngine {
 
 impl SimEngine {
     pub fn new(config: SimConfig) -> Self {
-        let bus = Arc::new(EventBus::new(4, nova_event::OverflowPolicy::DropOldest, 65536, 10000));
+        let bus = Arc::new(EventBus::new(
+            4,
+            nova_event::OverflowPolicy::DropOldest,
+            65536,
+            10000,
+        ));
         Self {
             clock: SimClock::new(),
             rng: SimRng::new(config.seed),
@@ -279,14 +310,20 @@ impl SimEngine {
         self.metrics.load_level.store(self.load, Ordering::Relaxed);
         let mem_delta = self.rng.range(0, 3) as i64 - 1;
         if mem_delta >= 0 {
-            self.metrics.memory_used_mb.fetch_add(mem_delta as u64, Ordering::Relaxed);
+            self.metrics
+                .memory_used_mb
+                .fetch_add(mem_delta as u64, Ordering::Relaxed);
         } else {
-            self.metrics.memory_used_mb.fetch_sub((-mem_delta) as u64, Ordering::Relaxed);
+            self.metrics
+                .memory_used_mb
+                .fetch_sub((-mem_delta) as u64, Ordering::Relaxed);
         }
 
         let cpu_base = self.load as u32 / 2 + 10;
         let cpu_vary = self.rng.range(0, 15) as u32;
-        self.metrics.cpu_percent.store((cpu_base + cpu_vary).min(99), Ordering::Relaxed);
+        self.metrics
+            .cpu_percent
+            .store((cpu_base + cpu_vary).min(99), Ordering::Relaxed);
 
         let rng = &mut self.rng;
         let logs = &mut self.logs;
@@ -317,7 +354,14 @@ impl SimEngine {
             duration_ms: None,
         });
     }
-    pub fn log_detail(&mut self, level: LogLevel, subsystem: &str, message: String, request_id: Option<String>, duration_ms: Option<u64>) {
+    pub fn log_detail(
+        &mut self,
+        level: LogLevel,
+        subsystem: &str,
+        message: String,
+        request_id: Option<String>,
+        duration_ms: Option<u64>,
+    ) {
         self.logs.push(LogEntry {
             timestamp: self.clock.datetime(),
             level,
@@ -330,10 +374,18 @@ impl SimEngine {
 
     pub fn inject_failure(&mut self) {
         self.failure_injected = true;
-        self.log(LogLevel::Warn, "system", "Failure injection activated — subsystems will experience errors".into());
+        self.log(
+            LogLevel::Warn,
+            "system",
+            "Failure injection activated — subsystems will experience errors".into(),
+        );
     }
     pub fn clear_failure(&mut self) {
         self.failure_injected = false;
-        self.log(LogLevel::Info, "system", "Failure injection deactivated".into());
+        self.log(
+            LogLevel::Info,
+            "system",
+            "Failure injection deactivated".into(),
+        );
     }
 }

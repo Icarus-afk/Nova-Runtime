@@ -10,9 +10,15 @@ pub struct SQLConfig {
     pub default_limit: usize,
 }
 
-fn default_max_batch_size() -> usize { 1024 }
-fn default_max_columns() -> usize { 256 }
-fn default_sql_limit() -> usize { 1000 }
+fn default_max_batch_size() -> usize {
+    1024
+}
+fn default_max_columns() -> usize {
+    256
+}
+fn default_sql_limit() -> usize {
+    1000
+}
 
 impl Default for SQLConfig {
     fn default() -> Self {

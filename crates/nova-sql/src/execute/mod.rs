@@ -2,23 +2,31 @@ pub mod executor;
 pub mod iterators;
 pub mod table_store;
 
-use crate::ast::{
-    BinaryOperator, Expr, LiteralValue, UnaryOperator,
-};
+use crate::ast::{BinaryOperator, Expr, LiteralValue, UnaryOperator};
 
 pub fn contains_aggregate(expr: &Expr) -> bool {
     match expr {
         Expr::Function { name, .. } => {
-            matches!(name.to_lowercase().as_str(), "count" | "sum" | "avg" | "min" | "max")
+            matches!(
+                name.to_lowercase().as_str(),
+                "count" | "sum" | "avg" | "min" | "max"
+            )
         }
         Expr::BinaryOp { left, right, .. } => contains_aggregate(left) || contains_aggregate(right),
         Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
         Expr::Case { whens, else_val } => {
-            whens.iter().any(|(c, r)| contains_aggregate(c) || contains_aggregate(r))
-                || else_val.as_ref().map(|e| contains_aggregate(e)).unwrap_or(false)
+            whens
+                .iter()
+                .any(|(c, r)| contains_aggregate(c) || contains_aggregate(r))
+                || else_val
+                    .as_ref()
+                    .map(|e| contains_aggregate(e))
+                    .unwrap_or(false)
         }
         Expr::Cast { expr, .. } => contains_aggregate(expr),
-        Expr::In { expr, list } => contains_aggregate(expr) || list.iter().any(|e| contains_aggregate(e)),
+        Expr::In { expr, list } => {
+            contains_aggregate(expr) || list.iter().any(|e| contains_aggregate(e))
+        }
         Expr::Between { expr, low, high } => {
             contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high)
         }
@@ -56,10 +64,8 @@ pub fn evaluate_expr(
             eval_unary_op(*op, &val)
         }
         Expr::Function { name, args } => {
-            let arg_vals: Result<Vec<LiteralValue>> = args
-                .iter()
-                .map(|a| evaluate_expr(a, row, schema))
-                .collect();
+            let arg_vals: Result<Vec<LiteralValue>> =
+                args.iter().map(|a| evaluate_expr(a, row, schema)).collect();
             eval_function(name, &arg_vals?)
         }
         Expr::IsNull(expr) => {
@@ -87,8 +93,7 @@ pub fn evaluate_expr(
             let ge = eval_binary_op(BinaryOperator::GtEq, &val, &low_val)?;
             let le = eval_binary_op(BinaryOperator::LtEq, &val, &high_val)?;
             Ok(LiteralValue::Boolean(
-                ge == LiteralValue::Boolean(true)
-                    && le == LiteralValue::Boolean(true),
+                ge == LiteralValue::Boolean(true) && le == LiteralValue::Boolean(true),
             ))
         }
         Expr::Like { expr, pattern } => {
@@ -148,10 +153,7 @@ pub fn eval_binary_op(
             }
             Ok(LiteralValue::Boolean(left != right))
         }
-        BinaryOperator::Lt
-        | BinaryOperator::LtEq
-        | BinaryOperator::Gt
-        | BinaryOperator::GtEq => {
+        BinaryOperator::Lt | BinaryOperator::LtEq | BinaryOperator::Gt | BinaryOperator::GtEq => {
             if *left == LiteralValue::Null || *right == LiteralValue::Null {
                 return Ok(LiteralValue::Null);
             }
@@ -182,7 +184,7 @@ pub fn eval_binary_op(
                     return Err(SQLError::TypeMismatch {
                         expected: "comparable types".to_string(),
                         actual: format!("{:?} vs {:?}", left, right),
-                    })
+                    });
                 }
             };
             Ok(LiteralValue::Boolean(result))
@@ -193,9 +195,7 @@ pub fn eval_binary_op(
                 (LiteralValue::Integer(a), LiteralValue::Integer(b)) => {
                     Ok(LiteralValue::Integer(a + b))
                 }
-                (LiteralValue::Float(a), LiteralValue::Float(b)) => {
-                    Ok(LiteralValue::Float(a + b))
-                }
+                (LiteralValue::Float(a), LiteralValue::Float(b)) => Ok(LiteralValue::Float(a + b)),
                 _ => Ok(LiteralValue::Null),
             }
         }
@@ -205,9 +205,7 @@ pub fn eval_binary_op(
                 (LiteralValue::Integer(a), LiteralValue::Integer(b)) => {
                     Ok(LiteralValue::Integer(a - b))
                 }
-                (LiteralValue::Float(a), LiteralValue::Float(b)) => {
-                    Ok(LiteralValue::Float(a - b))
-                }
+                (LiteralValue::Float(a), LiteralValue::Float(b)) => Ok(LiteralValue::Float(a - b)),
                 _ => Ok(LiteralValue::Null),
             }
         }
@@ -217,9 +215,7 @@ pub fn eval_binary_op(
                 (LiteralValue::Integer(a), LiteralValue::Integer(b)) => {
                     Ok(LiteralValue::Integer(a * b))
                 }
-                (LiteralValue::Float(a), LiteralValue::Float(b)) => {
-                    Ok(LiteralValue::Float(a * b))
-                }
+                (LiteralValue::Float(a), LiteralValue::Float(b)) => Ok(LiteralValue::Float(a * b)),
                 _ => Ok(LiteralValue::Null),
             }
         }
@@ -287,7 +283,10 @@ fn eval_function(name: &str, args: &[LiteralValue]) -> Result<LiteralValue> {
     let lower = name.to_lowercase();
     match lower.as_str() {
         "count" => {
-            let non_null = args.iter().filter(|a| !matches!(a, LiteralValue::Null)).count();
+            let non_null = args
+                .iter()
+                .filter(|a| !matches!(a, LiteralValue::Null))
+                .count();
             Ok(LiteralValue::Integer(non_null as i64))
         }
         "sum" => {
@@ -316,8 +315,10 @@ fn eval_function(name: &str, args: &[LiteralValue]) -> Result<LiteralValue> {
             Ok(LiteralValue::Float(sum / nums.len() as f64))
         }
         "min" => {
-            let nums: Vec<&LiteralValue> =
-                args.iter().filter(|a| !matches!(a, LiteralValue::Null)).collect();
+            let nums: Vec<&LiteralValue> = args
+                .iter()
+                .filter(|a| !matches!(a, LiteralValue::Null))
+                .collect();
             if nums.is_empty() {
                 return Ok(LiteralValue::Null);
             }
@@ -331,8 +332,10 @@ fn eval_function(name: &str, args: &[LiteralValue]) -> Result<LiteralValue> {
             Ok(best)
         }
         "max" => {
-            let nums: Vec<&LiteralValue> =
-                args.iter().filter(|a| !matches!(a, LiteralValue::Null)).collect();
+            let nums: Vec<&LiteralValue> = args
+                .iter()
+                .filter(|a| !matches!(a, LiteralValue::Null))
+                .collect();
             if nums.is_empty() {
                 return Ok(LiteralValue::Null);
             }
@@ -349,17 +352,29 @@ fn eval_function(name: &str, args: &[LiteralValue]) -> Result<LiteralValue> {
     }
 }
 
-fn eval_like(val: &LiteralValue, pattern: &LiteralValue, case_insensitive: bool) -> Result<LiteralValue> {
+fn eval_like(
+    val: &LiteralValue,
+    pattern: &LiteralValue,
+    case_insensitive: bool,
+) -> Result<LiteralValue> {
     let s = match val {
         LiteralValue::String(s) => {
-            if case_insensitive { s.to_lowercase() } else { s.clone() }
+            if case_insensitive {
+                s.to_lowercase()
+            } else {
+                s.clone()
+            }
         }
         LiteralValue::Null => return Ok(LiteralValue::Null),
         _ => return Ok(LiteralValue::Boolean(false)),
     };
     let pat = match pattern {
         LiteralValue::String(p) => {
-            if case_insensitive { p.to_lowercase() } else { p.clone() }
+            if case_insensitive {
+                p.to_lowercase()
+            } else {
+                p.clone()
+            }
         }
         LiteralValue::Null => return Ok(LiteralValue::Null),
         _ => return Ok(LiteralValue::Boolean(false)),
@@ -377,24 +392,20 @@ fn pat_to_regex(pat: &str) -> String {
         match c {
             '%' => result.push_str(".*"),
             '_' => result.push('.'),
-            '\\' => {
-                match chars.next() {
-                    Some(next) => {
-                        match next {
-                            '%' => result.push('%'),
-                            '_' => result.push('_'),
-                            '\\' => result.push_str("\\\\"),
-                            c => {
-                                result.push_str("\\\\");
-                                result.push(c);
-                            }
-                        }
-                    }
-                    None => {
+            '\\' => match chars.next() {
+                Some(next) => match next {
+                    '%' => result.push('%'),
+                    '_' => result.push('_'),
+                    '\\' => result.push_str("\\\\"),
+                    c => {
                         result.push_str("\\\\");
+                        result.push(c);
                     }
+                },
+                None => {
+                    result.push_str("\\\\");
                 }
-            }
+            },
             // Escape regex special chars
             '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
                 result.push('\\');
@@ -418,10 +429,7 @@ fn coerce_to_bool(val: &LiteralValue) -> Result<bool> {
     }
 }
 
-fn coerce_pair(
-    left: &LiteralValue,
-    right: &LiteralValue,
-) -> Result<(LiteralValue, LiteralValue)> {
+fn coerce_pair(left: &LiteralValue, right: &LiteralValue) -> Result<(LiteralValue, LiteralValue)> {
     use LiteralValue::*;
     match (left, right) {
         (Integer(_), Integer(_)) => Ok((left.clone(), right.clone())),

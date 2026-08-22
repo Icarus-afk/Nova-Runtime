@@ -10,9 +10,9 @@ use crate::ast::*;
 use crate::binder::Binder;
 use crate::config::SQLConfig;
 use crate::error::{Result, SQLError};
+use crate::execute::evaluate_expr;
 use crate::execute::executor::build_executor;
 use crate::execute::table_store::{Row, TableStore};
-use crate::execute::evaluate_expr;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::plan::planner::LogicalPlanner;
@@ -153,35 +153,61 @@ impl SQLEngine {
     }
 
     fn persist_table(&self, name: &str) -> Result<()> {
-        let Some(ref storage) = self.storage else { return Ok(()) };
-        let schema = self.tables.get_schema(name).map_err(|e| SQLError::syntax(e.to_string()))?;
-        let rows = self.tables.scan_rows(name).map_err(|e| SQLError::syntax(e.to_string()))?;
+        let Some(ref storage) = self.storage else {
+            return Ok(());
+        };
+        let schema = self
+            .tables
+            .get_schema(name)
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
+        let rows = self
+            .tables
+            .scan_rows(name)
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         let persisted = PersistedTable { schema, rows };
         let json = serde_json::to_vec(&persisted).map_err(|e| SQLError::syntax(e.to_string()))?;
-        storage.set(&Self::table_key(name), Value::new(json)).map_err(|e| SQLError::syntax(e.to_string()))?;
+        storage
+            .set(&Self::table_key(name), Value::new(json))
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         Ok(())
     }
 
     fn persist_table_names(&self) -> Result<()> {
-        let Some(ref storage) = self.storage else { return Ok(()) };
+        let Some(ref storage) = self.storage else {
+            return Ok(());
+        };
         let names = self.tables.table_names();
         let json = serde_json::to_vec(&names).map_err(|e| SQLError::syntax(e.to_string()))?;
-        storage.set(&Self::table_names_key(), Value::new(json)).map_err(|e| SQLError::syntax(e.to_string()))?;
+        storage
+            .set(&Self::table_names_key(), Value::new(json))
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         Ok(())
     }
 
     fn load_tables(&self) -> Result<()> {
-        let Some(ref storage) = self.storage else { return Ok(()) };
-        let raw = storage.get(&Self::table_names_key()).map_err(|e| SQLError::syntax(e.to_string()))?;
+        let Some(ref storage) = self.storage else {
+            return Ok(());
+        };
+        let raw = storage
+            .get(&Self::table_names_key())
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         let Some(val) = raw else { return Ok(()) };
-        let names: Vec<String> = serde_json::from_slice(val.as_bytes()).map_err(|e| SQLError::syntax(e.to_string()))?;
+        let names: Vec<String> =
+            serde_json::from_slice(val.as_bytes()).map_err(|e| SQLError::syntax(e.to_string()))?;
         for name in &names {
-            let raw = storage.get(&Self::table_key(name)).map_err(|e| SQLError::syntax(e.to_string()))?;
+            let raw = storage
+                .get(&Self::table_key(name))
+                .map_err(|e| SQLError::syntax(e.to_string()))?;
             if let Some(val) = raw {
-                let pt: PersistedTable = serde_json::from_slice(val.as_bytes()).map_err(|e| SQLError::syntax(e.to_string()))?;
-                self.tables.create_table(name, pt.schema).map_err(|e| SQLError::syntax(e.to_string()))?;
+                let pt: PersistedTable = serde_json::from_slice(val.as_bytes())
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+                self.tables
+                    .create_table(name, pt.schema)
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
                 for row in pt.rows {
-                    self.tables.insert_row(name, row).map_err(|e| SQLError::syntax(e.to_string()))?;
+                    self.tables
+                        .insert_row(name, row)
+                        .map_err(|e| SQLError::syntax(e.to_string()))?;
                 }
             }
         }
@@ -231,9 +257,7 @@ impl SQLEngine {
     pub fn execute_query(&self, sql: &str) -> Result<Vec<RecordBatch>> {
         match self.execute(sql)? {
             SQLResult::Query { batches, .. } => Ok(batches),
-            SQLResult::Exec { .. } => {
-                Err(SQLError::syntax("query did not return results"))
-            }
+            SQLResult::Exec { .. } => Err(SQLError::syntax("query did not return results")),
         }
     }
 
@@ -269,8 +293,10 @@ impl SQLEngine {
             .collect();
         let schema = Schema::new(columns);
         self.tables.create_table(&stmt.table.name, schema)?;
-        self.persist_table(&stmt.table.name).map_err(|e| SQLError::syntax(e.to_string()))?;
-        self.persist_table_names().map_err(|e| SQLError::syntax(e.to_string()))?;
+        self.persist_table(&stmt.table.name)
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
+        self.persist_table_names()
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
             rows_affected: 0,
@@ -278,13 +304,10 @@ impl SQLEngine {
         })
     }
 
-    fn execute_drop_table(
-        &self,
-        stmt: DropTableStatement,
-        start: &Instant,
-    ) -> Result<SQLResult> {
+    fn execute_drop_table(&self, stmt: DropTableStatement, start: &Instant) -> Result<SQLResult> {
         self.tables.drop_table(&stmt.table.name)?;
-        self.persist_table_names().map_err(|e| SQLError::syntax(e.to_string()))?;
+        self.persist_table_names()
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
             rows_affected: 0,
@@ -292,11 +315,7 @@ impl SQLEngine {
         })
     }
 
-    fn execute_insert(
-        &self,
-        stmt: InsertStatement,
-        start: &Instant,
-    ) -> Result<SQLResult> {
+    fn execute_insert(&self, stmt: InsertStatement, start: &Instant) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.table.name)?;
 
         let col_indices: Vec<usize> = if stmt.columns.is_empty() {
@@ -354,7 +373,9 @@ impl SQLEngine {
             // Enforce NOT NULL constraints
             for (col_idx, col_info) in schema.columns.iter().enumerate() {
                 let is_null = row_values[col_idx].is_none()
-                    || row_values[col_idx].as_ref().map_or(false, |v| *v == LiteralValue::Null);
+                    || row_values[col_idx]
+                        .as_ref()
+                        .map_or(false, |v| *v == LiteralValue::Null);
                 if !col_info.nullable && is_null {
                     return Err(SQLError::ConstraintViolation(format!(
                         "column '{}' cannot be null",
@@ -382,7 +403,8 @@ impl SQLEngine {
                 }
             }
 
-            self.tables.insert_row(&stmt.table.name, Row::new(row_values))?;
+            self.tables
+                .insert_row(&stmt.table.name, Row::new(row_values))?;
             rows_inserted += 1;
         }
 
@@ -396,11 +418,7 @@ impl SQLEngine {
         })
     }
 
-    fn execute_select(
-        &self,
-        mut stmt: SelectStatement,
-        start: &Instant,
-    ) -> Result<SQLResult> {
+    fn execute_select(&self, mut stmt: SelectStatement, start: &Instant) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.from.name)?;
 
         if !self.tables.table_exists(&stmt.from.name) {
@@ -411,8 +429,10 @@ impl SQLEngine {
         stmt.select_list = expand_wildcards(&stmt.select_list, &schema);
 
         // Extract column names from select list
-        let col_names: Vec<String> = stmt.select_list.iter().map(|item| {
-            match item {
+        let col_names: Vec<String> = stmt
+            .select_list
+            .iter()
+            .map(|item| match item {
                 SelectItem::Expr { expr, alias } => {
                     if let Some(a) = alias {
                         a.clone()
@@ -426,8 +446,8 @@ impl SQLEngine {
                     }
                 }
                 SelectItem::Wildcard => unreachable!("wildcards expanded"),
-            }
-        }).collect();
+            })
+            .collect();
 
         // Bind and type check
         let binder = Binder::new();
@@ -459,11 +479,7 @@ impl SQLEngine {
         })
     }
 
-    fn execute_update(
-        &self,
-        stmt: UpdateStatement,
-        start: &Instant,
-    ) -> Result<SQLResult> {
+    fn execute_update(&self, stmt: UpdateStatement, start: &Instant) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.table.name)?;
         let mut rows = self.tables.scan_rows(&stmt.table.name)?;
         let mut rows_affected = 0u64;
@@ -502,11 +518,7 @@ impl SQLEngine {
         })
     }
 
-    fn execute_delete(
-        &self,
-        stmt: DeleteStatement,
-        start: &Instant,
-    ) -> Result<SQLResult> {
+    fn execute_delete(&self, stmt: DeleteStatement, start: &Instant) -> Result<SQLResult> {
         let schema = self.tables.get_schema(&stmt.table.name)?;
         let rows = self.tables.scan_rows(&stmt.table.name)?;
         let mut rows_affected = 0u64;
@@ -612,7 +624,16 @@ fn rows_to_record_batch_with_names(rows: &[Row], column_names: Option<&[String]>
             if i >= columns.len() {
                 continue;
             }
-            let opt_val = val.clone().map(|v| if matches!(v, LiteralValue::Null) { None } else { Some(v) }).flatten();
+            let opt_val = val
+                .clone()
+                .map(|v| {
+                    if matches!(v, LiteralValue::Null) {
+                        None
+                    } else {
+                        Some(v)
+                    }
+                })
+                .flatten();
             push_value_to_column(&mut columns[i], opt_val);
         }
     }

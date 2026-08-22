@@ -10,11 +10,19 @@ pub struct RecordBatch {
 impl RecordBatch {
     pub fn new(columns: Vec<Column>, num_rows: usize) -> Self {
         let column_names: Vec<String> = (0..columns.len()).map(|i| format!("col_{}", i)).collect();
-        RecordBatch { columns, num_rows, column_names }
+        RecordBatch {
+            columns,
+            num_rows,
+            column_names,
+        }
     }
 
     pub fn with_names(columns: Vec<Column>, num_rows: usize, column_names: Vec<String>) -> Self {
-        RecordBatch { columns, num_rows, column_names }
+        RecordBatch {
+            columns,
+            num_rows,
+            column_names,
+        }
     }
 
     pub fn num_columns(&self) -> usize {
@@ -70,7 +78,10 @@ impl Column {
             Column::Integer(v) => v.get(index).map(|x| x.map(LiteralValue::Integer)).flatten(),
             Column::Float(v) => v.get(index).map(|x| x.map(LiteralValue::Float)).flatten(),
             Column::Boolean(v) => v.get(index).map(|x| x.map(LiteralValue::Boolean)).flatten(),
-            Column::String(v) => v.get(index).map(|x| x.clone().map(LiteralValue::String)).flatten(),
+            Column::String(v) => v
+                .get(index)
+                .map(|x| x.clone().map(LiteralValue::String))
+                .flatten(),
             Column::Null(_) => Some(LiteralValue::Null),
         }
     }

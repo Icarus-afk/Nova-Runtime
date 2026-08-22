@@ -8,10 +8,7 @@ use crate::execute::table_store::TableStoreRef;
 use crate::plan::logical::LogicalNode;
 use crate::schema::Schema;
 
-pub fn build_executor(
-    plan: &LogicalNode,
-    tables: TableStoreRef,
-) -> Result<Box<dyn Executor>> {
+pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<dyn Executor>> {
     match plan {
         LogicalNode::Scan {
             table_name,
@@ -27,7 +24,11 @@ pub fn build_executor(
         LogicalNode::Selection { input, predicate } => {
             let input_exec = build_executor(input, tables.clone())?;
             let schema = resolve_schema(input, tables.as_ref())?;
-            Ok(Box::new(FilterExecutor::new(input_exec, predicate.clone(), schema)))
+            Ok(Box::new(FilterExecutor::new(
+                input_exec,
+                predicate.clone(),
+                schema,
+            )))
         }
         LogicalNode::Projection { input, exprs } => {
             let input_exec = build_executor(input, tables.clone())?;
@@ -56,7 +57,11 @@ pub fn build_executor(
                 schema,
             )))
         }
-        LogicalNode::Limit { input, limit, offset } => {
+        LogicalNode::Limit {
+            input,
+            limit,
+            offset,
+        } => {
             let input_exec = build_executor(input, tables.clone())?;
             Ok(Box::new(LimitExecutor::new(input_exec, *limit, *offset)))
         }

@@ -34,10 +34,9 @@ impl LogicalPlanner {
             .into_iter()
             .map(|item| match item {
                 SelectItem::Expr { expr, alias } => (expr, alias),
-                SelectItem::Wildcard => (
-                    Expr::Literal(LiteralValue::String("*".to_string())),
-                    None,
-                ),
+                SelectItem::Wildcard => {
+                    (Expr::Literal(LiteralValue::String("*".to_string())), None)
+                }
             })
             .collect();
 

@@ -27,9 +27,7 @@ impl TypeChecker {
                 let inner = self.check_types(expr, schema)?;
                 self.check_unary_op(*op, &inner)
             }
-            Expr::Function { name, args } => {
-                self.check_function(name, args, schema)
-            }
+            Expr::Function { name, args } => self.check_function(name, args, schema),
             Expr::IsNull(_) | Expr::IsNotNull(_) => Ok(SQLType::Boolean),
             Expr::In { expr, list } => {
                 let expr_type = self.check_types(expr, schema)?;
@@ -104,12 +102,8 @@ impl TypeChecker {
             | BinaryOperator::Concat => {
                 let unified = self.unify_types(left, right)?;
                 match unified {
-                    SQLType::Null | SQLType::Boolean => {
-                        Ok(SQLType::Boolean)
-                    }
-                    SQLType::Integer | SQLType::Float => {
-                        Ok(SQLType::Boolean)
-                    }
+                    SQLType::Null | SQLType::Boolean => Ok(SQLType::Boolean),
+                    SQLType::Integer | SQLType::Float => Ok(SQLType::Boolean),
                     SQLType::Text => {
                         if op == BinaryOperator::Concat {
                             Ok(SQLType::Text)
@@ -158,20 +152,16 @@ impl TypeChecker {
         }
     }
 
-    fn check_function(
-        &self,
-        name: &str,
-        args: &[Expr],
-        schema: &Schema,
-    ) -> Result<SQLType> {
+    fn check_function(&self, name: &str, args: &[Expr], schema: &Schema) -> Result<SQLType> {
         let lower = name.to_lowercase();
         match lower.as_str() {
             "count" => Ok(SQLType::Integer),
             "sum" | "avg" => {
                 if args.is_empty() {
-                    return Err(SQLError::syntax(
-                        format!("{} requires at least one argument", name),
-                    ));
+                    return Err(SQLError::syntax(format!(
+                        "{} requires at least one argument",
+                        name
+                    )));
                 }
                 let arg_type = self.check_types(&args[0], schema)?;
                 match arg_type {
@@ -190,16 +180,15 @@ impl TypeChecker {
             }
             "min" | "max" => {
                 if args.is_empty() {
-                    return Err(SQLError::syntax(
-                        format!("{} requires at least one argument", name),
-                    ));
+                    return Err(SQLError::syntax(format!(
+                        "{} requires at least one argument",
+                        name
+                    )));
                 }
                 let arg_type = self.check_types(&args[0], schema)?;
                 Ok(arg_type)
             }
-            _ => {
-                Ok(SQLType::Null)
-            }
+            _ => Ok(SQLType::Null),
         }
     }
 
@@ -231,42 +220,26 @@ impl TypeChecker {
         match (val, target) {
             (LiteralValue::Null, _) => Ok(LiteralValue::Null),
             (v, t) if literal_type(v) == *t => Ok(v.clone()),
-            (LiteralValue::Integer(i), SQLType::Float) => {
-                Ok(LiteralValue::Float(*i as f64))
-            }
-            (LiteralValue::Float(f), SQLType::Integer) => {
-                Ok(LiteralValue::Integer(*f as i64))
-            }
+            (LiteralValue::Integer(i), SQLType::Float) => Ok(LiteralValue::Float(*i as f64)),
+            (LiteralValue::Float(f), SQLType::Integer) => Ok(LiteralValue::Integer(*f as i64)),
             (LiteralValue::String(s), SQLType::Integer) => {
-                let val: i64 = s
-                    .parse()
-                    .map_err(|_| SQLError::TypeMismatch {
-                        expected: "INTEGER".to_string(),
-                        actual: format!("string: {}", s),
-                    })?;
+                let val: i64 = s.parse().map_err(|_| SQLError::TypeMismatch {
+                    expected: "INTEGER".to_string(),
+                    actual: format!("string: {}", s),
+                })?;
                 Ok(LiteralValue::Integer(val))
             }
             (LiteralValue::String(s), SQLType::Float) => {
-                let val: f64 = s
-                    .parse()
-                    .map_err(|_| SQLError::TypeMismatch {
-                        expected: "FLOAT".to_string(),
-                        actual: format!("string: {}", s),
-                    })?;
+                let val: f64 = s.parse().map_err(|_| SQLError::TypeMismatch {
+                    expected: "FLOAT".to_string(),
+                    actual: format!("string: {}", s),
+                })?;
                 Ok(LiteralValue::Float(val))
             }
-            (LiteralValue::String(s), SQLType::Text) => {
-                Ok(LiteralValue::String(s.clone()))
-            }
-            (LiteralValue::Integer(i), SQLType::Text) => {
-                Ok(LiteralValue::String(i.to_string()))
-            }
-            (LiteralValue::Float(f), SQLType::Text) => {
-                Ok(LiteralValue::String(f.to_string()))
-            }
-            (LiteralValue::Boolean(b), SQLType::Text) => {
-                Ok(LiteralValue::String(b.to_string()))
-            }
+            (LiteralValue::String(s), SQLType::Text) => Ok(LiteralValue::String(s.clone())),
+            (LiteralValue::Integer(i), SQLType::Text) => Ok(LiteralValue::String(i.to_string())),
+            (LiteralValue::Float(f), SQLType::Text) => Ok(LiteralValue::String(f.to_string())),
+            (LiteralValue::Boolean(b), SQLType::Text) => Ok(LiteralValue::String(b.to_string())),
             (LiteralValue::String(s), SQLType::Boolean) => {
                 let val = match s.to_lowercase().as_str() {
                     "true" | "1" | "yes" => true,
@@ -275,14 +248,12 @@ impl TypeChecker {
                         return Err(SQLError::TypeMismatch {
                             expected: "BOOLEAN".to_string(),
                             actual: format!("string: {}", s),
-                        })
+                        });
                     }
                 };
                 Ok(LiteralValue::Boolean(val))
             }
-            (LiteralValue::Integer(i), SQLType::Boolean) => {
-                Ok(LiteralValue::Boolean(*i != 0))
-            }
+            (LiteralValue::Integer(i), SQLType::Boolean) => Ok(LiteralValue::Boolean(*i != 0)),
             _ => Err(SQLError::TypeMismatch {
                 expected: format!("{:?}", target),
                 actual: format!("{:?}", literal_type(val)),

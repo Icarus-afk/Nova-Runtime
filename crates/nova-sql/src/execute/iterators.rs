@@ -257,17 +257,15 @@ impl Executor for AggregateExecutor {
     }
 }
 
-fn evaluate_aggregate_expr(
-    expr: &Expr,
-    rows: &[Row],
-    schema: &Schema,
-) -> Result<LiteralValue> {
+fn evaluate_aggregate_expr(expr: &Expr, rows: &[Row], schema: &Schema) -> Result<LiteralValue> {
     match expr {
         Expr::Function { name, args } => {
             let lower = name.to_lowercase();
             match lower.as_str() {
                 "count" => {
-                    if args.len() == 1 && matches!(&args[0], Expr::Literal(LiteralValue::String(s)) if s == "*") {
+                    if args.len() == 1
+                        && matches!(&args[0], Expr::Literal(LiteralValue::String(s)) if s == "*")
+                    {
                         return Ok(LiteralValue::Integer(rows.len() as i64));
                     }
                     let mut count = 0i64;
@@ -288,8 +286,14 @@ fn evaluate_aggregate_expr(
                         for arg in args {
                             let val = evaluate_expr(arg, &row.values, schema)?;
                             match val {
-                                LiteralValue::Integer(i) => { total += i as f64; has_value = true; }
-                                LiteralValue::Float(f) => { total += f; has_value = true; }
+                                LiteralValue::Integer(i) => {
+                                    total += i as f64;
+                                    has_value = true;
+                                }
+                                LiteralValue::Float(f) => {
+                                    total += f;
+                                    has_value = true;
+                                }
                                 _ => {}
                             }
                         }
@@ -307,8 +311,14 @@ fn evaluate_aggregate_expr(
                         for arg in args {
                             let val = evaluate_expr(arg, &row.values, schema)?;
                             match val {
-                                LiteralValue::Integer(i) => { total += i as f64; count += 1; }
-                                LiteralValue::Float(f) => { total += f; count += 1; }
+                                LiteralValue::Integer(i) => {
+                                    total += i as f64;
+                                    count += 1;
+                                }
+                                LiteralValue::Float(f) => {
+                                    total += f;
+                                    count += 1;
+                                }
                                 _ => {}
                             }
                         }
@@ -375,11 +385,7 @@ pub struct SortExecutor {
 }
 
 impl SortExecutor {
-    pub fn new(
-        input: Box<dyn Executor>,
-        order_by: Vec<OrderByExpr>,
-        schema: Schema,
-    ) -> Self {
+    pub fn new(input: Box<dyn Executor>, order_by: Vec<OrderByExpr>, schema: Schema) -> Self {
         SortExecutor {
             input,
             order_by,
@@ -490,23 +496,31 @@ impl Executor for LimitExecutor {
     }
 }
 
-fn compare_values(a: &LiteralValue, b: &LiteralValue, nulls_first: Option<bool>) -> std::cmp::Ordering {
+fn compare_values(
+    a: &LiteralValue,
+    b: &LiteralValue,
+    nulls_first: Option<bool>,
+) -> std::cmp::Ordering {
     let nulls_first = nulls_first.unwrap_or(false);
     match (a, b) {
         (LiteralValue::Null, LiteralValue::Null) => std::cmp::Ordering::Equal,
         (LiteralValue::Null, _) => {
-            if nulls_first { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }
+            if nulls_first {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
         }
         (_, LiteralValue::Null) => {
-            if nulls_first { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+            if nulls_first {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
         }
         (LiteralValue::Integer(x), LiteralValue::Integer(y)) => x.cmp(y),
-        (LiteralValue::Integer(x), LiteralValue::Float(y)) => {
-            (*x as f64).total_cmp(y)
-        }
-        (LiteralValue::Float(x), LiteralValue::Integer(y)) => {
-            x.total_cmp(&(*y as f64))
-        }
+        (LiteralValue::Integer(x), LiteralValue::Float(y)) => (*x as f64).total_cmp(y),
+        (LiteralValue::Float(x), LiteralValue::Integer(y)) => x.total_cmp(&(*y as f64)),
         (LiteralValue::Float(x), LiteralValue::Float(y)) => x.total_cmp(y),
         (LiteralValue::Boolean(x), LiteralValue::Boolean(y)) => x.cmp(y),
         (LiteralValue::String(x), LiteralValue::String(y)) => x.cmp(y),
