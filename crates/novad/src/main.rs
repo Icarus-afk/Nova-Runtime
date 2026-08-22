@@ -1,10 +1,10 @@
-use clap::Parser;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::get;
 use axum::{Extension, Router};
+use clap::Parser;
 use nova_auth::providers::PasswordProvider;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "novad", version, about = "Nova Runtime Daemon")]
@@ -36,7 +36,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create loader with the resolved path so reload() knows which file to re-read
-    let loader = config_path.as_ref()
+    let loader = config_path
+        .as_ref()
         .map(|p| nova_config::ConfigLoader::with_path(p.clone()))
         .unwrap_or_else(nova_config::ConfigLoader::new);
 
@@ -59,7 +60,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Configuration loaded");
     tracing::info!("Data directory: {}", config.general.data_dir.display());
-    tracing::info!("Listen: {}:{}", config.networking.listen_address, config.networking.listen_port);
+    tracing::info!(
+        "Listen: {}:{}",
+        config.networking.listen_address,
+        config.networking.listen_port
+    );
 
     let config = Arc::new(parking_lot::RwLock::new(config));
 
@@ -71,7 +76,10 @@ async fn main() -> anyhow::Result<()> {
         emergency_reserve: config.read().memory.emergency_reserve,
     };
     let memory_mgr = Arc::new(nova_memory::MemoryManager::new(&mem_config));
-    tracing::info!("Memory manager initialized (max: {} MB)", config.read().memory.max_memory / 1024 / 1024);
+    tracing::info!(
+        "Memory manager initialized (max: {} MB)",
+        config.read().memory.max_memory / 1024 / 1024
+    );
 
     // Initialize storage engine
     let storage_config = nova_storage::StorageConfig {
@@ -89,24 +97,40 @@ async fn main() -> anyhow::Result<()> {
     let store = Arc::new(nova_storage::Store::open(&storage_config)?);
     let stats = store.stats();
     tracing::info!("Storage engine opened");
-    tracing::info!("  Page cache: {} / {} pages", stats.cache_size, storage_config.page_cache_size);
+    tracing::info!(
+        "  Page cache: {} / {} pages",
+        stats.cache_size,
+        storage_config.page_cache_size
+    );
     tracing::info!("  WAL segments: {}", stats.wal_segments);
     tracing::info!("  Current LSN: {}", stats.current_lsn);
 
     // Setup TLS
     if config.read().networking.tls_enabled {
         let cfg = config.read();
-        let cert_path = Path::new(cfg.networking.tls_cert_path.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("TLS cert path required"))?);
-        let key_path = Path::new(cfg.networking.tls_key_path.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("TLS key path required"))?);
+        let cert_path = Path::new(
+            cfg.networking
+                .tls_cert_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TLS cert path required"))?,
+        );
+        let key_path = Path::new(
+            cfg.networking
+                .tls_key_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TLS key path required"))?,
+        );
         if !cert_path.exists() {
             anyhow::bail!("TLS certificate not found: {}", cert_path.display());
         }
         if !key_path.exists() {
             anyhow::bail!("TLS key not found: {}", key_path.display());
         }
-        tracing::info!("TLS configured: cert={}, key={}", cert_path.display(), key_path.display());
+        tracing::info!(
+            "TLS configured: cert={}, key={}",
+            cert_path.display(),
+            key_path.display()
+        );
     } else {
         tracing::info!("TLS is disabled");
     }
@@ -126,8 +150,14 @@ async fn main() -> anyhow::Result<()> {
         rate_limit_ip_burst: config.read().execution.rate_limit_ip_burst as f64,
         circuit_breaker_threshold: config.read().execution.circuit_breaker_threshold,
         circuit_breaker_window_ms: config.read().execution.circuit_breaker_window_ms,
-        circuit_breaker_half_open_timeout_ms: config.read().execution.circuit_breaker_half_open_timeout_ms,
-        circuit_breaker_success_threshold: config.read().execution.circuit_breaker_success_threshold,
+        circuit_breaker_half_open_timeout_ms: config
+            .read()
+            .execution
+            .circuit_breaker_half_open_timeout_ms,
+        circuit_breaker_success_threshold: config
+            .read()
+            .execution
+            .circuit_breaker_success_threshold,
         audit_enabled: config.read().execution.audit_enabled,
         audit_include_payloads: config.read().execution.audit_include_payloads,
         audit_max_entry_size: config.read().execution.audit_max_entry_size,
@@ -161,12 +191,10 @@ async fn main() -> anyhow::Result<()> {
             backend_type,
             redis_url: cfg.redis_url.clone(),
         };
-        let backend: Arc<dyn nova_cache::CacheBackend> = Arc::new(
-            nova_cache::HashMapBackend::new(
-                cache_cfg.max_size,
-                Arc::new(nova_cache::CacheMetrics::default()),
-            )?
-        );
+        let backend: Arc<dyn nova_cache::CacheBackend> = Arc::new(nova_cache::HashMapBackend::new(
+            cache_cfg.max_size,
+            Arc::new(nova_cache::CacheMetrics::default()),
+        )?);
         Arc::new(nova_cache::CacheManager::new(backend, cache_cfg))
     };
     tracing::info!("Cache manager initialized");
@@ -228,16 +256,14 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let sql_engine = {
-        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
-            nova_storage::StorageEngineStore::new(store.clone()),
-        );
+        let engine: Arc<dyn nova_core::StorageEngine> =
+            Arc::new(nova_storage::StorageEngineStore::new(store.clone()));
         Arc::new(nova_sql::SQLEngine::new_with_storage(sql_cfg, engine))
     };
     tracing::info!("SQL engine initialized");
 
     // Attach mutation observer to SQL engine (publishes DB mutations to event bus)
     {
-        use nova_sql::MutationObserver;
         let bus = event_bus.clone();
         sql_engine.set_observer(Arc::new(nova_sql::SQLEngineMutationObserver::new(bus)));
     }
@@ -259,12 +285,10 @@ async fn main() -> anyhow::Result<()> {
             enable_dlq: cfg.enable_dlq,
             enable_scanners: cfg.enable_scanners,
         };
-        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
-            nova_storage::StorageEngineStore::new(store.clone()),
-        );
-        let backend: Arc<dyn nova_queue::QueueBackend> = Arc::new(
-            nova_queue::StorageQueueBackend::new(engine),
-        );
+        let engine: Arc<dyn nova_core::StorageEngine> =
+            Arc::new(nova_storage::StorageEngineStore::new(store.clone()));
+        let backend: Arc<dyn nova_queue::QueueBackend> =
+            Arc::new(nova_queue::StorageQueueBackend::new(engine));
         Arc::new(nova_queue::QueueManager::new(backend, queue_cfg))
     };
     tracing::info!("Queue manager initialized");
@@ -293,7 +317,11 @@ async fn main() -> anyhow::Result<()> {
         let mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg.clone()));
 
         // Register PasswordProvider
-        let password_provider = Arc::new(PasswordProvider::new("local", auth_cfg, mgr.users().clone()));
+        let password_provider = Arc::new(PasswordProvider::new(
+            "local",
+            auth_cfg,
+            mgr.users().clone(),
+        ));
         mgr.register_provider(password_provider)
             .map_err(|e| anyhow::anyhow!("Failed to register auth provider: {}", e))?;
 
@@ -331,20 +359,43 @@ async fn main() -> anyhow::Result<()> {
             enable_startup_recovery: cfg.enable_startup_recovery,
             enable_catch_up: cfg.enable_catch_up,
         };
-        let engine: Arc<dyn nova_core::StorageEngine> = Arc::new(
-            nova_storage::StorageEngineStore::new(store.clone()),
-        );
-        let backend: Arc<dyn nova_scheduler::SchedulerBackend> = Arc::new(
-            nova_scheduler::StorageSchedulerBackend::new(engine),
-        );
-        Arc::new(
-            nova_scheduler::SchedulerManager::new(backend, scheduler_cfg, shutdown_rx.clone()),
-        )
+        let engine: Arc<dyn nova_core::StorageEngine> =
+            Arc::new(nova_storage::StorageEngineStore::new(store.clone()));
+        let backend: Arc<dyn nova_scheduler::SchedulerBackend> =
+            Arc::new(nova_scheduler::StorageSchedulerBackend::new(engine));
+        Arc::new(nova_scheduler::SchedulerManager::new(
+            backend,
+            scheduler_cfg,
+            shutdown_rx.clone(),
+        ))
     };
     tracing::info!("Scheduler manager initialized");
 
+    // Spawn background workers
+    {
+        let qmgr = queue_mgr.clone();
+        let cfg_clone = config.read().queue.clone();
+        if cfg_clone.enable_scanners {
+            let mut scanner = qmgr.create_scanner(shutdown_rx.clone());
+            tokio::spawn(async move {
+                scanner.run().await;
+            });
+            tracing::info!(
+                "Queue scanner spawned (interval {}ms)",
+                cfg_clone.scanner_interval_ms
+            );
+        }
+    }
+    // SchedulerManager::run requires &mut self; shared Arc holds state via interior channels
+    // Background tick is driven via the manager's internal watch channel — no extra spawn needed here.
+    // If future SchedulerManager exposes spawnable runner, add it here.
+
     // Build admin state
-    let listen_addr = format!("{}:{}", config.read().networking.listen_address, config.read().networking.listen_port);
+    let listen_addr = format!(
+        "{}:{}",
+        config.read().networking.listen_address,
+        config.read().networking.listen_port
+    );
     let admin_state = Arc::new(nova_api::admin::AdminState {
         started_at: std::time::Instant::now(),
         pipeline: pipeline.clone(),
@@ -407,7 +458,10 @@ async fn main() -> anyhow::Result<()> {
 
     println!();
     println!("  ╔══════════════════════════════════════╗");
-    println!("  ║         Nova Runtime v{:<14} ║", env!("CARGO_PKG_VERSION"));
+    println!(
+        "  ║         Nova Runtime v{:<14} ║",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("  ║     Status: RUNNING                   ║");
     println!("  ║     Listen: {:18} ║", listen_addr);
     println!("  ║     GraphQL: /graphql                 ║");
@@ -424,16 +478,15 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("Port {} appears to be in use", addr);
                 drop(stream);
             }
-        }).await.ok();
+        })
+        .await
+        .ok();
     }
 
     // Start HTTP server
-    let server_result = nova_api::server::start_server(
-        &listen_addr,
-        admin_state,
-        shutdown_rx,
-        Some(gql_router),
-    ).await;
+    let server_result =
+        nova_api::server::start_server(&listen_addr, admin_state, shutdown_rx, Some(gql_router))
+            .await;
 
     match server_result {
         Ok(()) => tracing::info!("HTTP server shut down gracefully"),
@@ -442,11 +495,28 @@ async fn main() -> anyhow::Result<()> {
 
     // Graceful shutdown
     tracing::info!("Shutting down...");
+
+    // Signal subsystems via watch channel already sent; now explicit shutdown
+    tracing::info!("Stopping scheduler...");
+    scheduler_mgr.shutdown();
+    tracing::info!("Stopping cache...");
+    cache_mgr.shutdown();
+    tracing::info!("Stopping search...");
+    search_mgr.shutdown();
+    tracing::info!("Stopping SQL engine...");
+    sql_engine.shutdown();
+    if let Err(e) = blob_mgr.shutdown().await {
+        tracing::warn!("Blob shutdown error: {}", e);
+    } else {
+        tracing::info!("Blob manager shut down");
+    }
+
     tracing::info!("Draining pipeline...");
     let drain_result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         pipeline.drain(std::time::Duration::from_secs(30)),
-    ).await;
+    )
+    .await;
     match drain_result {
         Ok(Ok(())) => tracing::info!("Pipeline drained"),
         _ => tracing::warn!("Pipeline drain incomplete"),
