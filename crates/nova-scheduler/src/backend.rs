@@ -74,8 +74,7 @@ impl StorageSchedulerBackend {
 impl SchedulerBackend for StorageSchedulerBackend {
     async fn create_job(&self, job: Job) -> Result<()> {
         let key = Self::job_key(&job.id);
-        let data = serde_json::to_vec(&job)
-            .map_err(|e| SchedulerError::Internal(e.to_string()))?;
+        let data = serde_json::to_vec(&job).map_err(|e| SchedulerError::Internal(e.to_string()))?;
 
         if self.store.get(&key)?.is_some() {
             return Err(SchedulerError::JobAlreadyExists(job.id.to_string()));
@@ -86,7 +85,8 @@ impl SchedulerBackend for StorageSchedulerBackend {
         // Add to pending index if pending
         if job.state == JobState::Pending {
             let pending_key = Self::job_pending_key(&job.id, job.next_run_at);
-            self.store.set(&pending_key, nova_core::Value::new(vec![]))?;
+            self.store
+                .set(&pending_key, nova_core::Value::new(vec![]))?;
         }
 
         Ok(())
@@ -94,10 +94,11 @@ impl SchedulerBackend for StorageSchedulerBackend {
 
     async fn get_job(&self, id: &uuid::Uuid) -> Result<Job> {
         let key = Self::job_key(id);
-        let data = self.store.get(&key)?
+        let data = self
+            .store
+            .get(&key)?
             .ok_or_else(|| SchedulerError::JobNotFound(id.to_string()))?;
-        serde_json::from_slice(data.as_bytes())
-            .map_err(|e| SchedulerError::Internal(e.to_string()))
+        serde_json::from_slice(data.as_bytes()).map_err(|e| SchedulerError::Internal(e.to_string()))
     }
 
     async fn update_job(&self, job: Job) -> Result<()> {
@@ -105,8 +106,7 @@ impl SchedulerBackend for StorageSchedulerBackend {
         if self.store.get(&key)?.is_none() {
             return Err(SchedulerError::JobNotFound(job.id.to_string()));
         }
-        let data = serde_json::to_vec(&job)
-            .map_err(|e| SchedulerError::Internal(e.to_string()))?;
+        let data = serde_json::to_vec(&job).map_err(|e| SchedulerError::Internal(e.to_string()))?;
         self.store.set(&key, nova_core::Value::new(data))?;
         Ok(())
     }
@@ -301,7 +301,10 @@ mod tests {
             let mut data = self.data.write();
             Ok(data.remove(key.as_bytes()).is_some())
         }
-        fn scan(&self, range: std::ops::Range<nova_core::Key>) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
+        fn scan(
+            &self,
+            range: std::ops::Range<nova_core::Key>,
+        ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
             let data = self.data.read();
             let mut results = Vec::new();
             let start = range.start.as_bytes().to_vec();

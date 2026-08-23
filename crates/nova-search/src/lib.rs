@@ -11,15 +11,15 @@ pub mod posting;
 pub mod query;
 pub mod scoring;
 
+pub use analysis::*;
 pub use config::SearchConfig;
 pub use document::*;
 pub use error::*;
 pub use facet::*;
 pub use fuzzy::*;
 pub use highlight::*;
+pub use index::*;
 pub use manager::*;
+pub use posting::*;
 pub use query::*;
 pub use scoring::*;
-pub use index::*;
-pub use analysis::*;
-pub use posting::*;

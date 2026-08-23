@@ -1,10 +1,10 @@
-pub mod tokenizer;
 pub mod stemmer;
 pub mod stop_words;
+pub mod tokenizer;
 
-use tokenizer::{Token, TokenizerKind};
 use stemmer::PorterStemmer;
 use stop_words::StopWordsFilter;
+use tokenizer::{Token, TokenizerKind};
 use unicode_normalization::UnicodeNormalization;
 
 pub struct AnalyzerPipeline {
@@ -41,10 +41,7 @@ impl AnalyzerPipeline {
             .into_iter()
             .map(|t| {
                 let stemmed = PorterStemmer::stem(&t.term);
-                Token {
-                    term: stemmed,
-                    ..t
-                }
+                Token { term: stemmed, ..t }
             })
             .collect()
     }
@@ -56,10 +53,7 @@ impl AnalyzerPipeline {
             .into_iter()
             .map(|t| {
                 let stemmed = PorterStemmer::stem(&t.term);
-                Token {
-                    term: stemmed,
-                    ..t
-                }
+                Token { term: stemmed, ..t }
             })
             .collect()
     }

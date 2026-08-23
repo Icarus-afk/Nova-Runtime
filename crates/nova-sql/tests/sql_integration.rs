@@ -7,11 +7,21 @@ fn setup() -> SQLEngine {
 #[test]
 fn test_create_table_and_insert() {
     let engine = setup();
-    let result = engine.execute("CREATE TABLE test (id INTEGER, name TEXT)").unwrap();
+    let result = engine
+        .execute("CREATE TABLE test (id INTEGER, name TEXT)")
+        .unwrap();
     assert!(matches!(result, SQLResult::Exec { .. }));
 
-    let result = engine.execute("INSERT INTO test VALUES (1, 'hello')").unwrap();
-    assert!(matches!(result, SQLResult::Exec { rows_affected: 1, .. }));
+    let result = engine
+        .execute("INSERT INTO test VALUES (1, 'hello')")
+        .unwrap();
+    assert!(matches!(
+        result,
+        SQLResult::Exec {
+            rows_affected: 1,
+            ..
+        }
+    ));
 
     let result = engine.execute("SELECT * FROM test").unwrap();
     match result {
@@ -27,7 +37,9 @@ fn test_create_table_and_insert() {
 #[test]
 fn test_simple_select() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'one')").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'two')").unwrap();
     engine.execute("INSERT INTO t VALUES (3, 'three')").unwrap();
@@ -45,7 +57,9 @@ fn test_simple_select() {
 #[test]
 fn test_select_with_where() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'a')").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'b')").unwrap();
     engine.execute("INSERT INTO t VALUES (3, 'c')").unwrap();
@@ -63,22 +77,30 @@ fn test_select_with_where() {
 #[test]
 fn test_select_with_where_and_or() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'y')").unwrap();
     engine.execute("INSERT INTO t VALUES (3, 'z')").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a > 1 AND b = 'y'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a > 1 AND b = 'y'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a = 1 OR a = 3").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a = 1 OR a = 3")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 }
 
 #[test]
 fn test_select_projection() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT, c INTEGER)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT, c INTEGER)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'x', 10)").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'y', 20)").unwrap();
 
@@ -103,7 +125,9 @@ fn test_select_limit() {
     let batches = engine.execute_query("SELECT * FROM t LIMIT 3").unwrap();
     assert_eq!(batches[0].num_rows, 3);
 
-    let batches = engine.execute_query("SELECT * FROM t LIMIT 2 OFFSET 1").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t LIMIT 2 OFFSET 1")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 }
 
@@ -115,7 +139,9 @@ fn test_select_order_by() {
     engine.execute("INSERT INTO t VALUES (1)").unwrap();
     engine.execute("INSERT INTO t VALUES (2)").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t ORDER BY a ASC").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t ORDER BY a ASC")
+        .unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
         Column::Integer(vals) => {
@@ -124,7 +150,9 @@ fn test_select_order_by() {
         _ => panic!("expected integer column"),
     }
 
-    let batches = engine.execute_query("SELECT * FROM t ORDER BY a DESC").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t ORDER BY a DESC")
+        .unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
         Column::Integer(vals) => {
@@ -137,25 +165,35 @@ fn test_select_order_by() {
 #[test]
 fn test_select_is_null() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
     engine.execute("INSERT INTO t VALUES (NULL, 'y')").unwrap();
     engine.execute("INSERT INTO t VALUES (3, NULL)").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a IS NULL").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a IS NULL")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE b IS NOT NULL").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE b IS NOT NULL")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 }
 
 #[test]
 fn test_select_arithmetic() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b INTEGER)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b INTEGER)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (10, 3)").unwrap();
 
-    let batches = engine.execute_query("SELECT a + b, a - b, a * b, a / b FROM t").unwrap();
+    let batches = engine
+        .execute_query("SELECT a + b, a - b, a * b, a / b FROM t")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
     assert_eq!(batches[0].num_columns(), 4);
 
@@ -194,8 +232,12 @@ fn test_drop_table() {
 #[test]
 fn test_insert_multiple_rows() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
-    engine.execute("INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
+    engine
+        .execute("INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+        .unwrap();
 
     let batches = engine.execute_query("SELECT * FROM t ORDER BY a").unwrap();
     assert_eq!(batches[0].num_rows, 3);
@@ -220,7 +262,9 @@ fn test_select_count() {
 #[test]
 fn test_nested_expressions() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (2, 3, 4)").unwrap();
 
     let batches = engine.execute_query("SELECT (a + b) * c FROM t").unwrap();
@@ -231,7 +275,9 @@ fn test_nested_expressions() {
 #[test]
 fn test_type_coercion() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b FLOAT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b FLOAT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (5, 3.5)").unwrap();
 
     let batches = engine.execute_query("SELECT a + b FROM t").unwrap();
@@ -245,7 +291,9 @@ fn test_type_coercion() {
 #[test]
 fn test_empty_table_select() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     let batches = engine.execute_query("SELECT * FROM t").unwrap();
     assert_eq!(batches[0].num_rows, 0);
 }
@@ -278,7 +326,9 @@ fn test_column_not_found_error() {
 #[test]
 fn test_select_distinct() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'y')").unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
@@ -286,7 +336,9 @@ fn test_select_distinct() {
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
 
     // Should return 3 distinct rows (1,x), (2,y), (3,z)
-    let batches = engine.execute_query("SELECT DISTINCT * FROM t ORDER BY a").unwrap();
+    let batches = engine
+        .execute_query("SELECT DISTINCT * FROM t ORDER BY a")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 3);
 }
 
@@ -298,7 +350,9 @@ fn test_between() {
     engine.execute("INSERT INTO t VALUES (5)").unwrap();
     engine.execute("INSERT INTO t VALUES (10)").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a BETWEEN 3 AND 8").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a BETWEEN 3 AND 8")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
     let row = batches[0].get_row(0).unwrap();
     assert_eq!(row[0], Some(LiteralValue::Integer(5)));
@@ -313,10 +367,14 @@ fn test_in_operator() {
     engine.execute("INSERT INTO t VALUES (3)").unwrap();
     engine.execute("INSERT INTO t VALUES (4)").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a IN (1, 3)").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a IN (1, 3)")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a NOT IN (1, 3)").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a NOT IN (1, 3)")
+        .unwrap();
     // NOT IN would be: WHERE NOT (a IN (1,3))
     assert_eq!(batches[0].num_rows, 2);
 }
@@ -344,11 +402,15 @@ fn test_case_when() {
 #[test]
 fn test_cast() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (42, '3.14')").unwrap();
 
     // Test CAST() function
-    let batches = engine.execute_query("SELECT CAST(b AS FLOAT) FROM t").unwrap();
+    let batches = engine
+        .execute_query("SELECT CAST(b AS FLOAT) FROM t")
+        .unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
         Column::Float(vals) => assert!((vals[0].unwrap() - 3.14).abs() < 0.001),
@@ -373,17 +435,27 @@ fn test_like_pattern() {
     engine.execute("INSERT INTO t VALUES ('hi')").unwrap();
 
     // % matches any sequence
-    let batches = engine.execute_query("SELECT * FROM t WHERE a LIKE 'h%'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a LIKE 'h%'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 
     // _ matches single char
-    let batches = engine.execute_query("SELECT * FROM t WHERE a LIKE 'h__lo'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a LIKE 'h__lo'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
 
     // literal _ in pattern (escaped)
-    engine.execute("INSERT INTO t VALUES ('test_data')").unwrap();
-    engine.execute("INSERT INTO t VALUES ('testXdata')").unwrap();
-    let batches = engine.execute_query("SELECT * FROM t WHERE a LIKE 'test\\_data'").unwrap();
+    engine
+        .execute("INSERT INTO t VALUES ('test_data')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO t VALUES ('testXdata')")
+        .unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a LIKE 'test\\_data'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
 }
 
@@ -395,34 +467,54 @@ fn test_ilike() {
     engine.execute("INSERT INTO t VALUES ('HELLO')").unwrap();
     engine.execute("INSERT INTO t VALUES ('World')").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a ILIKE 'hello'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a ILIKE 'hello'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a ILIKE 'h%'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a ILIKE 'h%'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 }
 
 #[test]
 fn test_not_null_constraint() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER NOT NULL, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER NOT NULL, b TEXT)")
+        .unwrap();
 
-    let err = engine.execute("INSERT INTO t (b) VALUES ('x')").unwrap_err();
+    let err = engine
+        .execute("INSERT INTO t (b) VALUES ('x')")
+        .unwrap_err();
     assert!(matches!(err, SQLError::ConstraintViolation(_)));
 
-    let err = engine.execute("INSERT INTO t VALUES (NULL, 'x')").unwrap_err();
+    let err = engine
+        .execute("INSERT INTO t VALUES (NULL, 'x')")
+        .unwrap_err();
     assert!(matches!(err, SQLError::ConstraintViolation(_)));
 
     let result = engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
-    assert!(matches!(result, SQLResult::Exec { rows_affected: 1, .. }));
+    assert!(matches!(
+        result,
+        SQLResult::Exec {
+            rows_affected: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn test_default_value() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER DEFAULT 42, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER DEFAULT 42, b TEXT)")
+        .unwrap();
 
-    engine.execute("INSERT INTO t (b) VALUES ('hello')").unwrap();
+    engine
+        .execute("INSERT INTO t (b) VALUES ('hello')")
+        .unwrap();
     let batches = engine.execute_query("SELECT a FROM t").unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
@@ -431,7 +523,9 @@ fn test_default_value() {
     }
 
     // Explicit value overrides default
-    engine.execute("INSERT INTO t VALUES (99, 'world')").unwrap();
+    engine
+        .execute("INSERT INTO t VALUES (99, 'world')")
+        .unwrap();
     let batches = engine.execute_query("SELECT a FROM t ORDER BY a").unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
@@ -443,7 +537,9 @@ fn test_default_value() {
 #[test]
 fn test_unique_constraint() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER UNIQUE, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER UNIQUE, b TEXT)")
+        .unwrap();
 
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
     // Duplicate should fail
@@ -452,13 +548,21 @@ fn test_unique_constraint() {
 
     // Different value should succeed
     let result = engine.execute("INSERT INTO t VALUES (2, 'y')").unwrap();
-    assert!(matches!(result, SQLResult::Exec { rows_affected: 1, .. }));
+    assert!(matches!(
+        result,
+        SQLResult::Exec {
+            rows_affected: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn test_primary_key_constraint() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)")
+        .unwrap();
 
     engine.execute("INSERT INTO t VALUES (1, 'x')").unwrap();
     // Duplicate PK should fail
@@ -466,22 +570,26 @@ fn test_primary_key_constraint() {
     assert!(matches!(err, SQLError::ConstraintViolation(_)));
 
     // NULL PK should fail (PK implies NOT NULL)
-    let err = engine.execute("INSERT INTO t (b) VALUES ('z')").unwrap_err();
+    let err = engine
+        .execute("INSERT INTO t (b) VALUES ('z')")
+        .unwrap_err();
     assert!(matches!(err, SQLError::ConstraintViolation(_)));
 }
 
 #[test]
 fn test_group_by_having() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (category TEXT, value INTEGER)").unwrap();
+    engine
+        .execute("CREATE TABLE t (category TEXT, value INTEGER)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES ('a', 10)").unwrap();
     engine.execute("INSERT INTO t VALUES ('a', 20)").unwrap();
     engine.execute("INSERT INTO t VALUES ('b', 30)").unwrap();
 
     // GROUP BY with aggregate - should parse and execute without error
-    let result = engine.execute(
-        "SELECT category, SUM(value) FROM t GROUP BY category ORDER BY category"
-    ).unwrap();
+    let result = engine
+        .execute("SELECT category, SUM(value) FROM t GROUP BY category ORDER BY category")
+        .unwrap();
     // Currently AggregateExecutor sums all rows into one group
     // Full multi-group aggregation is a larger feature
     assert!(matches!(result, SQLResult::Query { .. }));
@@ -497,9 +605,9 @@ fn test_order_by_nulls() {
     engine.execute("INSERT INTO t VALUES (NULL)").unwrap();
 
     // NULLS FIRST should put nulls before non-null
-    let batches = engine.execute_query(
-        "SELECT * FROM t ORDER BY a NULLS FIRST"
-    ).unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t ORDER BY a NULLS FIRST")
+        .unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
         Column::Integer(vals) => {
@@ -510,9 +618,9 @@ fn test_order_by_nulls() {
     }
 
     // NULLS LAST should put nulls after non-null
-    let batches = engine.execute_query(
-        "SELECT * FROM t ORDER BY a NULLS LAST"
-    ).unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t ORDER BY a NULLS LAST")
+        .unwrap();
     let col = batches[0].get_column(0).unwrap();
     match col {
         Column::Integer(vals) => {
@@ -569,7 +677,9 @@ fn test_multiple_errors() {
 
     // Type mismatch (table has data so WHERE evaluates)
     engine.execute("INSERT INTO t VALUES (1)").unwrap();
-    let err = engine.execute("SELECT * FROM t WHERE a + 'foo'").unwrap_err();
+    let err = engine
+        .execute("SELECT * FROM t WHERE a + 'foo'")
+        .unwrap_err();
     assert!(matches!(err, SQLError::TypeMismatch { .. }));
 }
 
@@ -582,7 +692,9 @@ fn test_in_operator_with_not() {
     engine.execute("INSERT INTO t VALUES (3)").unwrap();
     engine.execute("INSERT INTO t VALUES (4)").unwrap();
 
-    let batches = engine.execute_query("SELECT * FROM t WHERE a IN (1, 2)").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a IN (1, 2)")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
 }
 
@@ -590,11 +702,17 @@ fn test_in_operator_with_not() {
 fn test_like_special_chars() {
     let engine = setup();
     engine.execute("CREATE TABLE t (a TEXT)").unwrap();
-    engine.execute("INSERT INTO t VALUES ('test.data')").unwrap();
-    engine.execute("INSERT INTO t VALUES ('testXdata')").unwrap();
+    engine
+        .execute("INSERT INTO t VALUES ('test.data')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO t VALUES ('testXdata')")
+        .unwrap();
 
     // Dot in pattern should match literal dot since LIKE treats . as literal
-    let batches = engine.execute_query("SELECT * FROM t WHERE a LIKE 'test.data'").unwrap();
+    let batches = engine
+        .execute_query("SELECT * FROM t WHERE a LIKE 'test.data'")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 1);
 }
 
@@ -605,9 +723,9 @@ fn test_case_no_else() {
     engine.execute("INSERT INTO t VALUES (1)").unwrap();
     engine.execute("INSERT INTO t VALUES (2)").unwrap();
 
-    let batches = engine.execute_query(
-        "SELECT CASE WHEN a = 1 THEN 'one' END FROM t ORDER BY a"
-    ).unwrap();
+    let batches = engine
+        .execute_query("SELECT CASE WHEN a = 1 THEN 'one' END FROM t ORDER BY a")
+        .unwrap();
     assert_eq!(batches[0].num_rows, 2);
     let row0 = batches[0].get_row(0).unwrap();
     assert_eq!(row0[0], Some(LiteralValue::String("one".to_string())));

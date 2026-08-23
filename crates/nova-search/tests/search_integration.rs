@@ -1,6 +1,6 @@
+use nova_search::SearchConfig;
 use nova_search::document::IndexedDocument;
 use nova_search::manager::SearchManager;
-use nova_search::SearchConfig;
 
 fn make_doc(id: &str, title: &str, body: &str) -> IndexedDocument {
     IndexedDocument::new(id)
@@ -18,7 +18,11 @@ fn make_doc_with_category(id: &str, title: &str, category: &str) -> IndexedDocum
 fn test_index_and_search() {
     let manager = SearchManager::new();
     manager
-        .index_document(make_doc("1", "The quick brown fox", "A fox is quick and brown"))
+        .index_document(make_doc(
+            "1",
+            "The quick brown fox",
+            "A fox is quick and brown",
+        ))
         .unwrap();
     manager
         .index_document(make_doc("2", "The lazy dog", "A dog sleeps all day"))
@@ -65,7 +69,10 @@ fn test_prefix_search() {
         .unwrap();
 
     let results = manager.search("run*", 10).unwrap();
-    assert!(!results.is_empty(), "should find documents with run* prefix");
+    assert!(
+        !results.is_empty(),
+        "should find documents with run* prefix"
+    );
 }
 
 #[test]
@@ -185,7 +192,11 @@ fn test_delete_document() {
 fn test_highlighting() {
     let manager = SearchManager::new();
     manager
-        .index_document(make_doc("1", "highlight me", "This is the text that should be highlighted in search results"))
+        .index_document(make_doc(
+            "1",
+            "highlight me",
+            "This is the text that should be highlighted in search results",
+        ))
         .unwrap();
 
     let highlighted = manager.search_with_highlight("highlighted", 10).unwrap();
@@ -243,7 +254,8 @@ fn test_large_document() {
 fn test_index_many_documents() {
     let manager = SearchManager::new();
     for i in 0..50 {
-        let doc = IndexedDocument::new(format!("{}", i)).add_text("body", format!("document number {}", i));
+        let doc = IndexedDocument::new(format!("{}", i))
+            .add_text("body", format!("document number {}", i));
         manager.index_document(doc).unwrap();
     }
 
@@ -344,7 +356,8 @@ fn test_bm25_configurable() {
 fn test_pagination() {
     let manager = SearchManager::new();
     for i in 0..20 {
-        let doc = IndexedDocument::new(format!("{}", i)).add_text("body", format!("document {}", i));
+        let doc =
+            IndexedDocument::new(format!("{}", i)).add_text("body", format!("document {}", i));
         manager.index_document(doc).unwrap();
     }
     let page1 = manager.search_with_pagination("document", 5, None).unwrap();
@@ -394,14 +407,14 @@ fn test_index_stats() {
 fn test_unicode_normalization() {
     let manager = SearchManager::new();
     manager
-        .index_document(
-            IndexedDocument::new("1")
-                .add_text("title", "café"),
-        )
+        .index_document(IndexedDocument::new("1").add_text("title", "café"))
         .unwrap();
     let nfd_query: String = "cafe\u{301}".to_string();
     let results = manager.search(&nfd_query, 10).unwrap();
-    assert!(!results.is_empty(), "NFD query should match NFC stored text");
+    assert!(
+        !results.is_empty(),
+        "NFD query should match NFC stored text"
+    );
 }
 
 #[test]
@@ -418,14 +431,25 @@ fn test_document_update() {
     assert!(!results.is_empty());
 
     manager
-        .update_document("1", IndexedDocument::new("1").add_text("title", "updated title").add_text("body", "updated body"))
+        .update_document(
+            "1",
+            IndexedDocument::new("1")
+                .add_text("title", "updated title")
+                .add_text("body", "updated body"),
+        )
         .unwrap();
 
     let old_results = manager.search("original", 10).unwrap();
-    assert!(old_results.is_empty(), "old content should be gone after update");
+    assert!(
+        old_results.is_empty(),
+        "old content should be gone after update"
+    );
 
     let new_results = manager.search("updated", 10).unwrap();
-    assert!(!new_results.is_empty(), "new content should be found after update");
+    assert!(
+        !new_results.is_empty(),
+        "new content should be found after update"
+    );
 }
 
 #[test]
@@ -436,8 +460,10 @@ fn test_concurrent_index_search() {
         let mgr = manager.clone();
         handles.push(std::thread::spawn(move || {
             for j in 0..10 {
-                let doc = IndexedDocument::new(format!("{}-{}", i, j))
-                    .add_text("body", format!("concurrent document {} from thread {}", j, i));
+                let doc = IndexedDocument::new(format!("{}-{}", i, j)).add_text(
+                    "body",
+                    format!("concurrent document {} from thread {}", j, i),
+                );
                 mgr.index_document(doc).unwrap();
             }
         }));

@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use parking_lot::RwLock;
+use std::collections::VecDeque;
 use uuid::Uuid;
 
 /// A timing wheel for scheduling short-interval jobs (≤36s at 100ms tick).
@@ -46,7 +46,11 @@ impl TimeWheel {
 
         let ticks_ahead = (diff as u64) / self.tick_ms;
         // If diff is positive but less than one tick, still schedule 1 slot ahead
-        let offset = if ticks_ahead == 0 { 1 } else { ticks_ahead as usize };
+        let offset = if ticks_ahead == 0 {
+            1
+        } else {
+            ticks_ahead as usize
+        };
         let slot = {
             let current = *self.current_slot.read();
             (current + offset) % self.slots.len()

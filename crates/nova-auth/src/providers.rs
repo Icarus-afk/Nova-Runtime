@@ -1,10 +1,10 @@
 use crate::error::{AuthError, Result};
+use crate::types::UserRecord;
 use crate::types::*;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use dashmap::DashMap;
-use crate::types::UserRecord;
 
 /// Abstract authentication provider trait.
 /// Each provider handles one credential type.
@@ -41,7 +41,7 @@ impl PasswordProvider {
 
     /// Hash a password with bcrypt.
     fn hash_password(password: &str, cost: u32) -> String {
-        use bcrypt::{hash, DEFAULT_COST};
+        use bcrypt::{DEFAULT_COST, hash};
         let actual_cost = if cost == 0 { DEFAULT_COST } else { cost };
         hash(password, actual_cost).unwrap_or_else(|_| panic!("bcrypt hash failed"))
     }
@@ -62,16 +62,22 @@ impl AuthProvider for PasswordProvider {
     }
 
     async fn authenticate(&self, credentials: &HashMap<String, String>) -> Result<AuthResult> {
-        let username = credentials.get("username")
+        let username = credentials
+            .get("username")
             .ok_or_else(|| AuthError::InvalidCredentials("missing username".into()))?;
-        let password = credentials.get("password")
+        let password = credentials
+            .get("password")
             .ok_or_else(|| AuthError::InvalidCredentials("missing password".into()))?;
 
-        let user = self.users.get(username)
+        let user = self
+            .users
+            .get(username)
             .ok_or_else(|| AuthError::InvalidCredentials("invalid username or password".into()))?;
 
         if !Self::verify_password(password, &user.password_hash) {
-            return Err(AuthError::InvalidCredentials("invalid username or password".into()));
+            return Err(AuthError::InvalidCredentials(
+                "invalid username or password".into(),
+            ));
         }
 
         Ok(AuthResult {
@@ -103,7 +109,11 @@ impl AuthProvider for PasswordProvider {
             updated_at: credential.created_at,
         };
         self.users.insert(credential.identifier.clone(), user);
-        tracing::info!("Created credential for user {} via provider {}", credential.user_id, self.name);
+        tracing::info!(
+            "Created credential for user {} via provider {}",
+            credential.user_id,
+            self.name
+        );
         Ok(())
     }
 }
@@ -132,7 +142,8 @@ impl AuthProvider for ApiKeyProvider {
     }
 
     async fn authenticate(&self, credentials: &HashMap<String, String>) -> Result<AuthResult> {
-        let api_key = credentials.get("api_key")
+        let api_key = credentials
+            .get("api_key")
             .ok_or_else(|| AuthError::InvalidCredentials("missing api_key".into()))?;
 
         // Stub: validate API key against stored keys
@@ -161,7 +172,10 @@ impl AuthProvider for ApiKeyProvider {
     }
 
     async fn create_credential(&self, credential: Credential) -> Result<()> {
-        tracing::info!("Creating API key credential for user {}", credential.user_id);
+        tracing::info!(
+            "Creating API key credential for user {}",
+            credential.user_id
+        );
         Ok(())
     }
 }
@@ -190,7 +204,8 @@ impl AuthProvider for JwtProvider {
     }
 
     async fn authenticate(&self, credentials: &HashMap<String, String>) -> Result<AuthResult> {
-        let token = credentials.get("token")
+        let token = credentials
+            .get("token")
             .ok_or_else(|| AuthError::InvalidCredentials("missing token".into()))?;
 
         // Stub: JWT validation would verify signature, expiry, claims
@@ -241,7 +256,10 @@ impl ProviderRegistry {
     pub fn register(&mut self, provider: Arc<dyn AuthProvider>) -> Result<()> {
         let name = provider.name().to_string();
         if self.provider_by_name.contains_key(&name) {
-            return Err(AuthError::ProviderNotFound(format!("Provider '{}' already registered", name)));
+            return Err(AuthError::ProviderNotFound(format!(
+                "Provider '{}' already registered",
+                name
+            )));
         }
         self.provider_by_name.insert(name, self.providers.len());
         self.providers.push(provider);
@@ -249,11 +267,15 @@ impl ProviderRegistry {
     }
 
     pub fn get(&self, name: &str) -> Option<&Arc<dyn AuthProvider>> {
-        self.provider_by_name.get(name).map(|idx| &self.providers[*idx])
+        self.provider_by_name
+            .get(name)
+            .map(|idx| &self.providers[*idx])
     }
 
     pub fn get_by_type(&self, credential_type: CredentialType) -> Option<&Arc<dyn AuthProvider>> {
-        self.providers.iter().find(|p| p.credential_type() == credential_type)
+        self.providers
+            .iter()
+            .find(|p| p.credential_type() == credential_type)
     }
 
     pub fn providers(&self) -> &[Arc<dyn AuthProvider>] {
@@ -307,7 +329,8 @@ mod tests {
     fn test_provider_registry() {
         let mut registry = ProviderRegistry::new();
         let users = Arc::new(DashMap::new());
-        let password_provider = Arc::new(PasswordProvider::new("local", AuthConfig::default(), users));
+        let password_provider =
+            Arc::new(PasswordProvider::new("local", AuthConfig::default(), users));
         let api_key_provider = Arc::new(ApiKeyProvider::new("api-keys"));
 
         assert!(registry.register(password_provider).is_ok());
@@ -331,8 +354,16 @@ mod tests {
     fn test_provider_registry_get_by_type() {
         let mut registry = ProviderRegistry::new();
         let users = Arc::new(DashMap::new());
-        registry.register(Arc::new(PasswordProvider::new("local", AuthConfig::default(), users))).unwrap();
-        registry.register(Arc::new(ApiKeyProvider::new("api"))).unwrap();
+        registry
+            .register(Arc::new(PasswordProvider::new(
+                "local",
+                AuthConfig::default(),
+                users,
+            )))
+            .unwrap();
+        registry
+            .register(Arc::new(ApiKeyProvider::new("api")))
+            .unwrap();
 
         assert!(registry.get_by_type(CredentialType::Password).is_some());
         assert!(registry.get_by_type(CredentialType::ApiKey).is_some());

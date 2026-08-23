@@ -1,20 +1,20 @@
 use crate::brute_force::BruteForceDetector;
 use crate::error::{AuthError, Result};
-use crate::middleware::AuthMiddleware;
 use crate::mfa::{MfaProvider, MfaStore};
+use crate::middleware::AuthMiddleware;
 use crate::password_policy::PasswordPolicyEngine;
 use crate::providers::{AuthProvider, ProviderRegistry};
 use crate::rbac::RbacEngine;
 use crate::session::SessionManager;
 use crate::types::*;
-use crate::types::{UserRecord, ApiKeyRecord};
+use crate::types::{ApiKeyRecord, UserRecord};
+use dashmap::DashMap;
 use nova_executor::middleware::{Middleware, MiddlewareRegistration};
+use rand::Rng;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
-use dashmap::DashMap;
-use rand::Rng;
-use sha2::{Sha256, Digest};
 
 /// Central manager for the authentication subsystem.
 pub struct AuthManager {
@@ -46,11 +46,11 @@ impl AuthManager {
             rbac_engine: Arc::new(parking_lot::RwLock::new(RbacEngine::new())),
             brute_force_detector: brute_force,
             mfa_store: Arc::new(parking_lot::RwLock::new(MfaStore::new())),
-        password_policy: PasswordPolicyEngine::new(&config),
-        mfa_provider: MfaProvider::new(&config.mfa_issuer, config.mfa_window),
-        users: Arc::new(DashMap::new()),
-        api_keys: Arc::new(DashMap::new()),
-    }
+            password_policy: PasswordPolicyEngine::new(&config),
+            mfa_provider: MfaProvider::new(&config.mfa_issuer, config.mfa_window),
+            users: Arc::new(DashMap::new()),
+            api_keys: Arc::new(DashMap::new()),
+        }
     }
 
     pub fn session_manager(&self) -> &Arc<SessionManager> {
@@ -94,18 +94,22 @@ impl AuthManager {
     ) -> std::result::Result<AuthResult, AuthError> {
         let provider = {
             let registry = self.provider_registry.read();
-            registry.get(provider_name)
+            registry
+                .get(provider_name)
                 .ok_or_else(|| AuthError::ProviderNotFound(provider_name.to_string()))?
                 .clone()
         };
 
         // Check brute-force lockout
-        let identifier = credentials.get("username")
+        let identifier = credentials
+            .get("username")
             .or_else(|| credentials.get("api_key"))
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
-        if self.config.enable_brute_force_detection && self.brute_force_detector.is_locked(identifier) {
+        if self.config.enable_brute_force_detection
+            && self.brute_force_detector.is_locked(identifier)
+        {
             let remaining = self.brute_force_detector.remaining_lockout_ms(identifier);
             return Err(AuthError::RateLimited(remaining));
         }
@@ -142,7 +146,9 @@ impl AuthManager {
         } else {
             self.brute_force_detector.record_failure(identifier);
             Err(AuthError::AuthenticationFailed(
-                result.error_message.unwrap_or_else(|| "authentication failed".to_string()),
+                result
+                    .error_message
+                    .unwrap_or_else(|| "authentication failed".to_string()),
             ))
         }
     }
@@ -171,10 +177,7 @@ impl AuthManager {
 
     /// Create the auth middleware for pipeline registration.
     pub fn create_middleware(&self) -> AuthMiddleware {
-        AuthMiddleware::new(
-            self.session_manager.clone(),
-            self.config.clone(),
-        )
+        AuthMiddleware::new(self.session_manager.clone(), self.config.clone())
     }
 
     /// Create a middleware registration suitable for the PipelineExecutor.
@@ -200,7 +203,9 @@ impl AuthManager {
 
     /// Verify a MFA code for a user.
     pub fn verify_mfa(&self, user_id: &Uuid, code: &str) -> bool {
-        self.mfa_store.write().verify_code(user_id, code, self.config.mfa_window)
+        self.mfa_store
+            .write()
+            .verify_code(user_id, code, self.config.mfa_window)
     }
 
     /// Check if a user has MFA enabled.
@@ -215,7 +220,9 @@ impl AuthManager {
 
     /// Assign a role to a user.
     pub fn assign_role(&self, user_id: Uuid, role_name: &str) -> Result<()> {
-        self.rbac_engine.write().assign_role(user_id, role_name)
+        self.rbac_engine
+            .write()
+            .assign_role(user_id, role_name)
             .map_err(|e| AuthError::InvalidArgument(e))
     }
 
@@ -237,16 +244,27 @@ impl AuthManager {
         &self.api_keys
     }
 
-    pub fn create_user(&self, username: &str, password: &str, roles: Vec<String>) -> Result<UserRecord> {
-        use bcrypt::{hash, DEFAULT_COST};
+    pub fn create_user(
+        &self,
+        username: &str,
+        password: &str,
+        roles: Vec<String>,
+    ) -> Result<UserRecord> {
+        use bcrypt::{DEFAULT_COST, hash};
 
         if self.users.contains_key(username) {
-            return Err(AuthError::InvalidArgument(format!("user '{}' already exists", username)));
+            return Err(AuthError::InvalidArgument(format!(
+                "user '{}' already exists",
+                username
+            )));
         }
 
-        let cost = if self.config.bcrypt_cost == 0 { DEFAULT_COST } else { self.config.bcrypt_cost };
-        let password_hash = hash(password, cost)
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let cost = if self.config.bcrypt_cost == 0 {
+            DEFAULT_COST
+        } else {
+            self.config.bcrypt_cost
+        };
+        let password_hash = hash(password, cost).map_err(|e| AuthError::Internal(e.to_string()))?;
 
         let now = chrono::Utc::now().timestamp_millis();
         let user = UserRecord {
@@ -266,7 +284,10 @@ impl AuthManager {
     }
 
     pub fn get_user_by_id(&self, id: &Uuid) -> Option<UserRecord> {
-        self.users.iter().find(|e| e.value().id == *id).map(|e| e.value().clone())
+        self.users
+            .iter()
+            .find(|e| e.value().id == *id)
+            .map(|e| e.value().clone())
     }
 
     pub fn get_user_by_username(&self, username: &str) -> Option<UserRecord> {
@@ -274,7 +295,12 @@ impl AuthManager {
     }
 
     pub fn delete_user(&self, id: &Uuid) -> bool {
-        if let Some(key) = self.users.iter().find(|e| e.value().id == *id).map(|e| e.key().clone()) {
+        if let Some(key) = self
+            .users
+            .iter()
+            .find(|e| e.value().id == *id)
+            .map(|e| e.key().clone())
+        {
             self.users.remove(&key);
             true
         } else {
@@ -289,14 +315,22 @@ impl AuthManager {
             entry.value_mut().updated_at = chrono::Utc::now().timestamp_millis();
             found = true;
         }
-        if found { Ok(()) } else { Err(AuthError::InvalidArgument("user not found".into())) }
+        if found {
+            Ok(())
+        } else {
+            Err(AuthError::InvalidArgument("user not found".into()))
+        }
     }
 
     pub fn change_password(&self, id: &Uuid, new_password: &str) -> Result<()> {
-        use bcrypt::{hash, DEFAULT_COST};
-        let cost = if self.config.bcrypt_cost == 0 { DEFAULT_COST } else { self.config.bcrypt_cost };
-        let password_hash = hash(new_password, cost)
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        use bcrypt::{DEFAULT_COST, hash};
+        let cost = if self.config.bcrypt_cost == 0 {
+            DEFAULT_COST
+        } else {
+            self.config.bcrypt_cost
+        };
+        let password_hash =
+            hash(new_password, cost).map_err(|e| AuthError::Internal(e.to_string()))?;
 
         let mut found = false;
         if let Some(mut entry) = self.users.iter_mut().find(|e| e.value().id == *id) {
@@ -304,7 +338,11 @@ impl AuthManager {
             entry.value_mut().updated_at = chrono::Utc::now().timestamp_millis();
             found = true;
         }
-        if found { Ok(()) } else { Err(AuthError::InvalidArgument("user not found".into())) }
+        if found {
+            Ok(())
+        } else {
+            Err(AuthError::InvalidArgument("user not found".into()))
+        }
     }
 
     pub fn create_api_key(&self, name: &str, permissions: Vec<String>) -> (ApiKeyRecord, String) {
@@ -365,7 +403,9 @@ mod tests {
     #[test]
     fn test_auth_manager_validate_session() {
         let manager = AuthManager::new(AuthConfig::default());
-        let session = manager.session_manager.create_session(Uuid::new_v4(), "test");
+        let session = manager
+            .session_manager
+            .create_session(Uuid::new_v4(), "test");
         let validated = manager.validate_session(&session.token).unwrap();
         assert_eq!(validated.user_id, session.user_id);
     }
@@ -373,7 +413,9 @@ mod tests {
     #[test]
     fn test_auth_manager_revoke_session() {
         let manager = AuthManager::new(AuthConfig::default());
-        let session = manager.session_manager.create_session(Uuid::new_v4(), "test");
+        let session = manager
+            .session_manager
+            .create_session(Uuid::new_v4(), "test");
         assert!(manager.revoke_session(&session.token).is_ok());
         assert!(manager.validate_session(&session.token).is_err());
     }
@@ -413,7 +455,9 @@ mod tests {
     #[test]
     fn test_auth_manager_cleanup_sessions() {
         let manager = AuthManager::new(AuthConfig::default());
-        let session = manager.session_manager.create_session(Uuid::new_v4(), "test");
+        let session = manager
+            .session_manager
+            .create_session(Uuid::new_v4(), "test");
         // Directly expire the session
         if let Some(mut s) = manager.session_manager.sessions.get_mut(&session.token) {
             s.expires_at = 0;

@@ -20,7 +20,9 @@ impl StandardTokenizer {
                 continue;
             }
 
-            let is_punctuation = word.chars().all(|c| c.is_ascii_punctuation() || c.is_whitespace());
+            let is_punctuation = word
+                .chars()
+                .all(|c| c.is_ascii_punctuation() || c.is_whitespace());
 
             if is_punctuation && word.len() == 1 {
                 continue;

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ast::{BoolOperator, Query};
-use crate::analysis::tokenizer::StandardTokenizer;
 use crate::analysis::stemmer::PorterStemmer;
+use crate::analysis::tokenizer::StandardTokenizer;
 use crate::error::Result;
 use crate::error::SearchError;
 use crate::facet::FacetResult;
@@ -44,7 +44,11 @@ impl QueryExecutor {
             .into_iter()
             .filter(|(doc_id, score)| *score > 0.0 || self.doc_exists(*doc_id))
             .map(|(doc_id, score)| {
-                let stored = self.segment.stored_documents.get(&doc_id.to_string()).cloned();
+                let stored = self
+                    .segment
+                    .stored_documents
+                    .get(&doc_id.to_string())
+                    .cloned();
                 ScoredDocument {
                     doc_id,
                     score,
@@ -53,16 +57,27 @@ impl QueryExecutor {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         Ok(results)
     }
 
     fn doc_exists(&self, doc_id: u64) -> bool {
-        self.segment.stored_documents.contains_key(&doc_id.to_string())
+        self.segment
+            .stored_documents
+            .contains_key(&doc_id.to_string())
     }
 
-    pub fn execute_faceted(&self, query: &Query, facet_field: &str, limit: usize) -> Result<FacetResult> {
+    pub fn execute_faceted(
+        &self,
+        query: &Query,
+        facet_field: &str,
+        limit: usize,
+    ) -> Result<FacetResult> {
         let results = self.execute(query, usize::MAX)?;
         let mut counts: HashMap<String, usize> = HashMap::new();
 
@@ -85,7 +100,12 @@ impl QueryExecutor {
         })
     }
 
-    fn collect_scores(&self, query: &Query, scores: &mut HashMap<u64, f64>, boost: f64) -> Result<()> {
+    fn collect_scores(
+        &self,
+        query: &Query,
+        scores: &mut HashMap<u64, f64>,
+        boost: f64,
+    ) -> Result<()> {
         match query {
             Query::Term { field, value } => {
                 let fields: Vec<&str> = if let Some(f) = field {
@@ -96,12 +116,19 @@ impl QueryExecutor {
                 let normalized = normalize_term(value);
                 let stemmed = PorterStemmer::stem(&normalized);
                 for f in &fields {
-                    if let Some(postings) = self.segment.inverted_index.get(&(f.to_string(), stemmed.clone())) {
+                    if let Some(postings) = self
+                        .segment
+                        .inverted_index
+                        .get(&(f.to_string(), stemmed.clone()))
+                    {
                         let avg_field_len = self.segment.avg_field_length(f);
                         let total_docs = self.segment.doc_count;
                         for entry in postings {
                             let idf = BM25Scorer::idf(total_docs, postings.len() as u64);
-                            let field_len = self.segment.field_length_for_doc(f, &entry.doc_id.to_string()).unwrap_or(0);
+                            let field_len = self
+                                .segment
+                                .field_length_for_doc(f, &entry.doc_id.to_string())
+                                .unwrap_or(0);
                             let tf_score = self.scorer.tf_score(
                                 entry.term_frequency as f64,
                                 field_len as f64,
@@ -113,7 +140,11 @@ impl QueryExecutor {
                     }
                 }
             }
-            Query::Phrase { field, value, slop: _ } => {
+            Query::Phrase {
+                field,
+                value,
+                slop: _,
+            } => {
                 let normalized_value = normalize_term(value);
                 let stemmed_terms: Vec<String> = StandardTokenizer::tokenize(&normalized_value)
                     .into_iter()
@@ -134,7 +165,10 @@ impl QueryExecutor {
                     let mut phrase_matches: HashMap<u64, u32> = HashMap::new();
 
                     let first_term = &stemmed_terms[0];
-                    let first_postings = self.segment.inverted_index.get(&(f.to_string(), first_term.clone()));
+                    let first_postings = self
+                        .segment
+                        .inverted_index
+                        .get(&(f.to_string(), first_term.clone()));
 
                     if let Some(postings) = first_postings {
                         for entry in postings {
@@ -143,9 +177,13 @@ impl QueryExecutor {
 
                             let mut matched = true;
                             for (i, term) in stemmed_terms.iter().enumerate().skip(1) {
-                                let term_postings = self.segment.inverted_index.get(&(f.to_string(), term.clone()));
+                                let term_postings = self
+                                    .segment
+                                    .inverted_index
+                                    .get(&(f.to_string(), term.clone()));
                                 if let Some(tp) = term_postings {
-                                    if let Some(te) = tp.iter().find(|te| te.doc_id == entry.doc_id) {
+                                    if let Some(te) = tp.iter().find(|te| te.doc_id == entry.doc_id)
+                                    {
                                         positions_for_term.insert(i, te.positions.clone());
                                     } else {
                                         matched = false;
@@ -162,8 +200,10 @@ impl QueryExecutor {
                                     .filter_map(|i| positions_for_term.get(&i))
                                     .collect();
 
-                                if !pos_lists.is_empty() && Self::consecutive_positions(&pos_lists) {
-                                    let total_tf: u32 = pos_lists.iter().map(|p| p.len() as u32).sum();
+                                if !pos_lists.is_empty() && Self::consecutive_positions(&pos_lists)
+                                {
+                                    let total_tf: u32 =
+                                        pos_lists.iter().map(|p| p.len() as u32).sum();
                                     *phrase_matches.entry(entry.doc_id).or_insert(0) += total_tf;
                                 }
                             }
@@ -173,9 +213,14 @@ impl QueryExecutor {
                     let avg_field_len = self.segment.avg_field_length(f);
                     let total_docs = self.segment.doc_count;
                     for (doc_id, tf) in phrase_matches {
-                        let field_len = self.segment.field_length_for_doc(f, &doc_id.to_string()).unwrap_or(0);
+                        let field_len = self
+                            .segment
+                            .field_length_for_doc(f, &doc_id.to_string())
+                            .unwrap_or(0);
                         let idf = BM25Scorer::idf(total_docs, 1);
-                        let tf_score = self.scorer.tf_score(tf as f64, field_len as f64, avg_field_len);
+                        let tf_score =
+                            self.scorer
+                                .tf_score(tf as f64, field_len as f64, avg_field_len);
                         *scores.entry(doc_id).or_insert(0.0) += idf * tf_score * boost;
                     }
                 }
@@ -208,13 +253,18 @@ impl QueryExecutor {
                                     field_len as f64,
                                     avg_field_len,
                                 );
-                                *scores.entry(entry.doc_id).or_insert(0.0) += idf * tf_score * boost;
+                                *scores.entry(entry.doc_id).or_insert(0.0) +=
+                                    idf * tf_score * boost;
                             }
                         }
                     }
                 }
             }
-            Query::Fuzzy { field, value, max_distance } => {
+            Query::Fuzzy {
+                field,
+                value,
+                max_distance,
+            } => {
                 let fields: Vec<&str> = if let Some(f) = field {
                     vec![f.as_str()]
                 } else {
@@ -234,7 +284,9 @@ impl QueryExecutor {
                     let avg_field_len = self.segment.avg_field_length(f);
                     let total_docs = self.segment.doc_count;
                     for m in &matches {
-                        if let Some(postings) = self.segment.inverted_index.get(&(f.to_string(), m.clone())) {
+                        if let Some(postings) =
+                            self.segment.inverted_index.get(&(f.to_string(), m.clone()))
+                        {
                             for entry in postings {
                                 let idf = BM25Scorer::idf(total_docs, postings.len() as u64);
                                 let field_len = self
@@ -246,16 +298,24 @@ impl QueryExecutor {
                                     field_len as f64,
                                     avg_field_len,
                                 );
-                                *scores.entry(entry.doc_id).or_insert(0.0) += idf * tf_score * boost;
+                                *scores.entry(entry.doc_id).or_insert(0.0) +=
+                                    idf * tf_score * boost;
                             }
                         }
                     }
                 }
             }
-            Query::Range { field, lower, upper, inclusive } => {
+            Query::Range {
+                field,
+                lower,
+                upper,
+                inclusive,
+            } => {
                 if let Some(postings) = self.segment.field_values.get(field) {
                     for (doc_id_str, val) in postings {
-                        let doc_id: u64 = doc_id_str.parse().map_err(|e| SearchError::Internal(format!("invalid doc_id in field_values: {}", e)))?;
+                        let doc_id: u64 = doc_id_str.parse().map_err(|e| {
+                            SearchError::Internal(format!("invalid doc_id in field_values: {}", e))
+                        })?;
                         if Self::in_range(val, lower, upper, *inclusive) {
                             *scores.entry(doc_id).or_insert(0.0) += boost;
                         }
@@ -273,7 +333,10 @@ impl QueryExecutor {
                         let mut sub_scores = HashMap::new();
                         self.collect_scores(clause, &mut sub_scores, boost)?;
                         match clause {
-                            Query::Bool { operator: BoolOperator::Not, .. } => {
+                            Query::Bool {
+                                operator: BoolOperator::Not,
+                                ..
+                            } => {
                                 negative_scores.push(sub_scores);
                             }
                             _ => {
@@ -294,7 +357,8 @@ impl QueryExecutor {
                         result_set = result_set.difference(&excluded_keys).cloned().collect();
                     }
                     for doc_id in result_set {
-                        let total: f64 = positive_scores.iter().filter_map(|s| s.get(&doc_id)).sum();
+                        let total: f64 =
+                            positive_scores.iter().filter_map(|s| s.get(&doc_id)).sum();
                         scores.insert(doc_id, total);
                     }
                 }
@@ -315,7 +379,9 @@ impl QueryExecutor {
             },
             Query::MatchAll => {
                 for (doc_id_str, _doc) in &self.segment.stored_documents {
-                    let doc_id: u64 = doc_id_str.parse().map_err(|e| SearchError::Internal(format!("invalid doc_id in stored_documents: {}", e)))?;
+                    let doc_id: u64 = doc_id_str.parse().map_err(|e| {
+                        SearchError::Internal(format!("invalid doc_id in stored_documents: {}", e))
+                    })?;
                     scores.insert(doc_id, 1.0);
                 }
             }
@@ -343,7 +409,11 @@ impl QueryExecutor {
     }
 
     fn in_range(val: &str, lower: &str, upper: &str, inclusive: bool) -> bool {
-        if let (Ok(v), Ok(l), Ok(u)) = (val.parse::<f64>(), lower.parse::<f64>(), upper.parse::<f64>()) {
+        if let (Ok(v), Ok(l), Ok(u)) = (
+            val.parse::<f64>(),
+            lower.parse::<f64>(),
+            upper.parse::<f64>(),
+        ) {
             let below = if inclusive { v >= l } else { v > l };
             let above = if inclusive { v <= u } else { v < u };
             return below && above;

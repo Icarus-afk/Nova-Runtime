@@ -172,7 +172,10 @@ impl Middleware for RecorderMiddleware {
         req: &mut OperationRequest,
         next: &dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult,
     ) -> PipelineResult {
-        self.log.lock().unwrap().push(format!("enter_{}", self.name));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("enter_{}", self.name));
         let result = next(ctx, req);
         self.log.lock().unwrap().push(format!("exit_{}", self.name));
         result
@@ -265,10 +268,7 @@ async fn test_pipeline_rate_limiting() {
     let req2 = OperationRequest::new(OperationType::Get, OperationTarget::System);
     let resp2 = executor.execute(req2, ctx).await;
     assert!(!resp2.success, "second request should be rate limited");
-    assert_eq!(
-        resp2.error.as_ref().unwrap().code,
-        ErrorCode::RateLimited
-    );
+    assert_eq!(resp2.error.as_ref().unwrap().code, ErrorCode::RateLimited);
 }
 
 // ==================== e) Circuit breaker integration ====================
@@ -330,8 +330,7 @@ async fn test_concurrent_pipeline_execution() {
         assert!(
             resp.success,
             "concurrent operation {} failed: {:?}",
-            i,
-            resp.error
+            i, resp.error
         );
     }
 }

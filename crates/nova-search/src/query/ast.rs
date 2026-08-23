@@ -61,7 +61,11 @@ impl Query {
         }
     }
 
-    pub fn fuzzy(field: Option<impl Into<String>>, value: impl Into<String>, max_distance: u8) -> Self {
+    pub fn fuzzy(
+        field: Option<impl Into<String>>,
+        value: impl Into<String>,
+        max_distance: u8,
+    ) -> Self {
         Query::Fuzzy {
             field: field.map(|f| f.into()),
             value: value.into(),

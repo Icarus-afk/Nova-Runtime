@@ -1,17 +1,41 @@
 use serde::{Deserialize, Serialize};
 
-fn default_max_queues() -> usize { 1000 }
-fn default_max_messages_per_queue() -> usize { 10000 }
-fn default_max_message_size() -> usize { 262144 }
-fn default_default_visibility_timeout_secs() -> u32 { 30 }
-fn default_message_ttl_secs() -> u32 { 86400 }
-fn default_max_receive_count() -> u32 { 3 }
-fn default_scanner_interval_ms() -> u64 { 1000 }
-fn default_backpressure_threshold() -> f64 { 0.9 }
-fn default_dlq_max_entries() -> usize { 100000 }
-fn default_dlq_max_retries() -> u32 { 3 }
-fn default_enable_dlq() -> bool { true }
-fn default_enable_scanners() -> bool { true }
+fn default_max_queues() -> usize {
+    1000
+}
+fn default_max_messages_per_queue() -> usize {
+    10000
+}
+fn default_max_message_size() -> usize {
+    262144
+}
+fn default_default_visibility_timeout_secs() -> u32 {
+    30
+}
+fn default_message_ttl_secs() -> u32 {
+    86400
+}
+fn default_max_receive_count() -> u32 {
+    3
+}
+fn default_scanner_interval_ms() -> u64 {
+    1000
+}
+fn default_backpressure_threshold() -> f64 {
+    0.9
+}
+fn default_dlq_max_entries() -> usize {
+    100000
+}
+fn default_dlq_max_retries() -> u32 {
+    3
+}
+fn default_enable_dlq() -> bool {
+    true
+}
+fn default_enable_scanners() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueueConfig {

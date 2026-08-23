@@ -49,10 +49,7 @@ impl Middleware for EventPublishingMiddleware {
 }
 
 // Helper to create a subscription with a channel receiver
-fn make_subscription(
-    topic: &str,
-    capacity: usize,
-) -> (Subscription, channel::Receiver<Event>) {
+fn make_subscription(topic: &str, capacity: usize) -> (Subscription, channel::Receiver<Event>) {
     let (tx, rx) = crossbeam::channel::bounded(capacity);
     let sub = Subscription {
         id: Uuid::new_v4(),
@@ -80,7 +77,12 @@ fn make_subscription(
 
 #[tokio::test]
 async fn test_event_publish_subscribe_cycle() {
-    let bus = Arc::new(EventBus::new(4, OverflowPolicy::DropNewest, 1024 * 1024, 1000));
+    let bus = Arc::new(EventBus::new(
+        4,
+        OverflowPolicy::DropNewest,
+        1024 * 1024,
+        1000,
+    ));
 
     // Subscribe to our event topic
     let (sub, rx) = make_subscription("nova.executor.operation.completed", 16);
@@ -124,7 +126,12 @@ async fn test_event_publish_subscribe_cycle() {
 
 #[tokio::test]
 async fn test_multiple_subscribers_different_patterns() {
-    let bus = Arc::new(EventBus::new(4, OverflowPolicy::DropNewest, 1024 * 1024, 1000));
+    let bus = Arc::new(EventBus::new(
+        4,
+        OverflowPolicy::DropNewest,
+        1024 * 1024,
+        1000,
+    ));
 
     // Subscribe two subscribers with different patterns
     let (sub_exact, rx_exact) = make_subscription("nova.executor.operation.completed", 16);
@@ -160,14 +167,18 @@ async fn test_multiple_subscribers_different_patterns() {
     assert!(resp.success);
 
     // Exact-match subscriber should get the event
-    let event_exact = rx_exact.try_recv().expect("exact-match sub should receive event");
+    let event_exact = rx_exact
+        .try_recv()
+        .expect("exact-match sub should receive event");
     assert_eq!(
         event_exact.metadata.event_type.canonical,
         "nova.executor.operation.completed"
     );
 
     // Wildcard subscriber should also get the event
-    let event_wild = rx_wild.try_recv().expect("wildcard sub should receive event");
+    let event_wild = rx_wild
+        .try_recv()
+        .expect("wildcard sub should receive event");
     assert_eq!(
         event_wild.metadata.event_type.canonical,
         "nova.executor.operation.completed"

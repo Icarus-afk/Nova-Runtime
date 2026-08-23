@@ -24,7 +24,10 @@ impl StopWordsFilter {
         self.stop_words.contains(word)
     }
 
-    pub fn filter(&self, tokens: Vec<crate::analysis::tokenizer::Token>) -> Vec<crate::analysis::tokenizer::Token> {
+    pub fn filter(
+        &self,
+        tokens: Vec<crate::analysis::tokenizer::Token>,
+    ) -> Vec<crate::analysis::tokenizer::Token> {
         tokens
             .into_iter()
             .filter(|t| !self.is_stop_word(&t.term))

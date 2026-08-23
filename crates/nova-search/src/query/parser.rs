@@ -141,7 +141,9 @@ impl QueryParser {
             *pos += 1;
             let query = Self::parse_or(tokens, pos)?;
             if *pos >= tokens.len() || tokens[*pos] != ")" {
-                return Err(SearchError::InvalidQuery("missing closing parenthesis".into()));
+                return Err(SearchError::InvalidQuery(
+                    "missing closing parenthesis".into(),
+                ));
             }
             *pos += 1;
             return Ok(query);
@@ -168,17 +170,17 @@ impl QueryParser {
             if rest.starts_with('[') || rest.starts_with('{') {
                 return Self::parse_field_range(field.to_string(), rest, tokens, pos);
             }
-                if rest.is_empty() && *pos < tokens.len() {
-                    let next = &tokens[*pos];
-                    if next.starts_with('"') && next.ends_with('"') && next.len() >= 2 {
-                        *pos += 1;
-                        return Ok(Query::Phrase {
-                            field: Some(field.to_string()),
-                            value: next[1..next.len() - 1].to_string(),
-                            slop: 0,
-                        });
-                    }
+            if rest.is_empty() && *pos < tokens.len() {
+                let next = &tokens[*pos];
+                if next.starts_with('"') && next.ends_with('"') && next.len() >= 2 {
+                    *pos += 1;
+                    return Ok(Query::Phrase {
+                        field: Some(field.to_string()),
+                        value: next[1..next.len() - 1].to_string(),
+                        slop: 0,
+                    });
                 }
+            }
             return Self::parse_field_value(field.to_string(), rest);
         }
 
@@ -225,7 +227,12 @@ impl QueryParser {
         })
     }
 
-    fn parse_field_range(field: String, value_start: &str, tokens: &[String], pos: &mut usize) -> Result<Query> {
+    fn parse_field_range(
+        field: String,
+        value_start: &str,
+        tokens: &[String],
+        pos: &mut usize,
+    ) -> Result<Query> {
         let inclusive = value_start.starts_with('[');
         let mut lower = value_start[1..].to_string();
 
@@ -358,7 +365,10 @@ mod tests {
     fn test_parse_and() {
         let q = QueryParser::parse("hello world").unwrap();
         match q {
-            Query::Bool { operator: BoolOperator::And, .. } => {}
+            Query::Bool {
+                operator: BoolOperator::And,
+                ..
+            } => {}
             _ => panic!("expected Bool And"),
         }
     }
@@ -367,7 +377,10 @@ mod tests {
     fn test_parse_or() {
         let q = QueryParser::parse("hello OR world").unwrap();
         match q {
-            Query::Bool { operator: BoolOperator::Or, .. } => {}
+            Query::Bool {
+                operator: BoolOperator::Or,
+                ..
+            } => {}
             _ => panic!("expected Bool Or"),
         }
     }
@@ -376,7 +389,10 @@ mod tests {
     fn test_parse_not() {
         let q = QueryParser::parse("-hello").unwrap();
         match q {
-            Query::Bool { operator: BoolOperator::Not, .. } => {}
+            Query::Bool {
+                operator: BoolOperator::Not,
+                ..
+            } => {}
             _ => panic!("expected Bool Not"),
         }
     }
@@ -385,7 +401,10 @@ mod tests {
     fn test_parse_parens() {
         let q = QueryParser::parse("(hello world)").unwrap();
         match q {
-            Query::Bool { operator: BoolOperator::And, .. } => {}
+            Query::Bool {
+                operator: BoolOperator::And,
+                ..
+            } => {}
             _ => panic!("expected Bool And"),
         }
     }
@@ -394,7 +413,12 @@ mod tests {
     fn test_parse_range() {
         let q = QueryParser::parse("count:[1 TO 10]").unwrap();
         match q {
-            Query::Range { field, lower, upper, inclusive } => {
+            Query::Range {
+                field,
+                lower,
+                upper,
+                inclusive,
+            } => {
                 assert_eq!(field, "count");
                 assert_eq!(lower, "1");
                 assert_eq!(upper, "10");

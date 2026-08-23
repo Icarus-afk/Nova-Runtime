@@ -8,12 +8,8 @@ pub struct FacetResult {
 pub struct FacetCalculator;
 
 impl FacetCalculator {
-    pub fn calculate(
-        entries: Vec<(String, String)>,
-        facet_field: &str,
-    ) -> FacetResult {
-        let mut counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+    pub fn calculate(entries: Vec<(String, String)>, facet_field: &str) -> FacetResult {
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let total = entries.len();
 
         for (_doc_id, value) in entries.iter().filter(|(_, v)| !v.is_empty()) {
@@ -46,8 +42,23 @@ mod tests {
         let result = FacetCalculator::calculate(data, "category");
         assert_eq!(result.field, "category");
         assert_eq!(result.total_docs, 4);
-        assert!(result.entries.iter().any(|(v, c)| v == "fiction" && *c == 2));
-        assert!(result.entries.iter().any(|(v, c)| v == "non-fiction" && *c == 1));
-        assert!(result.entries.iter().any(|(v, c)| v == "science" && *c == 1));
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|(v, c)| v == "fiction" && *c == 2)
+        );
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|(v, c)| v == "non-fiction" && *c == 1)
+        );
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|(v, c)| v == "science" && *c == 1)
+        );
     }
 }

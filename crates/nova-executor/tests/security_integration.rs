@@ -46,8 +46,7 @@ async fn test_user_level_rate_limiting() {
         assert!(
             resp.success,
             "request {}/2 (within user burst) should succeed: {:?}",
-            i,
-            resp.error
+            i, resp.error
         );
     }
 
@@ -67,9 +66,9 @@ async fn test_user_level_rate_limiting() {
 #[test]
 fn test_circuit_breaker_state_transitions() {
     let cb = CircuitBreaker::new(
-        2,   // failure_threshold: open after 2 failures
-        1,   // success_threshold: close after 1 success in half-open
-        100, // half_open_timeout_ms
+        2,     // failure_threshold: open after 2 failures
+        1,     // success_threshold: close after 1 success in half-open
+        100,   // half_open_timeout_ms
         10000, // window_ms
     );
     let subsystem = SubsystemId::Storage;
@@ -102,8 +101,7 @@ fn test_circuit_breaker_state_transitions() {
     assert_eq!(cb.opens(), 1, "opens counter should be 1");
 
     // === Requests rejected while open ===
-    let result: Result<i32, CircuitError> =
-        cb.execute(&subsystem, || Ok::<_, RuntimeError>(42));
+    let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Ok::<_, RuntimeError>(42));
     assert!(
         matches!(result, Err(CircuitError::Open)),
         "requests should be rejected in Open state"
@@ -113,8 +111,7 @@ fn test_circuit_breaker_state_transitions() {
     // === Wait for half-open timeout (100ms), then succeed → close ===
     std::thread::sleep(Duration::from_millis(150));
 
-    let result: Result<i32, CircuitError> =
-        cb.execute(&subsystem, || Ok::<_, RuntimeError>(99));
+    let result: Result<i32, CircuitError> = cb.execute(&subsystem, || Ok::<_, RuntimeError>(99));
     assert!(result.is_ok(), "request should succeed after timeout");
     assert_eq!(result.unwrap(), 99);
 

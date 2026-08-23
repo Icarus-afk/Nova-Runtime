@@ -234,8 +234,8 @@ impl PorterStemmer {
 
     fn step_4(word: &str) -> String {
         let suffixes = [
-            "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent",
-            "ism", "ate", "iti", "ous", "ive", "ize",
+            "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent", "ism",
+            "ate", "iti", "ous", "ive", "ize",
         ];
 
         for suffix in &suffixes {

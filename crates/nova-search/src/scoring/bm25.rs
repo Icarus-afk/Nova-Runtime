@@ -17,7 +17,11 @@ impl BM25Scorer {
         for (field, lengths) in &segment.field_lengths {
             let total: u64 = lengths.values().sum();
             let count = lengths.len() as u64;
-            let avg = if count > 0 { total as f64 / count as f64 } else { 0.0 };
+            let avg = if count > 0 {
+                total as f64 / count as f64
+            } else {
+                0.0
+            };
             avg_field_lengths.insert(field.clone(), avg);
         }
 
@@ -51,11 +55,18 @@ impl BM25Scorer {
             return term_freq / (term_freq + self.k1);
         }
         let numerator = term_freq * (self.k1 + 1.0);
-        let denominator = term_freq + self.k1 * (1.0 - self.b + self.b * field_length / avg_field_length);
+        let denominator =
+            term_freq + self.k1 * (1.0 - self.b + self.b * field_length / avg_field_length);
         numerator / denominator
     }
 
-    pub fn score(&self, term_freq: f64, doc_freq: u64, field_length: f64, avg_field_length: f64) -> f64 {
+    pub fn score(
+        &self,
+        term_freq: f64,
+        doc_freq: u64,
+        field_length: f64,
+        avg_field_length: f64,
+    ) -> f64 {
         let idf = Self::idf(self.total_docs, doc_freq);
         let tf = self.tf_score(term_freq, field_length, avg_field_length);
         idf * tf
