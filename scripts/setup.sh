@@ -1,125 +1,106 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Nova Runtime — one-command setup
+# Usage: ./scripts/setup.sh [--release] [--config-only]
+#   --release     : build --release (slower, optimized, ~5 min) instead of debug (fast, ~1 min)
+#   --config-only : only (re)create novad.toml, skip builds
+#   --help        : show help
+
+RELEASE=0
+CONFIG_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --release) RELEASE=1 ;;
+    --config-only) CONFIG_ONLY=1 ;;
+    --help|-h) echo "Usage: $0 [--release] [--config-only]"; exit 0 ;;
+    *) echo "Unknown arg: $arg (try --help)"; exit 1 ;;
+  esac
+done
+
 echo "=== Nova Runtime Setup ==="
-
-# Check prerequisites
-command -v cargo >/dev/null 2>&1 || { echo "Error: Rust/Cargo not found. Install from https://rustup.rs"; exit 1; }
-command -v node >/dev/null 2>&1 || { echo "Error: Node.js not found. Install from https://nodejs.org"; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "Error: npm not found."; exit 1; }
-
-echo "✓ prerequisites found"
-
-# Build backend
+echo "  Mode: $([ $RELEASE -eq 1 ] && echo release || echo debug) $([ $CONFIG_ONLY -eq 1 ] && echo '(config only)' || echo '')"
 echo ""
-echo "--- Building backend (cargo build) ---"
-cargo build --release 2>&1 | tail -5
-echo "✓ backend build complete"
 
-# Install dashboard dependencies
+# Prerequisites
+need() { command -v "$1" >/dev/null 2>&1 || { echo "✗ $1 not found — $2"; exit 1; }; echo "✓ $1 $(command -v $1)"; }
+echo "--- Checking prerequisites ---"
+need cargo "Install from https://rustup.rs"
+need node "Install from https://nodejs.org (18+)"
+need npm "Install Node.js"
 echo ""
-echo "--- Installing dashboard dependencies ---"
-cd "$(dirname "$0")/../dashboard"
-npm install 2>&1 | tail -3
-echo "✓ dashboard dependencies installed"
 
-# Create default config in repo root if not exists
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-if [ ! -f "$ROOT_DIR/novad.toml" ]; then
-    echo ""
-    echo "--- Creating default novad.toml ---"
+
+# Config
+if [ ! -f "$ROOT_DIR/novad.toml" ] || [ $CONFIG_ONLY -eq 1 ]; then
+    echo "--- Creating novad.toml (dev defaults, 8 lines) ---"
     cat > "$ROOT_DIR/novad.toml" << 'TOML'
+# Nova Runtime — dev config (see docs/02-configuration.md for full reference)
+# All values have sensible defaults — you can run with *no* config file.
+# This file overrides defaults; delete any section to use defaults.
 [general]
 data_dir = "./data"
 
 [networking]
 listen_address = "127.0.0.1"
 listen_port = 8642
-tls_enabled = false
 
-[storage]
-wal_dir = "./data/wal"
-page_cache_size = 65536
-memtable_size = 67108864
-fsync_policy = { every_n_ms = 100 }
-
-[cache]
-max_size = 268435456
-default_ttl_secs = 3600
-eviction_policy = "Lru"
-backend_type = "HashMap"
-
-[auth.session]
-ttl_seconds = 86400
-max_active_sessions = 100
-cache_size = 100000
-
-[auth.internal]
-bcrypt_cost = 12
-enable_brute_force_detection = true
-
-[auth.internal.lockout]
-max_attempts = 5
-duration_secs = 900
-
-[auth.internal.mfa]
-issuer = "Nova Runtime"
-window = 1
-
-[auth.internal.password_policy]
-min_length = 8
-max_length = 128
-min_lowercase = 1
-min_uppercase = 1
-min_digits = 1
-min_special = 0
-
-[execution]
-max_concurrent_ops = 100
-pipeline_queue_depth = 10000
-worker_threads = 4
-default_operation_timeout_ms = 30000
-
-[blob]
-chunk_size = 4194304
-max_blob_size = 1073741824
-gc_interval_secs = 3600
-gc_grace_period_secs = 86400
-data_dir = "./data/blobs"
-chunk_nesting_depth = 2
-
-[search]
-default_limit = 20
-max_limit = 100
-
-[sql]
-max_batch_size = 100
-max_columns = 100
-
-[queue]
-max_queues = 100
-max_messages_per_queue = 10000
-max_message_size = 262144
-default_visibility_timeout_secs = 30
-message_ttl_secs = 604800
-enable_scanners = true
-
-[scheduler]
-time_wheel_tick_ms = 100
-time_wheel_slots = 360
-max_concurrent_jobs = 10
-enable_startup_recovery = true
-
-[event]
-ordering_shards = 4
-dlq_max_entries = 100
+# Uncomment for TLS:
+# tls_enabled = true
+# tls_cert_path = "./certs/cert.pem"
+# tls_key_path = "./certs/key.pem"
 TOML
-    echo "✓ default config created"
+    echo "✓ $ROOT_DIR/novad.toml"
+    echo "  tip: full production template: cargo run --bin novactl -- config default > novad.full.toml"
+else
+    echo "✓ novad.toml exists (skip — use --config-only to overwrite)"
+fi
+echo ""
+
+if [ $CONFIG_ONLY -eq 1 ]; then
+    echo "=== Setup complete (config only) ==="
+    exit 0
 fi
 
+# Backend
+echo "--- Building backend (cargo build) ---"
+if [ $RELEASE -eq 1 ]; then
+    cargo build --release --bin novad --bin novactl 2>&1 | tail -5
+    echo "✓ backend release build: target/release/novad and target/release/novactl"
+else
+    cargo build --bin novad --bin novactl 2>&1 | tail -5
+    echo "✓ backend debug build: target/debug/novad and target/debug/novactl (faster, use --release for prod)"
+fi
 echo ""
+
+# Dashboard deps (only if dashboard present)
+if [ -f "$ROOT_DIR/dashboard/package.json" ]; then
+    echo "--- Installing dashboard dependencies (npm install) ---"
+    cd "$ROOT_DIR/dashboard"
+    npm install 2>&1 | tail -3
+    echo "✓ dashboard deps"
+    echo ""
+fi
+
+# SDK deps
+if [ -f "$ROOT_DIR/sdk/package.json" ]; then
+    echo "--- Installing SDK dependencies ---"
+    cd "$ROOT_DIR/sdk"
+    npm install 2>&1 | tail -3
+    echo "✓ sdk deps"
+    echo ""
+fi
+
 echo "=== Setup complete ==="
 echo ""
-echo "Start the backend:  cargo run --bin novad"
-echo "Start the dashboard: cd dashboard && npm run dev"
-echo "Default login:      admin / admin123"
+echo "Next:"
+echo "  make dev        # or ./scripts/dev.sh — runs backend + dashboard (http://127.0.0.1:8642 + http://127.0.0.1:5173)"
+echo "  make build      # release build"
+echo "  make test       # tests"
+echo "  make docker     # Docker Compose"
+echo ""
+echo "Verify:  curl http://127.0.0.1:8642/health"
+echo "Login:   admin / admin123  (auto-created on first run)"
+echo "SDK:     NOVA_URL=http://127.0.0.1:8642/api/v1 npx tsx examples/quickstart.ts"
+echo ""
