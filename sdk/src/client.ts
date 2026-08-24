@@ -1,5 +1,7 @@
 import fetch from 'cross-fetch';
 import type { HealthStatus } from './types';
+
+declare const process: any;
 import { NovaError, Errors, createRetryPolicy, type RetryConfig, type RetryPolicy } from './errors';
 import { RuntimeClient } from './runtime';
 import { DatabaseClient } from './database';
@@ -133,10 +135,10 @@ export class FetchHttpClient implements HttpClient {
     private config: Required<NovaClientConfig>,
     private authProvider: AuthProvider
   ) {
-    const protocol = config.server.protocol || 'https';
-    const host = config.server.host || 'localhost';
-    const port = config.server.port || 8443;
-    const basePath = config.server.basePath || '/v1';
+    const protocol = config.server.protocol || 'http';
+    const host = config.server.host || '127.0.0.1';
+    const port = config.server.port || 8642;
+    const basePath = config.server.basePath || '/api/v1';
     this.baseUrl = `${protocol}://${host}:${port}${basePath}`;
     this.defaultHeaders = {
       'Content-Type': 'application/json',
@@ -423,9 +425,9 @@ export class NovaClient {
 }
 
 const DEFAULT_CONFIG: Required<NovaClientConfig> = {
-  server: { host: 'localhost', port: 8443, protocol: 'https', basePath: '/v1', timeout: 30000 },
+  server: { host: '127.0.0.1', port: 8642, protocol: 'http', basePath: '/api/v1', timeout: 30000 },
   auth: { type: 'none' },
-  transport: { maxConcurrent: 4, poolSize: 4, keepAliveMs: 30000, userAgent: '@novaruntime/sdk' },
+  transport: { maxConcurrent: 4, poolSize: 4, keepAliveMs: 30000, userAgent: '@novaruntime/sdk/0.1.0' },
   retry: { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 30000, retryableStatuses: [429, 500, 502, 503, 504], retryableErrors: [], strategy: 'exponential', jitterFactor: 0.2 },
 };
 
@@ -439,6 +441,26 @@ function deepMerge<T>(target: any, source: any): T {
     }
   }
   return result as T;
+}
+
+/** Create client from NOVA_URL env (e.g. http://127.0.0.1:8642/api/v1) + auth */
+export function fromEnv(auth: AuthConfig = { type: 'none' }): NovaClient {
+  const envUrl = (typeof (globalThis as any).process !== 'undefined' ? (globalThis as any).process?.env?.NOVA_URL : undefined)
+    || (typeof (globalThis as any).process !== 'undefined' ? (globalThis as any).process?.env?.NOVA_API_URL : undefined)
+    || 'http://127.0.0.1:8642/api/v1';
+  // Parse without URL type to avoid DOM lib requirement
+  const m = envUrl.match(/^(https?):\/\/([^\/:]+)(?::(\d+))?(\/.*)?$/);
+  if (m) {
+    const protocol = m[1] as any;
+    const host = m[2];
+    const port = m[3] ? parseInt(m[3], 10) : (protocol === 'https' ? 443 : 80);
+    const basePath = (m[4] || '/api/v1').replace(/\/$/, '') || '/api/v1';
+    return new NovaClient({
+      server: { host, port, protocol, basePath },
+      auth,
+    });
+  }
+  return new NovaClient({ server: { host: '127.0.0.1', port: 8642, protocol: 'http', basePath: '/api/v1' }, auth });
 }
 
 export function createClient(config: NovaClientConfig): NovaClient {

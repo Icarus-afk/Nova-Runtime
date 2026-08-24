@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Errors = exports.NovaError = void 0;
-exports.createRetryPolicy = createRetryPolicy;
+exports.createRetryPolicy = exports.Errors = exports.NovaError = void 0;
 class NovaError extends Error {
     constructor(params) {
         super(params.message);
@@ -97,4 +96,5 @@ function createRetryPolicy(config) {
         },
     };
 }
+exports.createRetryPolicy = createRetryPolicy;
 //# sourceMappingURL=errors.js.map

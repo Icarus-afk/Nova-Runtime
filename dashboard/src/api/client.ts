@@ -55,6 +55,14 @@ async function request<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
 
+  if (res.status === 401) {
+    // Token invalid/expired — clear and redirect to login
+    authToken = null;
+    localStorage.removeItem('nova_token');
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
+  }
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
@@ -62,6 +70,7 @@ async function request<T>(
       if (err.error) message = err.error;
       if (err.detail) message = err.detail;
       if (err.message) message = err.message;
+      if (err.title) message = err.title;
     } catch {}
     throw new ApiError(message, res.status);
   }
@@ -216,14 +225,14 @@ export const api = {
       }),
 
   deleteCacheKey: (key: string) =>
-    request<void>('DELETE', `/cache/${encodeURIComponent(key)}`)
-      .catch(() => {
-        console.warn('deleteCacheKey: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/cache/${encodeURIComponent(key)}`),
 
   clearCache: () =>
-    Promise.resolve(undefined),
+    request<void>('POST', '/cache/clear').catch(() => {
+      // server has no /clear endpoint — treat as noop but surface error in logs
+      console.warn('clearCache: endpoint not implemented');
+      return undefined;
+    }),
 
   getQueues: () =>
     request<{ data: any[]; pagination: any }>('GET', '/queues')
@@ -287,30 +296,14 @@ export const api = {
         error_count: 0,
         last_error: null,
         ttr_seconds: 0,
-      }))
-      .catch(() => {
-        console.warn('publishMessage: backend unavailable');
-        return {
-          id: '', body, state: 'ready' as const, priority: priority ?? 0,
-          enqueued_at: Date.now(), reserved_at: null, delayed_until: null,
-          attempts: 0, error_count: 0, last_error: null, ttr_seconds: 0,
-        };
-      }),
+      })),
 
   purgeQueue: (name: string) =>
     request<{ status: string }>('POST', `/queues/${name}/purge`)
-      .then(() => ({ purged_count: -1 }))
-      .catch(() => {
-        console.warn('purgeQueue: backend unavailable');
-        return { purged_count: 0 };
-      }),
+      .then(() => ({ purged_count: -1 })),
 
   deleteQueue: (name: string) =>
-    request<void>('DELETE', `/queues/${name}`)
-      .catch(() => {
-        console.warn('deleteQueue: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/queues/${name}`),
 
   getJobs: () =>
     request<{ data: any[]; pagination: any }>('GET', '/scheduler/jobs')
@@ -346,15 +339,7 @@ export const api = {
         id: '', job_id: jobId, status: 'running' as const,
         started_at: Date.now(), finished_at: null, duration_ms: null,
         result: null, error: null, retry_attempt: 0, trigger: 'manual' as const,
-      }))
-      .catch(() => {
-        console.warn('triggerJob: backend unavailable');
-        return {
-          id: '', job_id: jobId, status: 'running' as const,
-          started_at: Date.now(), finished_at: null, duration_ms: null,
-          result: null, error: null, retry_attempt: 0, trigger: 'manual' as const,
-        };
-      }),
+      })),
 
   pauseJob: (jobId: string) =>
     request<{ status: string }>('POST', `/scheduler/jobs/${jobId}/pause`)
@@ -363,16 +348,7 @@ export const api = {
         payload: {}, status: 'paused' as const, max_retries: 0, retry_delay_seconds: 0,
         timeout_seconds: 0, created_at: 0, updated_at: 0, last_run_at: null,
         next_run_at: null, tags: [], concurrency_policy: 'allow' as const,
-      }))
-      .catch(() => {
-        console.warn('pauseJob: backend unavailable');
-        return {
-          id: jobId, name: '', type: 'once' as const, schedule: null, handler: '',
-          payload: {}, status: 'paused' as const, max_retries: 0, retry_delay_seconds: 0,
-          timeout_seconds: 0, created_at: 0, updated_at: 0, last_run_at: null,
-          next_run_at: null, tags: [], concurrency_policy: 'allow' as const,
-        };
-      }),
+      })),
 
   resumeJob: (jobId: string) =>
     request<{ status: string }>('POST', `/scheduler/jobs/${jobId}/resume`)
@@ -381,23 +357,10 @@ export const api = {
         payload: {}, status: 'active' as const, max_retries: 0, retry_delay_seconds: 0,
         timeout_seconds: 0, created_at: 0, updated_at: 0, last_run_at: null,
         next_run_at: null, tags: [], concurrency_policy: 'allow' as const,
-      }))
-      .catch(() => {
-        console.warn('resumeJob: backend unavailable');
-        return {
-          id: jobId, name: '', type: 'once' as const, schedule: null, handler: '',
-          payload: {}, status: 'active' as const, max_retries: 0, retry_delay_seconds: 0,
-          timeout_seconds: 0, created_at: 0, updated_at: 0, last_run_at: null,
-          next_run_at: null, tags: [], concurrency_policy: 'allow' as const,
-        };
-      }),
+      })),
 
   deleteJob: (jobId: string) =>
-    request<void>('DELETE', `/scheduler/jobs/${jobId}`)
-      .catch(() => {
-        console.warn('deleteJob: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/scheduler/jobs/${jobId}`),
 
   createJob: (job: { name: string; type: string; schedule?: string; handler: string; payload?: Record<string, unknown>; max_retries?: number }) =>
     request<{ id: string; name: string; status: string }>('POST', '/scheduler/jobs', { name: job.name, type: job.type === 'scheduled' ? 'cron' : job.type, schedule: job.schedule ?? '*/5 * * * *', max_retries: job.max_retries ?? 0 })
@@ -418,28 +381,7 @@ export const api = {
         next_run_at: null,
         tags: [],
         concurrency_policy: 'allow' as const,
-      }))
-      .catch(() => {
-        console.warn('createJob: backend unavailable');
-        return {
-          id: '',
-          name: job.name,
-          type: job.type as import('../types').JobType,
-          schedule: job.schedule ?? null,
-          handler: job.handler,
-          payload: job.payload ?? {},
-          status: 'active' as const,
-          max_retries: job.max_retries ?? 0,
-          retry_delay_seconds: 0,
-          timeout_seconds: 0,
-          created_at: Date.now(),
-          updated_at: Date.now(),
-          last_run_at: null,
-          next_run_at: null,
-          tags: [],
-          concurrency_policy: 'allow' as const,
-        };
-      }),
+      })),
 
   getIndexes: () =>
     request<{ data: any[]; pagination: any }>('GET', '/search/indexes')
@@ -465,11 +407,7 @@ export const api = {
       }),
 
   deleteIndex: (name: string) =>
-    request<void>('DELETE', `/search/indexes/${name}`)
-      .catch(() => {
-        console.warn('deleteIndex: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/search/indexes/${name}`),
 
   getBuckets: () =>
     request<{ data: any[] }>('GET', '/blobs')
@@ -512,7 +450,7 @@ export const api = {
   uploadBlob: async (bucket: string, file: File): Promise<{ id: string; size_bytes: number; content_type: string }> => {
     const formData = new FormData();
     formData.append('file', file);
-    const url = `${baseUrl}/blobs`;
+    const url = `${baseUrl}/blobs?namespace=${encodeURIComponent(bucket)}`;
     const headers: Record<string, string> = {};
     if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
@@ -523,6 +461,13 @@ export const api = {
         headers,
         body: formData,
     });
+    if (res.status === 401) {
+        authToken = null;
+        localStorage.removeItem('nova_token');
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            window.location.href = '/login';
+        }
+    }
     if (!res.ok) {
         let message = `HTTP ${res.status}`;
         try {
@@ -545,11 +490,7 @@ export const api = {
       }),
 
   deleteUser: (id: string) =>
-    request<void>('DELETE', `/auth/users/${id}`)
-      .catch(() => {
-        console.warn('deleteUser: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/auth/users/${id}`),
 
   getApiKeys: () =>
     request<{ data: import('../types').ApiKey[] }>('GET', '/auth/api-keys')
@@ -561,22 +502,10 @@ export const api = {
 
   createApiKey: (name: string, role: string) =>
     request<import('../types').ApiKey & { full_key: string }>('POST', '/auth/api-keys', { name, permissions: [role], expires_at: null })
-      .then(r => ({ ...r, role: role as import('../types').UserRole }))
-      .catch(() => {
-        console.warn('createApiKey: backend unavailable');
-        return {
-          id: '', name, key_prefix: '', role: role as import('../types').UserRole,
-          permissions: [], created_at: Date.now(), last_used_at: null,
-          expires_at: null, enabled: true, full_key: '',
-        };
-      }),
+      .then(r => ({ ...r, role: role as import('../types').UserRole })),
 
   deleteApiKey: (id: string) =>
-    request<void>('DELETE', `/auth/api-keys/${id}`)
-      .catch(() => {
-        console.warn('deleteApiKey: backend unavailable');
-        return undefined;
-      }),
+    request<void>('DELETE', `/auth/api-keys/${id}`),
 
   getConfig: async () => {
     try {
