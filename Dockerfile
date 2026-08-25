@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.77-slim-bookworm AS backend-builder
+FROM rust:1.85-slim-bookworm AS backend-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
@@ -18,11 +18,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/target/release/novad /usr/local/bin/novad
+COPY --from=backend-builder /app/target/release/novactl /usr/local/bin/novactl
 COPY --from=dashboard-builder /app/dist /usr/share/novad/dashboard
 
 EXPOSE 8642
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8642/api/v1/health || exit 1
+    CMD curl -f http://localhost:8642/health || exit 1
 
+# If no config mounted, novad uses built-in defaults (data_dir=/var/lib/novad)
 ENTRYPOINT ["novad"]

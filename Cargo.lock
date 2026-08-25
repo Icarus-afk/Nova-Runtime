@@ -199,7 +199,7 @@ dependencies = [
  "http 0.2.12",
  "indexmap",
  "mime",
- "multer",
+ "multer 2.1.0",
  "num-traits",
  "once_cell",
  "pin-project-lite",
@@ -374,6 +374,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer 3.1.0",
  "percent-encoding",
  "pin-project-lite",
  "rustversion",
@@ -1771,6 +1772,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http 1.4.2",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1824,6 +1842,7 @@ dependencies = [
  "nova-sql",
  "nova-storage",
  "parking_lot",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
