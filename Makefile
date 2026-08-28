@@ -30,8 +30,8 @@ dev: ## Run backend (cargo run) + dashboard (vite) concurrently
 	@./scripts/dev.sh
 
 build: ## Release build of novad and novactl
-	cargo build --release --bin novad --bin novactl
-	@echo "✓ binaries at target/release/novad and target/release/novactl"
+	cargo build --release -p novad -p nova-cli
+	@echo "✓ binaries at target/release/novad and target/release/novactl (also 'nova' alias)"
 
 test: ## Run workspace tests + SDK tests
 	cargo test --workspace --exclude nova-sim

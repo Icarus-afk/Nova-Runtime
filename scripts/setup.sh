@@ -66,10 +66,10 @@ fi
 # Backend
 echo "--- Building backend (cargo build) ---"
 if [ $RELEASE -eq 1 ]; then
-    cargo build --release --bin novad --bin novactl 2>&1 | tail -5
-    echo "✓ backend release build: target/release/novad and target/release/novactl"
+    cargo build --release -p novad -p nova-cli 2>&1 | tail -5
+    echo "✓ backend release build: target/release/novad and target/release/novactl (also 'nova' alias)"
 else
-    cargo build --bin novad --bin novactl 2>&1 | tail -5
+    cargo build -p novad -p nova-cli 2>&1 | tail -5
     echo "✓ backend debug build: target/debug/novad and target/debug/novactl (faster, use --release for prod)"
 fi
 echo ""
