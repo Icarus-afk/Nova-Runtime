@@ -69,7 +69,8 @@ Generate full template: `novactl config default > novad.toml` or `make init-conf
 ## CLI & SDK
 
 ```bash
-novactl runtime status
+# CLI binary is `novactl` (alias `nova` also works for backward compat)
+novactl runtime status   # or: nova runtime status
 novactl sql query "SELECT * FROM demo"
 novactl cache get hello
 # SDK (defaults to http://127.0.0.1:8642/api/v1, reads NOVA_URL)
@@ -78,7 +79,15 @@ const nova = fromEnv({ type: 'token', token: process.env.NOVA_TOKEN! });
 await nova.db.query('SELECT 1');
 ```
 
+Binaries: `target/debug/novad` + `target/debug/novactl` (and `target/debug/nova` alias). Build via `make build` (`cargo build -p novad -p nova-cli`) or `cargo run --bin novactl -- --help`.
+
 See `docs/cli.md`, `docs/sdk.md`, `sdk/README.md`.
+
+## Troubleshooting
+
+- `error: no bin target named 'novactl'` → `git pull` then `make build` (fixed in `crates/nova-cli/Cargo.toml:6` — now provides both `novactl` and `nova` bins, `Makefile` uses `-p nova-cli`)
+- `port 8642 in use` → `lsof -i :8642` / change `novad.toml` `listen_port`
+- `401 Unauthorized` → `novactl` needs `--api-key` or `NOVA_API_KEY`; dashboard auto-redirects to `/login`
 
 ## Docs
 
