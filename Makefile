@@ -29,9 +29,9 @@ setup: ## One-time setup: deps + debug builds + config
 dev: ## Run backend (cargo run) + dashboard (vite) concurrently
 	@./scripts/dev.sh
 
-build: ## Release build of novad and novactl
-	cargo build --release -p novad -p nova-cli
-	@echo "✓ binaries at target/release/novad and target/release/novactl (also 'nova' alias)"
+build: ## Release build (all binaries)
+	cargo build --release
+	@echo "✓ binaries at target/release/novad and target/release/novactl"
 
 test: ## Run workspace tests + SDK tests
 	cargo test --workspace --exclude nova-sim

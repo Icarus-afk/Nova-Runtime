@@ -7,10 +7,6 @@ edition.workspace = true
 name = "novactl"
 path = "src/main.rs"
 
-[[bin]]
-name = "nova"
-path = "src/main.rs"
-
 [dependencies]
 nova-config = { path = "../nova-config" }
 nova-core = { path = "../nova-core" }

@@ -63,13 +63,13 @@ if [ $CONFIG_ONLY -eq 1 ]; then
     exit 0
 fi
 
-# Backend
+# Backend — one command, no bin names to remember
 echo "--- Building backend (cargo build) ---"
 if [ $RELEASE -eq 1 ]; then
-    cargo build --release -p novad -p nova-cli 2>&1 | tail -5
-    echo "✓ backend release build: target/release/novad and target/release/novactl (also 'nova' alias)"
+    cargo build --release 2>&1 | tail -5
+    echo "✓ backend release build: target/release/novad and target/release/novactl"
 else
-    cargo build -p novad -p nova-cli 2>&1 | tail -5
+    cargo build 2>&1 | tail -5
     echo "✓ backend debug build: target/debug/novad and target/debug/novactl (faster, use --release for prod)"
 fi
 echo ""
