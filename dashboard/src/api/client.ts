@@ -409,43 +409,79 @@ export const api = {
   deleteIndex: (name: string) =>
     request<void>('DELETE', `/search/indexes/${name}`),
 
-  getBuckets: () =>
-    request<{ data: any[] }>('GET', '/blobs')
-      .then(r => (r.data || []).map(b => ({
-        name: b.id ?? '',
-        file_count: 1,
-        total_size_bytes: b.size_bytes ?? 0,
-        created_at: b.created_at ?? 0,
-        last_modified_at: b.created_at ?? 0,
-        allowed_mime_types: [],
-        max_file_size_bytes: 0,
-        versioning_enabled: false,
-        public: false,
-      } as import('../types').BucketInfo)))
-      .catch(() => {
-        console.warn('getBuckets: backend unavailable, returning empty');
-        return [];
-      }),
+  getBuckets: async () => {
+    // Try to discover namespaces via stats, fallback to known ones
+    try {
+      // Fetch both default and taskboard and any via stats
+      const [statsRes, defaultRes, taskboardRes] = await Promise.all([
+        request<{ total_blobs: number; total_bytes: number; namespaces: number; total_chunks: number }>('GET', '/blobs/stats').catch(() => null),
+        request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'default' } as any).catch(() => ({ data: [] })),
+        request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'taskboard' } as any).catch(() => ({ data: [] })),
+      ]);
+      const buckets: import('../types').BucketInfo[] = [];
+      const addBucket = (name: string, data: any[]) => {
+        if (data.length > 0 || name === 'default') {
+          buckets.push({
+            name,
+            file_count: data.length,
+            total_size_bytes: data.reduce((s: number, b: any) => s + (b.size_bytes ?? 0), 0),
+            created_at: data[0]?.created_at ?? Date.now(),
+            last_modified_at: data[0]?.created_at ?? Date.now(),
+            allowed_mime_types: [],
+            max_file_size_bytes: 0,
+            versioning_enabled: false,
+            public: false,
+          } as import('../types').BucketInfo);
+        }
+      };
+      addBucket('default', (defaultRes as any)?.data || []);
+      addBucket('taskboard', (taskboardRes as any)?.data || []);
+      // If stats says more blobs than we found, also try without namespace (legacy)
+      if (buckets.length === 0 && statsRes && (statsRes as any).total_blobs > 0) {
+        const all = await request<{ data: any[] }>('GET', '/blobs').catch(() => ({ data: [] }));
+        if ((all as any).data?.length) {
+          addBucket('default', (all as any).data);
+        }
+      }
+      // Always ensure at least taskboard shows if it has data (even if stats namespaces wrong)
+      if (buckets.length === 0) {
+        // Last resort: try taskboard again
+        const tb = await request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'taskboard' } as any).catch(() => ({ data: [] }));
+        if ((tb as any).data?.length) addBucket('taskboard', (tb as any).data);
+      }
+      return buckets;
+    } catch {
+      console.warn('getBuckets: backend unavailable');
+      return [];
+    }
+  },
 
-  getBucketObjects: (bucket: string, page = 1) =>
-    request<{ data: any[] }>('GET', '/blobs')
-      .then(r => ({
-        data: (r.data || []).filter((b: any) => b.id === bucket).map((b: any) => ({
-            key: b.id ?? '',
-            size_bytes: b.size_bytes ?? 0,
-            mime_type: b.content_type ?? '',
-            etag: '',
-            created_at: b.created_at ?? 0,
-            last_modified_at: b.created_at ?? 0,
-            version_id: null,
-            metadata: {},
-        } as unknown as import('../types').BlobObject)),
-        pagination: { page, per_page: 20, total: (r.data || []).length, total_pages: 1 },
-      }))
-      .catch(() => {
-        console.warn('getBucketObjects: backend unavailable, returning empty');
-        return { data: [], pagination: { page, per_page: 20, total: 0, total_pages: 0 } };
-      }),
+  getBucketObjects: async (bucket: string, page = 1) => {
+    try {
+      const r = await request<{ data: any[]; pagination?: any }>('GET', '/blobs', undefined, { namespace: bucket, limit: 100 } as any);
+      const data = (r.data || []).map((b: any) => ({
+        key: b.id ?? b.key ?? '',
+        size_bytes: b.size_bytes ?? 0,
+        mime_type: b.content_type ?? b.mime_type ?? 'application/octet-stream',
+        etag: b.checksum_sha256 ?? b.etag ?? '',
+        created_at: b.created_at ?? 0,
+        last_modified_at: b.created_at ?? b.last_modified_at ?? 0,
+        version_id: null,
+        metadata: b.metadata || {},
+      } as unknown as import('../types').BlobObject));
+      // Simple pagination slice
+      const perPage = 20;
+      const start = (page - 1) * perPage;
+      const paged = data.slice(start, start + perPage);
+      return {
+        data: paged,
+        pagination: { page, per_page: perPage, total: data.length, total_pages: Math.max(1, Math.ceil(data.length / perPage)) },
+      };
+    } catch {
+      console.warn('getBucketObjects: backend unavailable');
+      return { data: [], pagination: { page, per_page: 20, total: 0, total_pages: 0 } };
+    }
+  },
 
   uploadBlob: async (bucket: string, file: File): Promise<{ id: string; size_bytes: number; content_type: string }> => {
     const formData = new FormData();
@@ -538,4 +574,106 @@ export const api = {
     const wsBase = baseUrl.replace(/^http/, 'ws');
     return `${wsBase}/logs/stream`;
   },
+
+  // === SQL / Database extended CRUD ===
+  executeSql: (query: string, params?: unknown[]) =>
+    request<{ affected_rows?: number; row_count?: number; execution_time_ms: number }>('POST', '/sql/execute', { query, params }),
+
+  getTableSchema: (table: string) =>
+    request<{ table: string; columns: Array<{ name: string; type: string; nullable: boolean; is_primary_key: boolean; unique: boolean }> }>('GET', `/sql/tables/${encodeURIComponent(table)}/schema`),
+
+  createTable: (name: string, columns: Array<{ name: string; type: string; nullable?: boolean; primaryKey?: boolean; unique?: boolean }>) => {
+    const cols = columns.map(c => `${c.name} ${c.type}${c.primaryKey ? ' PRIMARY KEY' : ''}${c.unique ? ' UNIQUE' : ''}${c.nullable === false ? ' NOT NULL' : ''}`).join(', ');
+    return request('POST', '/sql/execute', { query: `CREATE TABLE ${name} (${cols})` });
+  },
+
+  deleteTable: (name: string) =>
+    request('POST', '/sql/execute', { query: `DROP TABLE ${name}` }),
+
+  insertDocument: (table: string, data: Record<string, unknown>) => {
+    const keys = Object.keys(data);
+    const values = keys.map(k => {
+      const v = data[k];
+      if (typeof v === 'string') return `'${String(v).replace(/'/g, "''")}'`;
+      if (v === null || v === undefined) return 'NULL';
+      return String(v);
+    });
+    return request('POST', '/sql/execute', { query: `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${values.join(', ')})` });
+  },
+
+  deleteDocument: (table: string, where: string) =>
+    request('POST', '/sql/execute', { query: `DELETE FROM ${table} WHERE ${where}` }),
+
+  // === Cache extended ===
+  setCacheKey: (key: string, value: unknown, ttlSeconds?: number) =>
+    request('POST', `/cache/${encodeURIComponent(key)}`, { value, ttl_ms: ttlSeconds ? ttlSeconds * 1000 : undefined }),
+
+  getCacheEntry: (key: string) =>
+    request<{ key: string; value: unknown; ttl_remaining_ms: number | null }>('GET', `/cache/${encodeURIComponent(key)}`),
+
+  // === Queue extended ===
+  createQueue: (name: string, opts?: { durable?: boolean; max_length?: number; max_message_size?: number }) =>
+    request('POST', '/queues', { name, durable: opts?.durable, max_length: opts?.max_length, max_message_size: opts?.max_message_size }),
+
+  getQueue: (name: string) =>
+    request<{ name: string; queue_type: string; max_size: number; paused: boolean }>('GET', `/queues/${encodeURIComponent(name)}`),
+
+  ackMessage: (queue: string, id: string) =>
+    request('POST', `/queues/${encodeURIComponent(queue)}/messages/${encodeURIComponent(id)}/ack`),
+
+  // === Scheduler extended ===
+  getJob: (id: string) =>
+    request<import('../types').JobInfo>('GET', `/scheduler/jobs/${encodeURIComponent(id)}`),
+
+  updateJob: (id: string, data: Partial<{ name: string; schedule: string; enabled: boolean }>) =>
+    request('PUT', `/scheduler/jobs/${encodeURIComponent(id)}`, data),
+
+  // === Search extended ===
+  createIndex: (name: string, fields?: Array<{ name: string; type: string; analyzer?: string; boost?: number }>) =>
+    request('POST', '/search/indexes', { name, fields }),
+
+  addDocuments: (index: string, documents: unknown[]) =>
+    request('POST', `/search/indexes/${encodeURIComponent(index)}/documents`, { documents }),
+
+  getIndex: (name: string) =>
+    request<{ name: string; num_docs: number; num_terms: number; field_count: number }>('GET', `/search/indexes/${encodeURIComponent(name)}`),
+
+  getIndexStats: (name: string) =>
+    request<{ num_docs: number; num_terms: number; field_count: number }>('GET', `/search/indexes/${encodeURIComponent(name)}/stats`),
+
+  // === Blob extended ===
+  deleteBlob: (id: string) =>
+    request('DELETE', `/blobs/${encodeURIComponent(id)}`),
+
+  getBlobInfo: (id: string) =>
+    request<{ id: string; size_bytes: number; content_type: string; checksum_sha256: string; created_at: number; metadata: Record<string,string> }>('GET', `/blobs/${encodeURIComponent(id)}/info`),
+
+  getBlobStats: () =>
+    request<{ total_blobs: number; total_bytes: number; total_chunks: number; unique_chunks: number; active_uploads: number; namespaces: string[] }>('GET', '/blobs/stats'),
+
+  createBucket: (name: string) =>
+    request('POST', '/blobs', {}, { namespace: name } as any).catch(() => request('GET', '/blobs', undefined, { namespace: name })),
+
+  deleteBucket: (name: string) =>
+    request('DELETE', `/blobs`, undefined, { namespace: name } as any),
+
+  // === Auth extended ===
+  createUser: (data: { username: string; password: string; roles?: string[] }) =>
+    request<{ id: string; username: string; roles: string[] }>('POST', '/auth/users', data),
+
+  getUser: (id: string) =>
+    request<{ id: string; username: string; roles: string[]; created_at: number }>('GET', `/auth/users/${encodeURIComponent(id)}`),
+
+  updateUserRoles: (id: string, roles: string[]) =>
+    request('PUT', `/auth/users/${encodeURIComponent(id)}/roles`, { roles }),
+
+  changePassword: (id: string, current_password: string, new_password: string) =>
+    request('PUT', `/auth/users/${encodeURIComponent(id)}/password`, { current_password, new_password }),
+
+  // === Config ===
+  updateConfig: (patch: Record<string, unknown>) =>
+    request('PUT', '/admin/config', patch),
+
+  getAdminConfig: () =>
+    request<Record<string, unknown>>('GET', '/admin/config'),
 };

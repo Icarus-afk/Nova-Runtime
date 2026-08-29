@@ -3,6 +3,8 @@ import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import type { CollectionInfo, Document, QueryResult } from '../types';
 import DataTable from '../components/DataTable';
+import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -20,7 +22,35 @@ export default function DatabasePage() {
   const [queryError, setQueryError] = useState<string | null>(null);
   const [docPage, setDocPage] = useState(1);
 
-  const { data: collections, loading: collectionsLoading } = useApi<CollectionInfo[]>(
+  // Create table
+  const [showCreateTable, setShowCreateTable] = useState(false);
+  const [newTableName, setNewTableName] = useState('');
+  const [newColumns, setNewColumns] = useState<Array<{ name: string; type: string }>>([{ name: 'id', type: 'INTEGER PRIMARY KEY' }, { name: 'name', type: 'TEXT' }]);
+  const [createTableLoading, setCreateTableLoading] = useState(false);
+  const [createTableError, setCreateTableError] = useState<string | null>(null);
+
+  // Insert document
+  const [showInsert, setShowInsert] = useState(false);
+  const [insertJson, setInsertJson] = useState('{\n  "name": "alice",\n  "age": 30\n}');
+  const [insertError, setInsertError] = useState<string | null>(null);
+  const [insertLoading, setInsertLoading] = useState(false);
+
+  // Edit document
+  const [editingDoc, setEditingDoc] = useState<Document | null>(null);
+  const [editJson, setEditJson] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Delete confirmations
+  const [deleteTableName, setDeleteTableName] = useState<string | null>(null);
+  const [deleteDoc, setDeleteDoc] = useState<Document | null>(null);
+
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const { data: collections, loading: collectionsLoading, refetch: refetchCollections } = useApi<CollectionInfo[]>(
     () => api.getCollections(), []
   );
 
@@ -28,6 +58,11 @@ export default function DatabasePage() {
     () => selectedCollection ? api.getDocuments(selectedCollection, docPage) : Promise.resolve(null),
     [selectedCollection, docPage]
   );
+
+  const { data: schema } = useApi(
+    () => selectedCollection ? api.getTableSchema(selectedCollection).catch(() => null) : Promise.resolve(null),
+    [selectedCollection]
+  ) as any;
 
   const handleRunQuery = async () => {
     setQueryLoading(true);
@@ -46,20 +81,130 @@ export default function DatabasePage() {
     }
   };
 
-  const docColumns = [
-    { key: 'id', header: 'ID', width: '200px' },
-    { key: 'collection', header: 'Collection' },
-    { key: 'version', header: 'Version', width: '80px' },
-    { key: 'size_bytes', header: 'Size', width: '80px', render: (v: unknown) => formatBytes(v as number) },
-    { key: 'updated_at', header: 'Updated', width: '140px', render: (v: unknown) => new Date(v as number).toLocaleString() },
+  const handleCreateTable = async () => {
+    if (!newTableName.trim()) {
+      setCreateTableError('Table name required');
+      return;
+    }
+    setCreateTableLoading(true);
+    setCreateTableError(null);
+    try {
+      await api.createTable(newTableName.trim(), newColumns.filter(c => c.name.trim()).map(c => ({ name: c.name.trim(), type: c.type })));
+      showToast(`Table ${newTableName} created`, 'success');
+      setShowCreateTable(false);
+      setNewTableName('');
+      refetchCollections();
+    } catch (err: unknown) {
+      setCreateTableError(err instanceof Error ? err.message : 'Create failed');
+    } finally {
+      setCreateTableLoading(false);
+    }
+  };
+
+  const handleDeleteTable = async () => {
+    if (!deleteTableName) return;
+    try {
+      await api.deleteTable(deleteTableName);
+      showToast(`Table ${deleteTableName} deleted`, 'success');
+      if (selectedCollection === deleteTableName) setSelectedCollection(null);
+      setDeleteTableName(null);
+      refetchCollections();
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    }
+  };
+
+  const handleInsert = async () => {
+    if (!selectedCollection) return;
+    setInsertLoading(true);
+    setInsertError(null);
+    try {
+      const data = JSON.parse(insertJson);
+      await api.insertDocument(selectedCollection, data);
+      showToast('Document inserted', 'success');
+      setShowInsert(false);
+      refetchDocs();
+    } catch (err: unknown) {
+      setInsertError(err instanceof Error ? err.message : 'Insert failed - check JSON');
+    } finally {
+      setInsertLoading(false);
+    }
+  };
+
+  const handleEdit = async () => {
+    if (!editingDoc || !selectedCollection) return;
+    setEditError(null);
+    try {
+      const data = JSON.parse(editJson);
+      // Use UPDATE where id = original id (assume first column is id or use data.id)
+      const where = `id = '${editingDoc.id}'`;
+      const setClause = Object.entries(data).map(([k, v]) => `${k} = ${typeof v === 'string' ? `'${String(v).replace(/'/g, "''")}'` : String(v)}`).join(', ');
+      await api.executeSql(`UPDATE ${selectedCollection} SET ${setClause} WHERE ${where}`);
+      showToast('Document updated', 'success');
+      setEditingDoc(null);
+      refetchDocs();
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : 'Update failed');
+    }
+  };
+
+  const handleDeleteDoc = async () => {
+    if (!deleteDoc || !selectedCollection) return;
+    try {
+      await api.deleteDocument(selectedCollection, `id = '${deleteDoc.id}'`);
+      showToast('Document deleted', 'success');
+      setDeleteDoc(null);
+      refetchDocs();
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    }
+  };
+
+  const openEdit = (doc: Document) => {
+    setEditingDoc(doc);
+    setEditJson(JSON.stringify(doc.data, null, 2));
+    setEditError(null);
+  };
+
+  const docColumns: any[] = [
+    { key: 'id', header: 'ID', width: '160px' },
+    { key: 'collection', header: 'Collection', width: '120px' },
+    {
+      key: 'data',
+      header: 'Data',
+      render: (_: unknown, row: any) => {
+        const d = row.data as Record<string, unknown>;
+        const preview = JSON.stringify(d);
+        return <span title={preview} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{preview.length > 80 ? preview.slice(0, 80) + '...' : preview}</span>;
+      },
+    },
+    { key: 'updated_at', header: 'Updated', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
+    {
+      key: 'actions',
+      header: '',
+      width: '120px',
+      render: (_: unknown, row: any) => (
+        <div className="actions" onClick={e => e.stopPropagation()}>
+          <button className="btn btn-sm" onClick={() => openEdit(row as Document)}>Edit</button>
+          <button className="btn btn-sm btn-danger" onClick={() => setDeleteDoc(row as Document)}>Delete</button>
+        </div>
+      ),
+    },
   ];
 
   return (
     <div>
       <div className="page-header">
-        <h1>Database</h1>
-        <p>Browse collections, documents, and run SQL queries</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1>Database</h1>
+            <p>Browse collections, manage tables and documents, run SQL</p>
+          </div>
+          <button className="btn btn-primary" onClick={() => setShowCreateTable(true)}>+ Create Table</button>
+        </div>
       </div>
+
+      {toast && <div className={`callout ${toast.type === 'error' ? 'error' : 'info'}`} style={{ marginBottom: 12 }}>{toast.message}</div>}
 
       <div className="tabs">
         <button className={`tab ${activeTab === 'browse' ? 'active' : ''}`} onClick={() => setActiveTab('browse')}>Browse</button>
@@ -68,9 +213,17 @@ export default function DatabasePage() {
 
       <div className="flex gap-4">
         <div className="schema-sidebar">
-          <div className="section-title" style={{ marginBottom: 8 }}>Collections</div>
+          <div className="section-title" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
+            <span>Collections</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{collections?.length ?? 0}</span>
+          </div>
           {collectionsLoading ? (
             <div className="loading-spinner" style={{ padding: 16 }}>Loading</div>
+          ) : (collections || []).length === 0 ? (
+            <div className="empty-cta" style={{ padding: 16 }}>
+              <p>No tables yet</p>
+              <button className="btn btn-sm btn-primary" onClick={() => setShowCreateTable(true)}>Create Table</button>
+            </div>
           ) : (
             (collections || []).map((col) => (
               <div
@@ -78,10 +231,31 @@ export default function DatabasePage() {
                 className={`schema-item ${selectedCollection === col.name ? 'active' : ''}`}
                 onClick={() => setSelectedCollection(col.name)}
               >
-                <span>{col.name}</span>
+                <span style={{ flex: 1 }}>{col.name}</span>
                 <span className="schema-count">{col.document_count.toLocaleString()}</span>
+                <button
+                  className="btn btn-sm"
+                  style={{ marginLeft: 6, padding: '2px 6px', fontSize: 10 }}
+                  onClick={(e) => { e.stopPropagation(); setDeleteTableName(col.name); }}
+                  title="Delete table"
+                >
+                  ×
+                </button>
               </div>
             ))
+          )}
+          {schema && (
+            <div className="card" style={{ marginTop: 12, padding: 12 }}>
+              <div className="text-sm text-muted" style={{ fontWeight: 600, marginBottom: 6 }}>Schema: {selectedCollection}</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                {(schema as any).columns?.map((c: any) => (
+                  <div key={c.name} className="detail-row" style={{ padding: '4px 0' }}>
+                    <span>{c.name}</span>
+                    <span style={{ color: 'var(--accent)' }}>{c.type}</span>
+                  </div>
+                )) || <span className="text-muted">No schema</span>}
+              </div>
+            </div>
           )}
         </div>
 
@@ -100,6 +274,7 @@ export default function DatabasePage() {
                       )}
                     </div>
                     <div className="flex gap-2">
+                      <button className="btn btn-sm btn-primary" onClick={() => setShowInsert(true)}>+ Insert</button>
                       <button className="btn btn-sm" onClick={() => { setDocPage(1); refetchDocs(); }}>Refresh</button>
                     </div>
                   </div>
@@ -109,13 +284,13 @@ export default function DatabasePage() {
                     loading={docsLoading}
                     pagination={docsData?.pagination}
                     onPageChange={setDocPage}
-                    emptyMessage="No documents in this collection"
+                    emptyMessage="No documents — click Insert to add one"
                   />
                 </div>
               ) : (
                 <div className="card">
                   <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-                    Select a collection from the sidebar to browse documents
+                    Select a collection from the sidebar or create a table to browse documents
                   </div>
                 </div>
               )}
@@ -130,6 +305,7 @@ export default function DatabasePage() {
                     value={queryInput}
                     onChange={(e) => setQueryInput(e.target.value)}
                     rows={6}
+                    placeholder="SELECT * FROM users WHERE age > 21 LIMIT 10"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -137,6 +313,10 @@ export default function DatabasePage() {
                     {queryLoading ? 'Running...' : 'Run Query'}
                   </button>
                   <button className="btn" onClick={() => setQueryResult(null)}>Clear</button>
+                  <button className="btn" onClick={() => setQueryInput('SELECT * FROM users LIMIT 10')}>Example</button>
+                </div>
+                <div className="text-sm text-muted" style={{ marginTop: 8 }}>
+                  Supports: SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE. Use params like $1 via API.
                 </div>
               </div>
 
@@ -147,7 +327,7 @@ export default function DatabasePage() {
                   <div className="flex justify-between mb-2">
                     <span className="card-title">Results</span>
                     <span className="text-sm text-muted">
-                      {queryResult.execution_time_ms.toFixed(1)}ms · {queryResult.documents.length} rows
+                      {queryResult.execution_time_ms.toFixed(1)}ms · {queryResult.documents.length} rows {queryResult.warning && `· ${queryResult.warning}`}
                     </span>
                   </div>
                   {queryResult.documents.length > 0 ? (
@@ -160,6 +340,7 @@ export default function DatabasePage() {
                             {Object.keys(queryResult.documents[0].data).map((k) => (
                               <th key={k}>{k}</th>
                             ))}
+                            <th>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -170,6 +351,12 @@ export default function DatabasePage() {
                               {Object.keys(queryResult!.documents[0].data).map((k) => (
                                 <td key={k}>{String(doc.data[k] ?? '')}</td>
                               ))}
+                              <td>
+                                <div className="actions">
+                                  <button className="btn btn-sm" onClick={() => openEdit(doc)}>Edit</button>
+                                  <button className="btn btn-sm btn-danger" onClick={() => setDeleteDoc(doc)}>Delete</button>
+                                </div>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -184,6 +371,72 @@ export default function DatabasePage() {
           )}
         </div>
       </div>
+
+      {/* Create Table Modal */}
+      <Modal isOpen={showCreateTable} onClose={() => setShowCreateTable(false)} title="Create Table" size="lg"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn" onClick={() => setShowCreateTable(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleCreateTable} disabled={createTableLoading}>{createTableLoading ? 'Creating...' : 'Create'}</button>
+          </div>
+        }>
+        <div className="form-group">
+          <label>Table Name</label>
+          <input className="form-input" value={newTableName} onChange={e => setNewTableName(e.target.value)} placeholder="users" />
+        </div>
+        <div className="form-group">
+          <label>Columns</label>
+          {newColumns.map((col, idx) => (
+            <div key={idx} className="flex gap-2" style={{ marginBottom: 8 }}>
+              <input className="form-input" value={col.name} onChange={e => { const c=[...newColumns]; c[idx].name=e.target.value; setNewColumns(c); }} placeholder="column name" style={{ flex: 1 }} />
+              <select className="form-select" value={col.type} onChange={e => { const c=[...newColumns]; c[idx].type=e.target.value; setNewColumns(c); }} style={{ flex: 1 }}>
+                <option>TEXT</option>
+                <option>INTEGER PRIMARY KEY</option>
+                <option>INTEGER</option>
+                <option>FLOAT</option>
+                <option>BOOLEAN</option>
+              </select>
+              <button className="btn btn-sm btn-danger" onClick={() => setNewColumns(newColumns.filter((_, i) => i !== idx))}>×</button>
+            </div>
+          ))}
+          <button className="btn btn-sm" onClick={() => setNewColumns([...newColumns, { name: '', type: 'TEXT' }])}>+ Add Column</button>
+        </div>
+        {createTableError && <div className="callout error">{createTableError}</div>}
+        <div className="text-sm text-muted">Example: id INTEGER PRIMARY KEY, name TEXT, age INTEGER</div>
+      </Modal>
+
+      {/* Insert Modal */}
+      <Modal isOpen={showInsert} onClose={() => setShowInsert(false)} title={`Insert into ${selectedCollection}`} size="md"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn" onClick={() => setShowInsert(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleInsert} disabled={insertLoading}>{insertLoading ? 'Inserting...' : 'Insert'}</button>
+          </div>
+        }>
+        <div className="form-group">
+          <label>JSON Document</label>
+          <textarea className="form-input json-editor" value={insertJson} onChange={e => setInsertJson(e.target.value)} rows={6} />
+        </div>
+        {insertError && <div className="callout error">{insertError}</div>}
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal isOpen={!!editingDoc} onClose={() => setEditingDoc(null)} title="Edit Document" size="md"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn" onClick={() => setEditingDoc(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleEdit}>Save</button>
+          </div>
+        }>
+        <div className="form-group">
+          <label>JSON</label>
+          <textarea className="form-input json-editor" value={editJson} onChange={e => setEditJson(e.target.value)} rows={8} />
+        </div>
+        {editError && <div className="callout error">{editError}</div>}
+      </Modal>
+
+      <ConfirmDialog isOpen={!!deleteTableName} onClose={() => setDeleteTableName(null)} onConfirm={handleDeleteTable} title="Delete Table" message={`Delete table "${deleteTableName}" and all its data? This cannot be undone.`} confirmText="Delete" variant="danger" />
+      <ConfirmDialog isOpen={!!deleteDoc} onClose={() => setDeleteDoc(null)} onConfirm={handleDeleteDoc} title="Delete Document" message={`Delete document ${deleteDoc?.id}?`} confirmText="Delete" variant="danger" />
     </div>
   );
 }

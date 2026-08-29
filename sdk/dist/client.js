@@ -3,7 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createClient = exports.fromEnv = exports.NovaClient = exports.FetchHttpClient = void 0;
+exports.NovaClient = exports.FetchHttpClient = void 0;
+exports.fromEnv = fromEnv;
+exports.createClient = createClient;
 const cross_fetch_1 = __importDefault(require("cross-fetch"));
 const errors_1 = require("./errors");
 const runtime_1 = require("./runtime");
@@ -338,9 +340,7 @@ function fromEnv(auth = { type: 'none' }) {
     }
     return new NovaClient({ server: { host: '127.0.0.1', port: 8642, protocol: 'http', basePath: '/api/v1' }, auth });
 }
-exports.fromEnv = fromEnv;
 function createClient(config) {
     return new NovaClient(config);
 }
-exports.createClient = createClient;
 //# sourceMappingURL=client.js.map

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NovaBoard — 100% on Nova Runtime</title>
+<style>
+  :root { --accent:#4cc9f0; --bg:#0d0f17; --card:#151721; --card2:#1e2030; --border:#1e2030; --text:#e4e6f0; --muted:#969ab5; --success:#10b981; --warning:#f59e0b; --danger:#ef4444; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: -apple-system, Inter, Segoe UI, sans-serif; background: var(--bg); color: var(--text); line-height:1.5; }
+  header { padding:12px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:var(--card); position:sticky; top:0; z-index:10; }
+  header h1 { font-size:17px; font-weight:700; } header h1 span{ color:var(--accent); }
+  .subtitle { color:var(--muted); font-size:11px; }
+  .header-right { display:flex; gap:8px; align-items:center; }
+  .container { display:flex; max-width:1600px; margin:0 auto; gap:16px; padding:16px; }
+  .sidebar { width:260px; flex-shrink:0; }
+  .sidebar .card { margin-bottom:12px; }
+  .main { flex:1; min-width:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; }
+  .card-title { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:8px; font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+  .board { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+  .column { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px; min-height:420px; }
+  .column h2 { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+  .count { background:var(--border); padding:1px 6px; border-radius:99px; font-size:10px; }
+  .task-card { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:8px; cursor:grab; transition: border-color .15s; }
+  .task-card:hover { border-color:var(--accent); }
+  .task-card h3 { font-size:12px; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .task-card p { font-size:11px; color:var(--muted); margin-bottom:6px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .meta { font-size:10px; color:var(--muted); display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .badge { padding:1px 5px; border-radius:99px; font-size:9px; font-weight:600; text-transform:uppercase; }
+  .p0 { background:rgba(239,68,68,.15); color:#ef4444; } .p1 { background:rgba(245,158,11,.15); color:#f59e0b; } .p2 { background:rgba(59,130,246,.15); color:#3b82f6; }
+  .assignee { width:20px; height:20px; border-radius:50%; background:var(--accent); color:var(--bg); font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:700; }
+  .btn { padding:6px 10px; border-radius:6px; font-size:11px; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; }
+  .btn-primary { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+  .btn-danger { background:var(--danger); color:#fff; border-color:var(--danger); }
+  .btn-sm { padding:4px 8px; font-size:11px; }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .form-group { margin-bottom:10px; }
+  .form-group label { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.3px; color:var(--muted); margin-bottom:4px; font-weight:600; }
+  .form-input, .form-select { width:100%; padding:7px 9px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; }
+  .form-input:focus, .form-select:focus { outline:none; border-color:var(--accent); }
+  textarea.form-input { font-family: monospace; font-size:11px; }
+  .empty { text-align:center; padding:20px; color:var(--muted); font-size:11px; border:1px dashed var(--border); border-radius:6px; }
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:100; padding:16px; }
+  .modal { background:var(--card); border:1px solid var(--border); border-radius:8px; width:560px; max-width:90vw; max-height:90vh; display:flex; flex-direction:column; overflow:hidden; }
+  .modal-lg { width:720px; }
+  .modal-header { display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid var(--border); }
+  .modal-header h3 { font-size:13px; }
+  .modal-body { padding:16px; overflow-y:auto; }
+  .modal-footer { padding:12px 16px; border-top:1px solid var(--border); background:var(--card2); display:flex; justify-content:flex-end; gap:8px; }
+  .toast { position:fixed; top:16px; right:16px; background:var(--card); border:1px solid var(--border); border-left:3px solid var(--accent); padding:10px 14px; border-radius:6px; font-size:12px; z-index:200; max-width:360px; }
+  .toast.error { border-left-color:var(--danger); color:var(--danger); }
+  .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .filter-bar .form-input, .filter-bar .form-select { width:auto; min-width:120px; }
+  .project-item { padding:6px 8px; border-radius:6px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:12px; }
+  .project-item:hover { background:var(--card2); }
+  .project-item.active { background:var(--card2); color:var(--accent); }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .search-highlight { background:rgba(76,201,240,.15); color:var(--accent); padding:0 2px; border-radius:2px; }
+  @media(max-width:1000px){ .container{flex-direction:column} .sidebar{width:auto} .board{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1><span>Nova</span>Board</h1>
+    <div class="subtitle">Kanban 100% on Nova Runtime — <a href="http://127.0.0.1:5173" style="color:var(--accent)">Dashboard 5173</a> • <a href="http://127.0.0.1:8642/health" style="color:var(--accent)">health</a> • <a href="http://127.0.0.1:8642/graphql" style="color:var(--accent)">GraphQL</a></div>
+  </div>
+  <div class="header-right">
+    <input id="globalSearch" placeholder="Search tasks..." style="padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; width:200px;" onkeydown="if(event.key==='Enter') doSearch()">
+    <button class="btn btn-sm" onclick="doSearch()">Search</button>
+    <button class="btn btn-primary btn-sm" onclick="openCreateTask()">+ Task</button>
+    <button class="btn btn-sm" onclick="openCreateProject()">+ Project</button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="sidebar">
+    <div class="card">
+      <div class="card-title">Stats</div>
+      <div id="stats" style="font-size:11px; color:var(--muted);">Loading...</div>
+      <div style="margin-top:8px; display:flex; gap:6px;">
+        <button class="btn btn-sm" onclick="fetchBoard()">Refresh</button>
+        <button class="btn btn-sm" onclick="seedAgain()">Re-seed</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Projects <span id="projectCount" style="font-weight:400; color:var(--muted);"></span></div>
+      <div id="projectList"></div>
+      <div style="margin-top:8px;">
+        <input id="newProjectName" placeholder="New project name" style="width:100%; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:11px; margin-bottom:6px;" />
+        <button class="btn btn-sm" style="width:100%" onclick="createProject()">Create Project</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Filters</div>
+      <div class="form-group">
+        <label>Project</label>
+        <select id="filterProject" class="form-select" onchange="fetchBoard()"><option value="">All Projects</option></select>
+      </div>
+      <div class="form-group">
+        <label>Assignee</label>
+        <select id="filterAssignee" class="form-select" onchange="fetchBoard()"><option value="">All</option></select>
+      </div>
+      <div class="form-group">
+        <label>Priority</label>
+        <select id="filterPriority" class="form-select" onchange="fetchBoard()"><option value="">All</option><option value="0">P0 Critical</option><option value="1">P1 High</option><option value="2">P2 Normal</option></select>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="filterStatus" class="form-select" onchange="fetchBoard()"><option value="">All</option><option value="todo">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
+      </div>
+      <button class="btn btn-sm" style="width:100%" onclick="clearFilters()">Clear Filters</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Recent Activity (Queue)</div>
+      <div id="activity" style="font-size:11px; color:var(--muted);">Loading...</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div id="board" class="board"></div>
+    <div id="searchResults" style="display:none; margin-top:16px;" class="card">
+      <div class="card-title">Search Results</div>
+      <div id="searchList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Create/Edit Task Modal -->
+<div id="taskModal" style="display:none;" class="modal-overlay" onclick="if(event.target==this) closeTaskModal()">
+  <div class="modal">
+    <div class="modal-header"><h3 id="taskModalTitle">Create Task</h3><button class="btn btn-sm" onclick="closeTaskModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Title *</label><input id="taskTitle" class="form-input" placeholder="Design homepage" /></div>
+      <div class="form-group"><label>Description</label><textarea id="taskDesc" class="form-input" rows="3" placeholder="Details..."></textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label>Project</label><select id="taskProject" class="form-select"></select></div>
+        <div class="form-group"><label>Assignee</label><select id="taskAssignee" class="form-select"></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Priority</label><select id="taskPriority" class="form-select"><option value="0">P0 Critical</option><option value="1" selected>P1 High</option><option value="2">P2 Normal</option></select></div>
+        <div class="form-group"><label>Status</label><select id="taskStatus" class="form-select"><option value="todo">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select></div>
+      </div>
+      <div class="form-group"><label>Due Date</label><input id="taskDue" type="date" class="form-input" /></div>
+      <div id="taskModalError" style="color:var(--danger); font-size:11px; display:none; margin-top:8px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeTaskModal()">Cancel</button>
+      <button class="btn btn-primary" id="taskModalAction" onclick="saveTask()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Task Detail Modal -->
+<div id="detailModal" style="display:none;" class="modal-overlay" onclick="if(event.target==this) closeDetail()">
+  <div class="modal modal-lg">
+    <div class="modal-header"><h3 id="detailTitle">Task</h3><button class="btn btn-sm" onclick="closeDetail()">×</button></div>
+    <div class="modal-body" id="detailBody"></div>
+    <div class="modal-footer" style="display:flex; justify-content:space-between;">
+      <button class="btn btn-danger" onclick="deleteCurrentTask()">Delete</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" onclick="closeDetail()">Close</button>
+        <button class="btn btn-primary" onclick="openEditFromDetail()">Edit</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" style="display:none;"></div>
+
+<script>
+const API = '/api';
+let projects = [], tasks = [], users = [], currentTask = null, editingId = null;
+
+function toast(msg, type='info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast' + (type==='error' ? ' error' : '');
+  el.style.display = 'block';
+  el.style.borderLeftColor = type==='error' ? 'var(--danger)' : 'var(--accent)';
+  setTimeout(()=> el.style.display='none', 2500);
+}
+
+async function fetchBoard() {
+  const res = await fetch(API + '/board');
+  const j = await res.json();
+  projects = j.projects || [];
+  tasks = j.tasks || [];
+  users = j.users || [];
+  // Populate dropdowns
+  const projSel = document.getElementById('filterProject');
+  const taskProj = document.getElementById('taskProject');
+  const projOptions = '<option value="">All Projects</option>' + projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  const taskProjOptions = projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  projSel.innerHTML = projOptions;
+  taskProj.innerHTML = taskProjOptions;
+  // Users
+  const assigneeSel = document.getElementById('filterAssignee');
+  const taskAssignee = document.getElementById('taskAssignee');
+  const userOptions = '<option value="">All</option>' + users.map(u => `<option value="${u.username}">${u.username} (${u.role})</option>`).join('');
+  const taskUserOptions = users.map(u => `<option value="${u.username}">${u.username}</option>`).join('');
+  assigneeSel.innerHTML = userOptions;
+  taskAssignee.innerHTML = taskUserOptions || '<option>alice</option><option>bob</option><option>carol</option><option>dave</option><option>eve</option>';
+  // Fallback if no users from API
+  if (!users.length) {
+    const fallback = ['alice','bob','carol','dave','eve'];
+    assigneeSel.innerHTML = '<option value="">All</option>' + fallback.map(u => `<option value="${u}">${u}</option>`).join('');
+    taskAssignee.innerHTML = fallback.map(u => `<option value="${u}">${u}</option>`).join('');
+  }
+  document.getElementById('projectList').innerHTML = projects.map(p => `
+    <div class="project-item" onclick="filterByProject(${p.id})">
+      <span><span class="dot" style="background:${p.color}"></span>${p.name}</span>
+      <span style="font-size:10px; color:var(--muted);">${tasks.filter(t=>t.project_id==p.id).length}</span>
+    </div>
+  `).join('') || '<div class="empty">No projects</div>';
+  document.getElementById('projectCount').textContent = `(${projects.length})`;
+  document.getElementById('stats').textContent = `${projects.length} projects • ${tasks.length} tasks • ${users.length || 5} users`;
+  // Apply filters
+  render();
+  fetchActivity();
+}
+
+function getFilteredTasks() {
+  const fp = document.getElementById('filterProject').value;
+  const fa = document.getElementById('filterAssignee').value;
+  const fpri = document.getElementById('filterPriority').value;
+  const fs = document.getElementById('filterStatus').value;
+  return tasks.filter(t => {
+    if (fp && String(t.project_id) !== fp) return false;
+    if (fa && t.assignee !== fa) return false;
+    if (fpri !== '' && String(t.priority) !== fpri) return false;
+    if (fs && t.status !== fs) return false;
+    return true;
+  });
+}
+
+function render() {
+  const filtered = getFilteredTasks();
+  const cols = { todo: [], in_progress: [], done: [] };
+  filtered.forEach(t => (cols[t.status] || cols.todo).push(t));
+  const titles = { todo: 'To Do', in_progress: 'In Progress', done: 'Done' };
+  const board = document.getElementById('board');
+  board.innerHTML = Object.entries(cols).map(([status, list]) => `
+    <div class="column" data-status="${status}" ondragover="event.preventDefault()" ondrop="drop(event,'${status}')">
+      <h2>${titles[status]} <span class="count">${list.length}</span></h2>
+      ${list.length ? list.map(t => {
+        const proj = projects.find(p=>p.id==t.project_id);
+        const dueColor = t.due_at && new Date(t.due_at) < new Date() && t.status !== 'done' ? 'color:var(--danger)' : '';
+        return `
+        <div class="task-card" draggable="true" ondragstart="drag(event,${t.id})" onclick="openDetail(${t.id})">
+          <h3>${escapeHtml(t.title)}</h3>
+          <p>${escapeHtml(t.description || '')}</p>
+          <div class="meta">
+            <span class="badge ${t.priority==0?'p0':t.priority==1?'p1':'p2'}">P${t.priority}</span>
+            <span>${proj ? proj.name : ''}</span>
+            <span class="assignee" title="${t.assignee}">${(t.assignee||'')[0]?.toUpperCase()||'?'}</span>
+            <span style="${dueColor}">${t.due_at||''}</span>
+          </div>
+        </div>`;
+      }).join('') : `<div class="empty">No tasks — drop here or <a href="#" onclick="openCreateTask(); return false;" style="color:var(--accent)">create</a></div>`}
+    </div>
+  `).join('');
+}
+
+function clearFilters(){ document.getElementById('filterProject').value=''; document.getElementById('filterAssignee').value=''; document.getElementById('filterPriority').value=''; document.getElementById('filterStatus').value=''; render(); }
+function filterByProject(id){ document.getElementById('filterProject').value=id; render(); }
+
+let dragId = null;
+function drag(e, id){ dragId=id; e.dataTransfer.effectAllowed='move'; }
+async function drop(e, status){
+  e.preventDefault();
+  if(dragId==null) return;
+  await fetch(API+'/tasks/'+dragId+'/move',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  dragId=null; fetchBoard();
+}
+
+function openCreateTask(){
+  editingId=null;
+  document.getElementById('taskModalTitle').textContent='Create Task';
+  document.getElementById('taskModalAction').textContent='Create';
+  document.getElementById('taskTitle').value=''; document.getElementById('taskDesc').value='';
+  document.getElementById('taskDue').value=''; document.getElementById('taskModalError').style.display='none';
+  document.getElementById('taskModal').style.display='flex';
+}
+function openEditFromDetail(){
+  if(!currentTask) return;
+  closeDetail();
+  editingId=currentTask.id;
+  document.getElementById('taskModalTitle').textContent='Edit Task';
+  document.getElementById('taskModalAction').textContent='Save';
+  document.getElementById('taskTitle').value=currentTask.title;
+  document.getElementById('taskDesc').value=currentTask.description||'';
+  document.getElementById('taskProject').value=currentTask.project_id;
+  document.getElementById('taskAssignee').value=currentTask.assignee;
+  document.getElementById('taskPriority').value=currentTask.priority;
+  document.getElementById('taskStatus').value=currentTask.status;
+  document.getElementById('taskDue').value=currentTask.due_at||'';
+  document.getElementById('taskModal').style.display='flex';
+}
+function closeTaskModal(){ document.getElementById('taskModal').style.display='none'; editingId=null; }
+
+async function saveTask(){
+  const title=document.getElementById('taskTitle').value.trim();
+  if(!title){ document.getElementById('taskModalError').textContent='Title required'; document.getElementById('taskModalError').style.display='block'; return; }
+  const body={
+    title, description: document.getElementById('taskDesc').value,
+    project_id: parseInt(document.getElementById('taskProject').value,10),
+    assignee: document.getElementById('taskAssignee').value,
+    priority: parseInt(document.getElementById('taskPriority').value,10),
+    status: document.getElementById('taskStatus').value,
+    due_at: document.getElementById('taskDue').value || '2026-09-30'
+  };
+  try{
+    if(editingId){
+      await fetch(API+'/tasks/'+editingId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      toast('Task updated');
+    } else {
+      await fetch(API+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      toast('Task created');
+    }
+    closeTaskModal(); fetchBoard();
+  } catch(e){ document.getElementById('taskModalError').textContent=e.message; document.getElementById('taskModalError').style.display='block'; }
+}
+
+async function openDetail(id){
+  const task=tasks.find(t=>t.id==id);
+  if(!task) return;
+  currentTask=task;
+  const res=await fetch(API+'/tasks/'+id).then(r=>r.json()).catch(()=>({task,comments:[]}));
+  const comments=res.comments||[];
+  document.getElementById('detailTitle').textContent=task.title;
+  document.getElementById('detailBody').innerHTML=`
+    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">#${task.id} • ${projects.find(p=>p.id==task.project_id)?.name||''} • <span class="badge ${task.priority==0?'p0':task.priority==1?'p1':'p2'}">P${task.priority}</span> • ${task.status} • due ${task.due_at||'-'}</div>
+    <p style="font-size:13px; margin-bottom:12px;">${escapeHtml(task.description||'No description')}</p>
+    <div class="form-row" style="margin-bottom:12px;">
+      <div><strong style="font-size:11px; color:var(--muted)">Assignee</strong><div>${task.assignee}</div></div>
+      <div><strong style="font-size:11px; color:var(--muted)">Created</strong><div>${task.created_at||'-'}</div></div>
+    </div>
+    <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+      <h4 style="font-size:11px; text-transform:uppercase; color:var(--muted); margin-bottom:8px;">Comments (${comments.length})</h4>
+      ${comments.map(c=>`<div style="background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:8px; margin-bottom:6px;"><div style="font-size:11px; font-weight:600;">${escapeHtml(c.author)}</div><div style="font-size:12px;">${escapeHtml(c.body)}</div><div style="font-size:10px; color:var(--muted);">${c.created_at}</div></div>`).join('') || '<div class="empty">No comments</div>'}
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="commentBody" placeholder="Add a comment..." style="flex:1; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px;" />
+        <button class="btn btn-sm btn-primary" onclick="addComment(${task.id})">Post</button>
+      </div>
+    </div>
+    <div style="margin-top:12px; display:flex; gap:8px;">
+      <select id="detailStatus" class="form-select" style="width:auto;"><option value="todo" ${task.status=='todo'?'selected':''}>To Do</option><option value="in_progress" ${task.status=='in_progress'?'selected':''}>In Progress</option><option value="done" ${task.status=='done'?'selected':''}>Done</option></select>
+      <button class="btn btn-sm" onclick="moveDetail()">Move</button>
+    </div>
+  `;
+  document.getElementById('detailModal').style.display='flex';
+}
+function closeDetail(){ document.getElementById('detailModal').style.display='none'; currentTask=null; }
+async function moveDetail(){
+  const status=document.getElementById('detailStatus').value;
+  await fetch(API+'/tasks/'+currentTask.id+'/move',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  closeDetail(); fetchBoard();
+}
+async function deleteCurrentTask(){
+  if(!currentTask) return;
+  if(!confirm(`Delete "${currentTask.title}"?`)) return;
+  await fetch(API+'/tasks/'+currentTask.id,{method:'DELETE'});
+  closeDetail(); fetchBoard(); toast('Task deleted');
+}
+async function addComment(taskId){
+  const body=document.getElementById('commentBody').value.trim();
+  if(!body) return;
+  await fetch(API+'/tasks/'+taskId+'/comments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({author:'alice', body})});
+  openDetail(taskId); // reload
+}
+
+async function createProject(){
+  const name=document.getElementById('newProjectName').value.trim();
+  if(!name) return;
+  await fetch(API+'/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, color:'#4cc9f0', description:''})});
+  document.getElementById('newProjectName').value=''; fetchBoard(); toast('Project created');
+}
+async function doSearch(){
+  const q=document.getElementById('globalSearch').value.trim();
+  if(!q){ document.getElementById('searchResults').style.display='none'; render(); return; }
+  const res=await fetch(API+'/search?q='+encodeURIComponent(q)).then(r=>r.json()).catch(()=>({hits:[]}));
+  const hits=res.hits||[];
+  document.getElementById('searchResults').style.display='block';
+  document.getElementById('searchList').innerHTML = hits.length ? hits.map(h=>`
+    <div style="padding:8px; border-bottom:1px solid var(--border); cursor:pointer;" onclick="openDetail(${h.id})">
+      <div style="font-size:12px; font-weight:600;">${escapeHtml(h.id)} <span style="color:var(--muted); font-weight:400;">score ${h.score?.toFixed(2)||''}</span></div>
+      <div style="font-size:11px; color:var(--muted);">${escapeHtml(JSON.stringify(h.fields||h.source||''))}</div>
+    </div>
+  `).join('') : '<div class="empty">No results</div>';
+}
+async function fetchActivity(){
+  try{
+    const q=await fetch(API+'/queue').then(r=>r.json()).catch(()=>({data:[]}));
+    const list=(q.data||[]).slice(0,3).map(q=>`<div style="padding:4px 0; border-bottom:1px solid var(--border); font-size:11px;">${q.name}: ${q.message_count} msgs</div>`).join('') || '<div style="font-size:11px; color:var(--muted)">No queue activity</div>';
+    document.getElementById('activity').innerHTML=list;
+  } catch{ document.getElementById('activity').textContent='—'; }
+}
+async function seedAgain(){
+  if(!confirm('Re-seed demo data? This will re-insert tasks.')) return;
+  await fetch('/api/board'); // ensure auth
+  toast('Re-seed via: cd examples/taskboard && npm run seed');
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+fetchBoard();
+setInterval(fetchBoard, 7000);
+</script>
+</body>
+</html>

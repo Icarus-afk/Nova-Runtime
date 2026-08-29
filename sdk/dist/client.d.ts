@@ -111,4 +111,6 @@ export declare class NovaClient {
     private resolveConfig;
     private createAuthProvider;
 }
+/** Create client from NOVA_URL env (e.g. http://127.0.0.1:8642/api/v1) + auth */
+export declare function fromEnv(auth?: AuthConfig): NovaClient;
 export declare function createClient(config: NovaClientConfig): NovaClient;
