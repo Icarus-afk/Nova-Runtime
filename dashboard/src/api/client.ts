@@ -101,6 +101,8 @@ export const api = {
 
       const mem = (data.memory as Record<string, unknown>) || {};
       const disk = (data.disk as Record<string, unknown>) || {};
+      const cpu = (data.cpu as Record<string, unknown>) || {};
+      const network = (data.network as Record<string, unknown>) || {};
       const rawSubsystems = (data.subsystems as Record<string, unknown>) || {};
 
       const subsystems: import('../types').SubsystemStatus[] = Object.entries(rawSubsystems).map(([name, info]) => {
@@ -119,21 +121,44 @@ export const api = {
         status: (data.status as import('../types').HealthStatus) || 'degraded',
         uptime_seconds: (data.uptime_secs as number) || 0,
         version: (data.version as string) || '',
-        cpu: { usage_percent: 0, load_avg_1m: 0, load_avg_5m: 0, load_avg_15m: 0, cores: 0, temperature_celsius: null },
+        cpu: {
+          usage_percent: (cpu.usage_percent as number) ?? 0,
+          load_avg_1m: (cpu.load_avg_1m as number) ?? 0,
+          load_avg_5m: (cpu.load_avg_5m as number) ?? 0,
+          load_avg_15m: (cpu.load_avg_15m as number) ?? 0,
+          cores: (cpu.cores as number) ?? 0,
+          temperature_celsius: (cpu.temperature_celsius as number | null) ?? null,
+        },
         memory: {
           total_bytes: (mem.total_bytes as number) || 0,
           used_bytes: (mem.used_bytes as number) || 0,
-          resident_bytes: 0, allocated_bytes: (mem.used_bytes as number) || 0,
-          cache_bytes: 0, swap_used_bytes: 0, swap_total_bytes: 0,
+          resident_bytes: (mem.resident_bytes as number) ?? (mem.used_bytes as number) ?? 0,
+          allocated_bytes: (mem.allocated_bytes as number) ?? (mem.used_bytes as number) ?? 0,
+          cache_bytes: (mem.cache_bytes as number) ?? 0,
+          swap_used_bytes: (mem.swap_used_bytes as number) ?? 0,
+          swap_total_bytes: (mem.swap_total_bytes as number) ?? 0,
         },
         disk: {
-          data_path: '', total_bytes: (disk.total_bytes as number) || 0,
+          data_path: (disk.data_path as string) || '',
+          total_bytes: (disk.total_bytes as number) || 0,
           used_bytes: (disk.used_bytes as number) || 0,
           free_bytes: (disk.free_bytes as number) || 0,
-          fs_type: '', read_ops_per_sec: 0, write_ops_per_sec: 0,
-          read_bytes_per_sec: 0, write_bytes_per_sec: 0, io_wait_percent: 0,
+          fs_type: (disk.fs_type as string) || '',
+          read_ops_per_sec: (disk.read_ops_per_sec as number) ?? 0,
+          write_ops_per_sec: (disk.write_ops_per_sec as number) ?? 0,
+          read_bytes_per_sec: (disk.read_bytes_per_sec as number) ?? 0,
+          write_bytes_per_sec: (disk.write_bytes_per_sec as number) ?? 0,
+          io_wait_percent: (disk.io_wait_percent as number) ?? 0,
         },
-        network: { rx_bytes_per_sec: 0, tx_bytes_per_sec: 0, rx_packets_per_sec: 0, tx_packets_per_sec: 0, connections_active: 0, connection_errors: 0, tcp_retransmit_percent: 0 },
+        network: {
+          rx_bytes_per_sec: (network.rx_bytes_per_sec as number) ?? 0,
+          tx_bytes_per_sec: (network.tx_bytes_per_sec as number) ?? 0,
+          rx_packets_per_sec: (network.rx_packets_per_sec as number) ?? 0,
+          tx_packets_per_sec: (network.tx_packets_per_sec as number) ?? 0,
+          connections_active: (network.connections_active as number) ?? (network.request_rate as number) ?? 0,
+          connection_errors: (network.connection_errors as number) ?? 0,
+          tcp_retransmit_percent: (network.tcp_retransmit_percent as number) ?? 0,
+        },
         subsystems,
         last_checked: Date.now(),
       } as import('../types').SystemHealth;

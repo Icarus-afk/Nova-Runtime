@@ -90,9 +90,9 @@ export default function DashboardPage() {
           loading={loading}
         />
         <MetricCard
-          title="Active Connections"
-          value={health?.network.connections_active ?? '-'}
-          color="success" loading={loading}
+          title="Active Requests"
+          value={health ? (health.network.connections_active === 0 ? '0 (idle)' : health.network.connections_active) : '-'}
+          color={health && health.network.connections_active > 0 ? 'success' : 'info'} loading={loading}
         />
       </div>
 

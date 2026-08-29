@@ -94,13 +94,25 @@ fi
 
 echo "=== Setup complete ==="
 echo ""
+echo "Binaries built:"
+if [ $RELEASE -eq 1 ]; then
+    echo "  target/release/novad    — daemon (./target/release/novad --help)"
+    echo "  target/release/novactl  — CLI    (./target/release/novactl --help)"
+else
+    echo "  target/debug/novad    — daemon (cargo run --bin novad -- --help)"
+    echo "  target/debug/novactl  — CLI    (cargo run --bin novactl -- --help)"
+fi
+echo "  Install to PATH:  make install  (copies to ~/.cargo/bin, ensure ~/.cargo/bin in PATH)"
+echo "  Or run without install: cargo run --bin novad / cargo run --bin novactl -- --help"
+echo ""
 echo "Next:"
 echo "  make dev        # or ./scripts/dev.sh — runs backend + dashboard (http://127.0.0.1:8642 + http://127.0.0.1:5173)"
 echo "  make build      # release build"
+echo "  make install    # install novad/novactl to ~/.cargo/bin"
 echo "  make test       # tests"
-echo "  make docker     # Docker Compose"
 echo ""
 echo "Verify:  curl http://127.0.0.1:8642/health"
+echo "         ./target/debug/novactl runtime status  (or: cargo run --bin novactl -- runtime status)"
 echo "Login:   admin / admin123  (auto-created on first run)"
 echo "SDK:     NOVA_URL=http://127.0.0.1:8642/api/v1 npx tsx examples/quickstart.ts"
 echo ""

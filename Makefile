@@ -12,7 +12,8 @@ help: ## Show this help
 	@echo "Usage:"
 	@echo "  make setup    One-time setup (Rust + Node deps, builds novad+novactl, creates novad.toml) [2-3 min]"
 	@echo "  make dev      Run backend + dashboard with live reload (port 8642 + 5173)"
-	@echo "  make build    Release build (novad + novactl)"
+	@echo "  make build    Release build (novad + novactl) → target/release/"
+	@echo "  make install  Build + install novad/novactl to ~/.cargo/bin (PATH)"
 	@echo "  make test     Run all tests (~1,500)"
 	@echo "  make docker   Build and run via Docker Compose"
 	@echo "  make sdk      Build TypeScript SDK"
@@ -20,6 +21,12 @@ help: ## Show this help
 	@echo "  make fmt      Format Rust + dashboard"
 	@echo "  make lint     Clippy + typecheck"
 	@echo "  make clean    Remove build artifacts"
+	@echo ""
+	@echo "Binaries after build:"
+	@echo "  target/debug/novad    (or target/release/novad)  — daemon"
+	@echo "  target/debug/novactl  (or target/release/novactl) — CLI (also 'nova' alias)"
+	@echo "  Use 'cargo run --bin novad' or 'cargo run --bin novactl -- --help' without installing"
+	@echo "  Or 'make install' to copy to ~/.cargo/bin (ensure ~/.cargo/bin is in PATH)"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
@@ -32,6 +39,17 @@ dev: ## Run backend (cargo run) + dashboard (vite) concurrently
 build: ## Release build (all binaries)
 	cargo build --release
 	@echo "✓ binaries at target/release/novad and target/release/novactl"
+	@echo "  Run: ./target/release/novad --help"
+	@echo "       ./target/release/novactl --help  (or cargo run --bin novactl -- --help)"
+	@echo "  Or: make install  → ~/.cargo/bin/novad, ~/.cargo/bin/novactl"
+
+install: ## Build release + install to ~/.cargo/bin
+	cargo install --path crates/novad --bin novad --force
+	cargo install --path crates/nova-cli --bin novactl --force
+	cargo install --path crates/nova-cli --bin nova --force
+	@echo "✓ installed to ~/.cargo/bin/novad, ~/.cargo/bin/novactl, ~/.cargo/bin/nova"
+	@echo "  Ensure ~/.cargo/bin is in PATH: export PATH=\"\$$HOME/.cargo/bin:\$$PATH\""
+	@echo "  Try: novactl --help  or  nova --help"
 
 test: ## Run workspace tests + SDK tests
 	cargo test --workspace --exclude nova-sim

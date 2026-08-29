@@ -59,7 +59,10 @@ export default function DataTable<T extends Record<string, unknown>>({
   if (loading) {
     return (
       <div className="data-table-wrapper">
-        <div className="loading-spinner">Loading</div>
+        <div style={{ padding: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          <div className="loading-spinner" style={{ padding: 0 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading…</span>
+        </div>
       </div>
     );
   }
@@ -80,8 +83,11 @@ export default function DataTable<T extends Record<string, unknown>>({
           <tbody>
             {data.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="empty-message">
-                  {emptyMessage}
+                <td colSpan={columns.length} style={{ padding: 0 }}>
+                  <div className="empty-cta">
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>{emptyMessage}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Try adjusting filters or create a new entry</div>
+                  </div>
                 </td>
               </tr>
             ) : (
