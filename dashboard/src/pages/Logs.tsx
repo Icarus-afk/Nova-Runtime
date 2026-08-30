@@ -153,7 +153,7 @@ export default function LogsPage() {
               {streaming ? 'Waiting for log entries...' : 'No log entries found'}
             </div>
           ) : (
-            displayEntries.map((entry, i) => (
+            displayEntries.map((entry: LogEntryType, i: number) => (
               <div key={streaming ? i : `${entry.timestamp}-${i}`} className="log-entry">
                 <span className={`log-level ${entry.level}`}>{entry.level}</span>
                 <span className="log-subsystem">{entry.subsystem}</span>
