@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bloom Market — Fresh on Nova Runtime</title>
+<style>
+  :root { --bg:#0f0f0f; --card:#1a1a1a; --b:#2a2a2a; --t:#fff; --m:#9a9a9a; --accent:#ce422b; --green:#10b981; }
+  *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--t)}
+  header{position:sticky;top:0;z-index:10;background:rgba(15,15,15,.9);backdrop-filter:blur(8px);border-bottom:1px solid var(--b);padding:14px 20px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  header h1{margin:0;font-size:18px;letter-spacing:.04em} header h1 span{color:var(--accent)} .pill{font-size:12px;color:var(--m);border:1px solid var(--b);padding:4px 8px;border-radius:999px}
+  .wrap{max-width:1100px;margin:0 auto;padding:18px}
+  .hero{border:1px solid var(--b);border-radius:14px;padding:16px;background:linear-gradient(180deg,#1a1a1a,#0f0f0f);display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+  @media(max-width:800px){.hero{grid-template-columns:1fr}}
+  .hero h2{margin:0 0 8px;font-size:20px} .hero p{margin:0;color:var(--m);line-height:1.5;font-size:14px}
+  .kvs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px} .kv{font-size:12px;background:var(--card);border:1px solid var(--b);padding:6px 8px;border-radius:8px}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+  .bar input, .bar select{flex:1;min-width:160px;background:var(--card);border:1px solid var(--b);color:var(--t);padding:10px 12px;border-radius:10px}
+  .bar button{background:var(--accent);color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+  .bar button.sec{background:var(--card);border:1px solid var(--b);color:var(--t)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--b);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .thumb{height:130px;background:radial-gradient(600px 200px at 30% 20%, #ce422b22, transparent), linear-gradient(180deg,#222,#1a1a1a);display:grid;place-items:center;color:var(--m);font-size:12px;letter-spacing:.06em}
+  .pad{padding:12px} .pad h3{margin:0 0 4px;font-size:15px} .pad .meta{font-size:12px;color:var(--m)} .pad .price{margin-top:8px;font-weight:700}
+  .row{display:flex;gap:8px;margin-top:10px} .row button{flex:1;padding:8px;border-radius:8px;border:1px solid var(--b);cursor:pointer}
+  .btn{background:var(--t);color:#000;font-weight:600} .btn2{background:transparent;color:var(--t)}
+  .cols{display:grid;grid-template-columns:1fr 320px;gap:14px;margin-top:14px}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:12px}
+  .panel h3{margin:0 0 8px;font-size:13px;letter-spacing:.06em;color:var(--m);text-transform:uppercase}
+  .log{font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:240px;overflow:auto}
+  .badge{display:inline-block;font-size:11px;padding:3px 6px;border-radius:999px;border:1px solid var(--b);color:var(--m)}
+  a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Bloom</span> Market</h1>
+  <span class="pill">100% on Nova Runtime</span>
+  <span class="pill">SQL • Cache • Queue • Scheduler • Search • Blob • Auth</span>
+  <span style="margin-left:auto" class="pill"><a href="http://127.0.0.1:5173" target="_blank">Dashboard 5173</a> • <a href="http://127.0.0.1:8642/health" target="_blank">health</a></span>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h2>Neighborhood harvest, one runtime.</h2>
+      <p>This is a <b>fresh project template</b> — not a todo demo. Every listing, order, cart, search index, photo and cron lives in a single Nova binary. No Postgres, no Redis, no S3. Look at the code in <code>src/nova.js</code> to copy the pattern to your own app.</p>
+      <div class="kvs">
+        <span class="kv">SQL JOIN + GROUP BY</span>
+        <span class="kv">BM25 Search</span>
+        <span class="kv">TTL Cache</span>
+        <span class="kv">Durable Queue</span>
+        <span class="kv">Cron Scheduler</span>
+        <span class="kv">Blob + Auth</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>How fresh projects use Nova (copy this)</h3>
+      <div class="log">// 1. health + login
+await fetch('http://127.0.0.1:8642/api/v1/auth/login',
+  {method:'POST', body:JSON.stringify({username:'admin', password:'admin123'})})
+
+// 2. SQL — JOIN sellers & listings
+await fetch('/api/v1/sql/query', {method:'POST',
+  body: JSON.stringify({query:
+    'SELECT listings.title, sellers.stall FROM listings JOIN sellers ON listings.seller_id=sellers.id'})})
+
+// 3. Cache — cart is just a key
+await fetch('/api/v1/cache/cart:sasha', {method:'POST',
+  body: JSON.stringify({value:{items:[{id:5,qty:2}]}, ttl_ms:30000})})
+
+// 4. Queue — order -> fulfillment
+await fetch('/api/v1/queues/bloom:orders/messages',
+  {method:'POST', body: JSON.stringify({messages:[{body:{order_id:1}}]})})</div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <input id="q" placeholder="Search — try honey, sourdough, tomato" />
+    <select id="cat"><option value="">All categories</option><option value="produce">produce</option><option value="bakery">bakery</option><option value="pantry">pantry</option></select>
+    <button id="searchBtn">Search (BM25)</button>
+    <button class="sec" id="feedBtn">Feed (SQL JOIN)</button>
+    <button class="sec" id="trendingBtn">Trending (Cache)</button>
+  </div>
+
+  <div id="grid" class="grid"></div>
+
+  <div class="cols">
+    <div class="panel">
+      <h3>Cart & Orders — Cache + Queue + SQL</h3>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input id="buyer" value="sasha" style="flex:1;background:#111;border:1px solid var(--b);color:var(--t);padding:8px;border-radius:8px" placeholder="buyer username" />
+        <button class="sec" id="viewCart">View cart (Cache)</button>
+        <button id="checkout">Checkout → SQL + Queue</button>
+      </div>
+      <div id="cart" class="log" style="min-height:60px">Cart: —</div>
+      <div id="orders" class="log" style="margin-top:8px;max-height:140px">Orders: —</div>
+    </div>
+    <div class="panel">
+      <h3>Ops — Queue, Scheduler, Blob, Auth</h3>
+      <div class="log" id="ops">Loading…</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <span class="badge">Queue: bloom:orders</span>
+        <span class="badge">Cron: bloom:daily-digest</span>
+        <span class="badge">Blob: namespace bloom</span>
+        <span class="badge">Auth: JWT</span>
+      </div>
+    </div>
+  </div>
+
+  <p style="color:var(--m);font-size:12px;margin-top:14px">Fresh project tip: copy <code>examples/bloom-market/src/nova.js</code> into any new Node.js app. It is 80 lines and shows the whole Nova pattern. Then <code>npm run seed</code> to see every primitive exercised, or read <code>src/seed.js</code> for the annotated walkthrough. No todo logic — just a real marketplace flow.</p>
+</div>
+
+<script type="module">
+const grid = document.getElementById('grid');
+const q = document.getElementById('q');
+const cat = document.getElementById('cat');
+
+function card(c) {
+  const d = document.createElement('div'); d.className='card';
+  const price = c.price ?? c.PRICE ?? '?';
+  const title = c.title ?? c.TITLE ?? c[1] ?? 'Untitled';
+  const stall = c.stall ?? c.STALL ?? c[4] ?? '';
+  const catv = c.category ?? c.CATEGORY ?? '';
+  d.innerHTML = `<div class="thumb">${catv.toUpperCase() || 'BLOOM'} • $${price}</div>
+    <div class="pad"><h3>${title}</h3><div class="meta">${stall} • ${catv} • stock ${c.stock ?? c.STOCK ?? '?'}</div><div class="price">$${price}</div>
+    <div class="row"><button class="btn" data-id="${c.id ?? c.ID}">View</button><button class="btn2" data-add="${c.id ?? c.ID}">Add to cart</button></div></div>`;
+  d.querySelector('[data-id]').onclick = async () => {
+    const id = d.querySelector('[data-id]').dataset.id;
+    const r = await fetch(`/api/listings/${id}`).then(r=>r.json());
+    alert(`${r.listing.title}\n\n${r.listing.description}\n\n${r.listing.stall} — $${r.listing.price}\nReviews: ${r.reviews.length}`);
+  };
+  d.querySelector('[data-add]').onclick = async () => {
+    const id = Number(d.querySelector('[data-add]').dataset.add);
+    const buyer = document.getElementById('buyer').value || 'sasha';
+    const cur = await fetch(`/api/cart/${buyer}`).then(r=>r.json()).catch(()=>({items:[]}));
+    const items = [...(cur.items||cur.value?.items||[]), {listing_id:id, qty:1}];
+    await fetch(`/api/cart/${buyer}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items})});
+    document.getElementById('cart').textContent = JSON.stringify({items}, null, 2);
+  };
+  return d;
+}
+
+async function loadFeed() {
+  const j = await fetch('/api/feed').then(r=>r.json());
+  const rows = j.listings?.rows ?? j.listings?.data ?? j.listings ?? [];
+  grid.innerHTML=''; rows.forEach(r=> grid.appendChild(card(r)));
+  document.getElementById('ops').textContent =
+`Feed: SQL JOIN listings->sellers (${rows.length} rows)
+Stats GROUP BY category: ${JSON.stringify((j.stats?.rows ?? j.stats ?? []).slice(0,2))}
+Trending (Cache): ${JSON.stringify(j.trending)}`;
+}
+async function doSearch() {
+  const v = q.value.trim(); const c = cat.value;
+  if (!v) { const r = await fetch(`/api/listings?category=${c}`).then(r=>r.json()); const rows=r.rows??r.data??[]; grid.innerHTML=''; rows.forEach(x=>grid.appendChild(card(x))); return; }
+  const r = await fetch(`/api/search?q=${encodeURIComponent(v)}&limit=8`).then(r=>r.json());
+  // search hits are {id, score}; map to listings would need extra fetch — show hits directly
+  grid.innerHTML = `<div class="panel" style="grid-column:1/-1">Search "${v}" — ${r.total_hits ?? r.hits?.length ?? 0} hits (BM25). ${JSON.stringify((r.hits||[]).slice(0,2))}</div>`;
+}
+document.getElementById('searchBtn').onclick = doSearch;
+document.getElementById('feedBtn').onclick = loadFeed;
+document.getElementById('trendingBtn').onclick = async () => {
+  const t = await fetch('/api/feed').then(r=>r.json());
+  alert('Trending from Cache (TTL 60s):\n' + JSON.stringify(t.trending, null, 2));
+};
+q.addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
+cat.addEventListener('change', doSearch);
+
+document.getElementById('viewCart').onclick = async () => {
+  const b = document.getElementById('buyer').value || 'sasha';
+  const c = await fetch(`/api/cart/${b}`).then(r=>r.json());
+  document.getElementById('cart').textContent = JSON.stringify(c, null, 2);
+};
+document.getElementById('checkout').onclick = async () => {
+  const b = document.getElementById('buyer').value || 'sasha';
+  const cart = await fetch(`/api/cart/${b}`).then(r=>r.json());
+  const items = cart.items || cart.value?.items || [];
+  if (!items.length) { alert('Cart empty — add items first'); return; }
+  const first = items[0];
+  const r = await fetch('/api/orders', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({listing_id:first.listing_id, buyer:b, qty:first.qty})});
+  const j = await r.json();
+  document.getElementById('orders').textContent = JSON.stringify(j, null, 2) + '\n' + document.getElementById('orders').textContent;
+  // refresh orders list
+  const o = await fetch('/api/orders').then(r=>r.json());
+  document.getElementById('orders').textContent = 'Orders JOIN listings:\n' + JSON.stringify(o.rows ?? o.data ?? o, null, 2).slice(0, 800);
+};
+
+loadFeed();
+fetch('/api/orders').then(r=>r.json()).then(o=> document.getElementById('orders').textContent = JSON.stringify(o.rows ?? o.data ?? [], null, 2).slice(0, 600));
+fetch('/api/meta').then(r=>r.json()).then(m=> {
+  const blobInfo = m.blobs?.blobs ?? m.blobs?.data ?? [];
+  document.getElementById('ops').textContent += `\nBlobs in bloom: ${Array.isArray(blobInfo)? blobInfo.length : JSON.stringify(blobInfo).slice(0,120)}`;
+});
+</script>
+</body>
+</html>
