@@ -1,6 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
-use axum::extract::{Path, State};
+use crate::routes::http::{Created, created, pagination_links};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::{
     Router,
@@ -40,7 +42,7 @@ struct CreateJobRequest {
 async fn create_job(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateJobRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let mgr = state
         .scheduler_mgr
         .as_ref()
@@ -130,17 +132,30 @@ async fn create_job(
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    Ok(Json(json!({
-        "id": job_id.to_string(),
-        "name": req.name,
-        "status": if req.enabled == Some(false) { "paused" } else { "created" },
-        "next_run_at": chrono::DateTime::from_timestamp_millis(next_run_at).map(|t| t.to_rfc3339()),
-        "timezone": req.timezone,
-        "enabled": req.enabled.unwrap_or(true),
-    })))
+    let job_id_str = job_id.to_string();
+    Ok(created(
+        &format!("/api/v1/scheduler/jobs/{job_id_str}"),
+        json!({
+            "id": job_id_str,
+            "name": req.name,
+            "status": if req.enabled == Some(false) { "paused" } else { "created" },
+            "next_run_at": chrono::DateTime::from_timestamp_millis(next_run_at).map(|t| t.to_rfc3339()),
+            "timezone": req.timezone,
+            "enabled": req.enabled.unwrap_or(true),
+        }),
+    ))
 }
 
-async fn list_jobs(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct ListJobsParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_jobs(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<ListJobsParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .scheduler_mgr
         .as_ref()
@@ -149,8 +164,14 @@ async fn list_jobs(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, 
         .list_jobs(None)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let total = jobs.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let has_more = offset + limit < total;
     let data: Vec<Value> = jobs
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .map(|j| {
             json!({
                 "id": j.id.to_string(),
@@ -163,8 +184,23 @@ async fn list_jobs(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, 
             })
         })
         .collect();
-    Ok(Json(
-        json!({"data": data, "pagination": {"cursor": null, "limit": 100, "has_more": false}}),
+    let link = pagination_links(
+        "/api/v1/scheduler/jobs",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
     ))
 }
 

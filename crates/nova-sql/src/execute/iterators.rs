@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use crate::ast::{BinaryOperator, Expr, LiteralValue, OrderByExpr};
 use crate::error::Result;
 use crate::execute::evaluate_expr;
+use crate::execute::contains_aggregate;
 use crate::execute::table_store::{Row, TableStoreRef};
 use crate::schema::Schema;
 
@@ -101,6 +102,7 @@ pub struct ProjectionExecutor {
     input: Box<dyn Executor>,
     exprs: Vec<(Expr, Option<String>)>,
     schema: Schema,
+    _output_schema: Schema,
 }
 
 impl ProjectionExecutor {
@@ -113,6 +115,21 @@ impl ProjectionExecutor {
             input,
             exprs,
             schema,
+            _output_schema: Schema::default(),
+        }
+    }
+
+    pub fn new_with_output(
+        input: Box<dyn Executor>,
+        exprs: Vec<(Expr, Option<String>)>,
+        schema: Schema,
+        output_schema: Schema,
+    ) -> Self {
+        ProjectionExecutor {
+            input,
+            exprs,
+            schema,
+            _output_schema: output_schema,
         }
     }
 }
@@ -201,6 +218,8 @@ impl Executor for DedupExecutor {
 pub struct AggregateExecutor {
     input: Box<dyn Executor>,
     exprs: Vec<(Expr, Option<String>)>,
+    group_by: Vec<Expr>,
+    having: Option<Expr>,
     schema: Schema,
     results: Vec<Row>,
     index: usize,
@@ -210,11 +229,15 @@ impl AggregateExecutor {
     pub fn new(
         input: Box<dyn Executor>,
         exprs: Vec<(Expr, Option<String>)>,
+        group_by: Vec<Expr>,
+        having: Option<Expr>,
         schema: Schema,
     ) -> Self {
         AggregateExecutor {
             input,
             exprs,
+            group_by,
+            having,
             schema,
             results: Vec::new(),
             index: 0,
@@ -231,12 +254,49 @@ impl Executor for AggregateExecutor {
         }
         self.input.close()?;
 
-        let mut row_values = Vec::with_capacity(self.exprs.len());
-        for (expr, _alias) in &self.exprs {
-            let result = evaluate_aggregate_expr(expr, &input_rows, &self.schema)?;
-            row_values.push(Some(result));
+        let schema = self.schema.clone();
+        let exprs = self.exprs.clone();
+        let group_by = self.group_by.clone();
+        let having = self.having.clone();
+
+        // Partition into groups when GROUP BY is present.
+        let mut groups: Vec<(Vec<LiteralValue>, Vec<Row>)> = Vec::new();
+        if group_by.is_empty() {
+            if !input_rows.is_empty() {
+                groups.push((Vec::new(), input_rows));
+            }
+        } else {
+            for row in input_rows {
+                let key = evaluate_group_key(&group_by, &row.values, &schema)?;
+                match groups.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, rows)) => rows.push(row),
+                    None => groups.push((key, vec![row])),
+                }
+            }
         }
-        self.results = vec![Row::new(row_values)];
+
+        let mut results = Vec::with_capacity(groups.len());
+        for (group_key, group_rows) in groups {
+            let mut row_values = Vec::with_capacity(exprs.len());
+            for (expr, _alias) in &exprs {
+                let val = evaluate_grouped_expr(expr, &group_key, &group_rows, &schema)?;
+                row_values.push(Some(val));
+            }
+            let agg_row = Row::new(row_values);
+            if let Some(ref h) = having {
+                // Evaluate HAVING as an aggregate-aware predicate over the
+                // group's rows (the input schema), so aggregate functions in
+                // the predicate can be computed on this group.
+                let hv = evaluate_grouped_expr(h, &group_key, &group_rows, &schema)?;
+                if hv == LiteralValue::Boolean(true) {
+                    results.push(agg_row);
+                }
+            } else {
+                results.push(agg_row);
+            }
+        }
+
+        self.results = results;
         self.index = 0;
         Ok(())
     }
@@ -254,6 +314,64 @@ impl Executor for AggregateExecutor {
         self.results.clear();
         self.index = 0;
         Ok(())
+    }
+}
+
+fn evaluate_group_key(
+    group_by: &[Expr],
+    row: &[Option<LiteralValue>],
+    schema: &Schema,
+) -> Result<Vec<LiteralValue>> {
+    group_by
+        .iter()
+        .map(|e| evaluate_expr(e, row, schema))
+        .collect()
+}
+
+/// Evaluate a select-list expression in an aggregate context.
+/// - A plain column that matches a GROUP BY column yields the group's value.
+/// - An aggregate function aggregates over the group's rows.
+/// - Nested expressions propagate accordingly.
+fn evaluate_grouped_expr(
+    expr: &Expr,
+    group_key: &[LiteralValue],
+    group_rows: &[Row],
+    schema: &Schema,
+) -> Result<LiteralValue> {
+    match expr {
+        Expr::Column(_) => {
+            // Plain column in an aggregate context: take the representative
+            // value from the first row of the group (matches GROUP BY columns).
+            if !group_rows.is_empty() {
+                return evaluate_expr(expr, &group_rows[0].values, schema);
+            }
+            Ok(LiteralValue::Null)
+        }
+        Expr::Function { .. } if contains_aggregate(expr) => {
+            evaluate_aggregate_expr(expr, group_rows, schema)
+        }
+        Expr::BinaryOp { left, op, right } => {
+            let l = evaluate_grouped_expr(left, group_key, group_rows, schema)?;
+            let r = evaluate_grouped_expr(right, group_key, group_rows, schema)?;
+            crate::execute::eval_binary_op(*op, &l, &r)
+        }
+        Expr::UnaryOp { op, expr: inner } => {
+            let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
+            crate::execute::eval_unary_op(*op, &v)
+        }
+        Expr::Cast { expr: inner, target_type } => {
+            let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
+            crate::type_checker::TypeChecker::coerce_value(&v, target_type)
+        }
+        Expr::IsNull(inner) => {
+            let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
+            Ok(LiteralValue::Boolean(matches!(v, LiteralValue::Null)))
+        }
+        Expr::IsNotNull(inner) => {
+            let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
+            Ok(LiteralValue::Boolean(!matches!(v, LiteralValue::Null)))
+        }
+        _ => evaluate_expr(expr, &group_rows[0].values, schema),
     }
 }
 
@@ -408,14 +526,8 @@ impl Executor for SortExecutor {
         let order_by = self.order_by.clone();
         rows.sort_by(|a, b| {
             for order in &order_by {
-                let a_val = match evaluate_expr(&order.expr, &a.values, &schema) {
-                    Ok(v) => v,
-                    Err(_) => LiteralValue::Null,
-                };
-                let b_val = match evaluate_expr(&order.expr, &b.values, &schema) {
-                    Ok(v) => v,
-                    Err(_) => LiteralValue::Null,
-                };
+                let a_val = sort_key_value(&order.expr, &a.values, &schema);
+                let b_val = sort_key_value(&order.expr, &b.values, &schema);
                 let cmp = compare_values(&a_val, &b_val, order.nulls_first);
                 if cmp != std::cmp::Ordering::Equal {
                     return if order.asc { cmp } else { cmp.reverse() };
@@ -493,6 +605,121 @@ impl Executor for LimitExecutor {
 
     fn close(&mut self) -> Result<()> {
         self.input.close()
+    }
+}
+
+/// Nested-loop INNER JOIN. Buffers the left input, then for each left row
+/// iterates the right input. Rows that satisfy the optional ON predicate (or
+/// all rows for a CROSS join) are emitted as a concatenated row.
+pub struct JoinExecutor {
+    left: Box<dyn Executor>,
+    right: Box<dyn Executor>,
+    on: Option<Expr>,
+    schema: Schema,
+    left_rows: Vec<Row>,
+    left_index: usize,
+    right_rows: Vec<Row>,
+    right_index: usize,
+}
+
+impl JoinExecutor {
+    pub fn new(
+        left: Box<dyn Executor>,
+        right: Box<dyn Executor>,
+        on: Option<Expr>,
+        schema: Schema,
+    ) -> Self {
+        JoinExecutor {
+            left,
+            right,
+            on,
+            schema,
+            left_rows: Vec::new(),
+            left_index: 0,
+            right_rows: Vec::new(),
+            right_index: 0,
+        }
+    }
+}
+
+impl Executor for JoinExecutor {
+    fn open(&mut self) -> Result<()> {
+        self.left.open()?;
+        let mut left_rows = Vec::new();
+        while let Some(row) = self.left.next()? {
+            left_rows.push(row);
+        }
+        self.left.close()?;
+        self.left_rows = left_rows;
+
+        self.right.open()?;
+        let mut right_rows = Vec::new();
+        while let Some(row) = self.right.next()? {
+            right_rows.push(row);
+        }
+        self.right.close()?;
+        self.right_rows = right_rows;
+
+        self.left_index = 0;
+        self.right_index = 0;
+        Ok(())
+    }
+
+    fn next(&mut self) -> Result<Option<Row>> {
+        let schema = self.schema.clone();
+        let on = self.on.clone();
+        loop {
+            if self.left_index >= self.left_rows.len() {
+                return Ok(None);
+            }
+            let left_row = &self.left_rows[self.left_index];
+            if self.right_index >= self.right_rows.len() {
+                self.left_index += 1;
+                self.right_index = 0;
+                continue;
+            }
+            let right_row = &self.right_rows[self.right_index];
+            self.right_index += 1;
+
+            let mut values = Vec::with_capacity(left_row.len() + right_row.len());
+            values.extend_from_slice(&left_row.values);
+            values.extend_from_slice(&right_row.values);
+            let combined = Row::new(values);
+
+            match &on {
+                None => return Ok(Some(combined)),
+                Some(predicate) => {
+                    let ok = evaluate_expr(predicate, &combined.values, &schema)?
+                        == LiteralValue::Boolean(true);
+                    if ok {
+                        return Ok(Some(combined));
+                    }
+                }
+            }
+        }
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.left_rows.clear();
+        self.right_rows.clear();
+        self.left_index = 0;
+        self.right_index = 0;
+        Ok(())
+    }
+}
+
+/// Resolve the sort key for a single row. `ORDER BY <integer>` is treated as a
+/// 1-based ordinal into the projected row; anything else is evaluated as an
+/// expression against the output schema (aliases resolve by column name).
+fn sort_key_value(expr: &Expr, row: &[Option<LiteralValue>], schema: &Schema) -> LiteralValue {
+    if let Expr::Literal(LiteralValue::Integer(ordinal)) = expr {
+        if *ordinal >= 1 && (*ordinal as usize) <= row.len() {
+            return row[(*ordinal as usize) - 1].clone().unwrap_or(LiteralValue::Null);
+        }
+    }
+    match evaluate_expr(expr, row, schema) {
+        Ok(v) => v,
+        Err(_) => LiteralValue::Null,
     }
 }
 

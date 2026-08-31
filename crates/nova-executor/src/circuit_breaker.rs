@@ -84,7 +84,20 @@ impl CircuitBreaker {
             }
             Err(err) if is_tracked_failure(&err) => {
                 let should_open = {
+                    let now = Instant::now();
+                    // Check if window has elapsed since last failure — reset count if so
+                    let should_reset = {
+                        let last = self.last_state_change.read();
+                        if let Some(last_time) = last.get(subsystem) {
+                            now.duration_since(*last_time) > self.window
+                        } else {
+                            false
+                        }
+                    };
                     let mut f_count = self.failure_count.write();
+                    if should_reset {
+                        f_count.insert(subsystem.clone(), 0);
+                    }
                     let count = f_count.entry(subsystem.clone()).or_insert(0);
                     *count += 1;
                     *count >= self.failure_threshold

@@ -1,5 +1,7 @@
+use axum::http::header::{self, HeaderName, HeaderValue, HeaderMap};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde_json::json;
 
 #[derive(Debug, Clone)]
@@ -10,6 +12,7 @@ pub struct ApiError {
     pub r#type: String,
     pub instance: Option<String>,
     pub extra: Option<serde_json::Value>,
+    headers: Vec<(String, String)>,
 }
 
 impl ApiError {
@@ -21,6 +24,7 @@ impl ApiError {
             r#type: "about:blank".into(),
             instance: None,
             extra: None,
+            headers: Vec::new(),
         }
     }
 
@@ -61,6 +65,12 @@ impl ApiError {
         self.extra = Some(extra);
         self
     }
+
+    /// Attach an HTTP response header (e.g. `Retry-After`, `X-RateLimit-*`).
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -74,7 +84,21 @@ impl IntoResponse for ApiError {
             "extra": self.extra,
         });
 
-        (self.status, axum::Json(body)).into_response()
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+        for (name, value) in &self.headers {
+            match (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(value)) {
+                (Ok(hn), Ok(hv)) => {
+                    headers.insert(hn, hv);
+                }
+                _ => {}
+            }
+        }
+
+        (self.status, headers, Json(body)).into_response()
     }
 }
 
@@ -265,5 +289,41 @@ mod tests {
         let aerr = ApiError::from(&perr);
         assert_eq!(aerr.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(aerr.detail, "internal error");
+    }
+
+    #[test]
+    fn test_problem_json_content_type() {
+        let err = ApiError::not_found("missing");
+        let response = err.into_response();
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/problem+json"
+        );
+    }
+
+    #[test]
+    fn test_with_header() {
+        let err = ApiError::too_many_requests("slow down").with_header("Retry-After", "30");
+        let response = err.into_response();
+        assert_eq!(
+            response.headers().get("retry-after").unwrap(),
+            "30"
+        );
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/problem+json"
+        );
+    }
+
+    #[test]
+    fn test_from_pipeline_error_rate_limited_header() {
+        let perr = nova_executor::PipelineError::new(
+            nova_executor::ErrorCode::RateLimited,
+            "rate limited",
+        );
+        let aerr = ApiError::from(&perr).with_header("Retry-After", "5");
+        let response = aerr.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "5");
     }
 }

@@ -205,10 +205,16 @@ impl TypeChecker {
         match (a, b) {
             (SQLType::Integer, SQLType::Float) => Ok(SQLType::Float),
             (SQLType::Float, SQLType::Integer) => Ok(SQLType::Float),
-            (SQLType::Integer, SQLType::Text) => Ok(SQLType::Integer),
-            (SQLType::Text, SQLType::Integer) => Ok(SQLType::Integer),
-            (SQLType::Float, SQLType::Text) => Ok(SQLType::Float),
-            (SQLType::Text, SQLType::Float) => Ok(SQLType::Float),
+            // Mixing a numeric type with TEXT is not silently coercible to a
+            // numeric type (arbitrary text is not numeric), use the flagged
+            // unsound coercion. Require an explicit CAST instead.
+            (SQLType::Integer, SQLType::Text)
+            | (SQLType::Text, SQLType::Integer)
+            | (SQLType::Float, SQLType::Text)
+            | (SQLType::Text, SQLType::Float) => Err(SQLError::TypeMismatch {
+                expected: format!("{:?}", a),
+                actual: format!("{:?}", b),
+            }),
             _ => Err(SQLError::TypeMismatch {
                 expected: format!("{:?}", a),
                 actual: format!("{:?}", b),

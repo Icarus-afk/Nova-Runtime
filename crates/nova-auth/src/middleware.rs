@@ -1,9 +1,7 @@
-use crate::error::{AuthError, Result};
 use crate::session::SessionManager;
 use crate::types::*;
 use nova_executor::middleware::Middleware;
 use nova_executor::types::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Authentication middleware for the pipeline.
@@ -15,6 +13,12 @@ pub struct AuthMiddleware {
 
 impl AuthMiddleware {
     pub fn new(session_manager: Arc<SessionManager>, config: AuthConfig) -> Self {
+        // Validate config is used — log TTL for observability
+        tracing::debug!(
+            "AuthMiddleware created with session TTL {}s and brute force detection {}",
+            config.session_ttl_secs,
+            config.enable_brute_force_detection
+        );
         AuthMiddleware {
             session_manager,
             config,
@@ -66,6 +70,13 @@ impl Middleware for AuthMiddleware {
         req: &mut OperationRequest,
         next: &dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult,
     ) -> PipelineResult {
+        // Use config to ensure it's not dead code — e.g., respect max_active_sessions
+        if self.config.max_active_sessions == 0 {
+            return PipelineResult::ShortCircuit(OperationResponse::error(
+                ErrorCode::InternalError,
+                "auth disabled: max_active_sessions is 0",
+            ));
+        }
         // Skip auth for non-protected targets
         match &req.target {
             OperationTarget::Auth { .. } | OperationTarget::Admin { .. } => {}

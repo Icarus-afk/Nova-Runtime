@@ -26,8 +26,15 @@ pub enum LogicalNode {
     Aggregate {
         input: Box<LogicalNode>,
         exprs: Vec<(Expr, Option<String>)>,
+        group_by: Vec<Expr>,
+        having: Option<Expr>,
     },
     Dedup {
         input: Box<LogicalNode>,
+    },
+    Join {
+        left: Box<LogicalNode>,
+        right: Box<LogicalNode>,
+        on: Option<Expr>,
     },
 }

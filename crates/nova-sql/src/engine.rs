@@ -236,6 +236,8 @@ impl SQLEngine {
     }
 
     pub fn shutdown(&self) {
+        // Persist all tables before shutdown
+        let _ = self.persist_all();
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
@@ -297,6 +299,7 @@ impl SQLEngine {
             .map_err(|e| SQLError::syntax(e.to_string()))?;
         self.persist_table_names()
             .map_err(|e| SQLError::syntax(e.to_string()))?;
+        self.notify(|obs| obs.on_table_created(&stmt.table.name));
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
             rows_affected: 0,
@@ -308,6 +311,7 @@ impl SQLEngine {
         self.tables.drop_table(&stmt.table.name)?;
         self.persist_table_names()
             .map_err(|e| SQLError::syntax(e.to_string()))?;
+        self.notify(|obs| obs.on_table_dropped(&stmt.table.name));
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
             rows_affected: 0,
@@ -410,6 +414,7 @@ impl SQLEngine {
 
         if rows_inserted > 0 {
             let _ = self.persist_table(&stmt.table.name);
+            self.notify(|obs| obs.on_rows_inserted(&stmt.table.name, rows_inserted));
         }
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
@@ -419,11 +424,16 @@ impl SQLEngine {
     }
 
     fn execute_select(&self, mut stmt: SelectStatement, start: &Instant) -> Result<SQLResult> {
-        let schema = self.tables.get_schema(&stmt.from.name)?;
-
         if !self.tables.table_exists(&stmt.from.name) {
             return Err(SQLError::TableNotFound(stmt.from.name.clone()));
         }
+        for join in &stmt.joins {
+            if !self.tables.table_exists(&join.right.name) {
+                return Err(SQLError::TableNotFound(join.right.name.clone()));
+            }
+        }
+
+        let schema = self.combined_from_schema(&stmt.from, &stmt.joins)?;
 
         // Expand wildcards
         stmt.select_list = expand_wildcards(&stmt.select_list, &schema);
@@ -469,7 +479,11 @@ impl SQLEngine {
 
         // Apply HAVING after aggregation if present
 
-        let batch = rows_to_record_batch_with_names(&rows, Some(&col_names));
+        let batch = if col_names.is_empty() {
+            rows_to_record_batch(&rows)
+        } else {
+            rows_to_record_batch_with_names(&rows, Some(&col_names))
+        };
         let num_rows = batch.num_rows;
 
         let elapsed = start.elapsed().as_millis() as u64;
@@ -510,6 +524,9 @@ impl SQLEngine {
         self.tables.create_table(&stmt.table.name, new_schema)?;
         self.tables.insert_rows(&stmt.table.name, rows)?;
         let _ = self.persist_table(&stmt.table.name);
+        if rows_affected > 0 {
+            self.notify(|obs| obs.on_rows_updated(&stmt.table.name, rows_affected));
+        }
 
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
@@ -547,12 +564,31 @@ impl SQLEngine {
         self.tables.create_table(&stmt.table.name, new_schema)?;
         self.tables.insert_rows(&stmt.table.name, kept_rows)?;
         let _ = self.persist_table(&stmt.table.name);
+        if rows_affected > 0 {
+            self.notify(|obs| obs.on_rows_deleted(&stmt.table.name, rows_affected));
+        }
 
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(SQLResult::Exec {
             rows_affected,
             stats: ExecutionStats::new(0, rows_affected, elapsed),
         })
+    }
+
+    /// Concatenate schemas of all tables in the FROM and JOIN clauses into a
+    /// single combined schema, reindexing column ordinals sequentially.
+    fn combined_from_schema(&self, from: &TableRef, joins: &[Join]) -> Result<Schema> {
+        let mut schema = self.tables.get_schema(&from.name)?;
+        for join in joins {
+            let right = self.tables.get_schema(&join.right.name)?;
+            let offset = schema.len();
+            for (i, col) in right.columns.iter().enumerate() {
+                let mut c = col.clone();
+                c.ordinal = offset + i;
+                schema.columns.push(c);
+            }
+        }
+        Ok(schema)
     }
 }
 

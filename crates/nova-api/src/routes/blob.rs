@@ -1,8 +1,9 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
+use crate::routes::http::{Created, created, pagination_links};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{Json, Response};
 use axum::{
     Router,
@@ -98,7 +99,7 @@ async fn upload_blob(
     Query(q): Query<UploadQuery>,
     headers: axum::http::HeaderMap,
     body: Bytes,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let mgr = state
         .blob_mgr
         .as_ref()
@@ -142,13 +143,17 @@ async fn upload_blob(
         .create_blob(&namespace, &data, &content_type, HashMap::new())
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(json!({
-        "id": meta.id,
-        "size_bytes": meta.size,
-        "content_type": meta.content_type,
-        "checksum_sha256": hex_encode(meta.sha256.as_bytes()),
-        "created_at": meta.created_at,
-    })))
+    let id = meta.id.clone();
+    Ok(created(
+        &format!("/api/v1/blobs/{id}"),
+        json!({
+            "id": meta.id,
+            "size_bytes": meta.size,
+            "content_type": meta.content_type,
+            "checksum_sha256": hex_encode(meta.sha256.as_bytes()),
+            "created_at": meta.created_at,
+        }),
+    ))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -227,13 +232,14 @@ async fn blob_info(
 struct ListBlobsParams {
     prefix: Option<String>,
     limit: Option<usize>,
+    offset: Option<usize>,
     namespace: Option<String>,
 }
 
 async fn list_blobs(
     State(state): State<Arc<AdminState>>,
     Query(params): Query<ListBlobsParams>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .blob_mgr
         .as_ref()
@@ -249,9 +255,11 @@ async fn list_blobs(
             blob_ids.retain(|id| id.starts_with(prefix.as_str()));
         }
     }
+    let total = blob_ids.len();
+    let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(50).clamp(1, 1000);
-    let has_more = blob_ids.len() > limit;
-    blob_ids.truncate(limit);
+    let has_more = offset + limit < total;
+    blob_ids = blob_ids.into_iter().skip(offset).take(limit).collect();
     let mut data = Vec::new();
     for id in blob_ids {
         if let Ok(meta) = mgr.get_metadata(&id).await {
@@ -271,10 +279,24 @@ async fn list_blobs(
             }));
         }
     }
-    Ok(Json(json!({
-        "data": data,
-        "pagination": {"cursor": null, "limit": limit, "has_more": has_more}
-    })))
+    let link = pagination_links(
+        "/api/v1/blobs",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
+    ))
 }
 
 async fn blob_stats(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {

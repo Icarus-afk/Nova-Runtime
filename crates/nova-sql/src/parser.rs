@@ -68,6 +68,7 @@ impl Parser {
         let select_list = self.parse_select_list()?;
         self.expect(Token::From)?;
         let from = self.parse_table_ref()?;
+        let joins = self.parse_joins()?;
         let where_clause = if self.eat_if(Token::Where) {
             Some(self.parse_expression()?)
         } else {
@@ -104,6 +105,7 @@ impl Parser {
             distinct,
             select_list,
             from,
+            joins,
             where_clause,
             group_by,
             having,
@@ -111,6 +113,41 @@ impl Parser {
             limit,
             offset,
         })
+    }
+
+    /// Parse zero or more `JOIN <table> ON <predicate>` clauses.
+    fn parse_joins(&mut self) -> Result<Vec<Join>> {
+        let mut joins = Vec::new();
+        loop {
+            if !self.eat_if(Token::Join) {
+                break;
+            }
+            let right = self.parse_table_ref()?;
+            let on = if self.eat_if(Token::On) {
+                Some(self.parse_expression()?)
+            } else if self.peek() == Token::Comma
+                || matches!(
+                    self.peek(),
+                    Token::Where
+                        | Token::Group
+                        | Token::Order
+                        | Token::Having
+                        | Token::Limit
+                        | Token::Offset
+                        | Token::Semicolon
+                        | Token::EOF
+                )
+            {
+                None
+            } else {
+                return Err(self.err_syntax(
+                    "expected ON <condition> after JOIN (or a valid clause terminator)"
+                        .to_string(),
+                ));
+            };
+            joins.push(Join { right, on });
+        }
+        Ok(joins)
     }
 
     fn parse_select_list(&mut self) -> Result<Vec<SelectItem>> {

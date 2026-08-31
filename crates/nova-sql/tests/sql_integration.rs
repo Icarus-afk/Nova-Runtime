@@ -582,17 +582,21 @@ fn test_group_by_having() {
     engine
         .execute("CREATE TABLE t (category TEXT, value INTEGER)")
         .unwrap();
-    engine.execute("INSERT INTO t VALUES ('a', 10)").unwrap();
-    engine.execute("INSERT INTO t VALUES ('a', 20)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('a', 1)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('a', 2)").unwrap();
     engine.execute("INSERT INTO t VALUES ('b', 30)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('b', 5)").unwrap();
 
-    // GROUP BY with aggregate - should parse and execute without error
-    let result = engine
-        .execute("SELECT category, SUM(value) FROM t GROUP BY category ORDER BY category")
+    // Group into multiple groups and filter with HAVING.
+    let batches = engine
+        .execute_query(
+            "SELECT category, SUM(value) AS total FROM t GROUP BY category HAVING SUM(value) > 20 ORDER BY category",
+        )
         .unwrap();
-    // Currently AggregateExecutor sums all rows into one group
-    // Full multi-group aggregation is a larger feature
-    assert!(matches!(result, SQLResult::Query { .. }));
+    assert_eq!(batches[0].num_rows, 1);
+    let row0 = batches[0].get_row(0).unwrap();
+    assert_eq!(row0[0], Some(LiteralValue::String("b".to_string())));
+    assert_eq!(row0[1], Some(LiteralValue::Float(35.0)));
 }
 
 #[test]
@@ -731,4 +735,144 @@ fn test_case_no_else() {
     assert_eq!(row0[0], Some(LiteralValue::String("one".to_string())));
     let row1 = batches[0].get_row(1).unwrap();
     assert_eq!(row1[0], None);
+}
+
+#[test]
+fn test_group_by() {
+    let engine = setup();
+    engine
+        .execute("CREATE TABLE t (dept TEXT, amt INTEGER)")
+        .unwrap();
+    engine.execute("INSERT INTO t VALUES ('a', 10)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('a', 20)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('b', 5)").unwrap();
+    engine.execute("INSERT INTO t VALUES ('b', 15)").unwrap();
+
+    let batches = engine
+        .execute_query("SELECT dept, COUNT(*), SUM(amt) FROM t GROUP BY dept")
+        .unwrap();
+    assert_eq!(batches[0].num_rows, 2);
+    assert_eq!(batches[0].num_columns(), 3);
+
+    let dept_col = batches[0].get_column(0).unwrap();
+    match dept_col {
+        Column::String(vals) => {
+            assert_eq!(vals, &[Some("a".to_string()), Some("b".to_string())]);
+        }
+        _ => panic!("expected string dept column"),
+    }
+    let count_col = batches[0].get_column(1).unwrap();
+    match count_col {
+        Column::Integer(vals) => {
+            assert_eq!(vals, &[Some(2), Some(2)]);
+        }
+        _ => panic!("expected integer count column"),
+    }
+    let sum_col = batches[0].get_column(2).unwrap();
+    match sum_col {
+        Column::Float(vals) => {
+            assert_eq!(vals, &[Some(30.0), Some(20.0)]);
+        }
+        _ => panic!("expected float sum column"),
+    }
+}
+
+#[test]
+fn test_order_by_alias() {
+    let engine = setup();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
+    engine.execute("INSERT INTO t VALUES (1, 'zz')").unwrap();
+    engine.execute("INSERT INTO t VALUES (2, 'aa')").unwrap();
+    engine.execute("INSERT INTO t VALUES (3, 'mm')").unwrap();
+
+    // Sort by a projected alias, not the underlying column.
+    let batches = engine
+        .execute_query("SELECT b AS letter, a AS num FROM t ORDER BY letter ASC")
+        .unwrap();
+    let col = batches[0].get_column(0).unwrap();
+    match col {
+        Column::String(vals) => {
+            assert_eq!(
+                vals,
+                &[
+                    Some("aa".to_string()),
+                    Some("mm".to_string()),
+                    Some("zz".to_string())
+                ]
+            );
+        }
+        _ => panic!("expected string column"),
+    }
+}
+
+#[test]
+fn test_order_by_ordinal() {
+    let engine = setup();
+    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine.execute("INSERT INTO t VALUES (1, 'zz')").unwrap();
+    engine.execute("INSERT INTO t VALUES (2, 'aa')").unwrap();
+    engine.execute("INSERT INTO t VALUES (3, 'mm')").unwrap();
+
+    // ORDER BY 2 sorts by the second projected column (b).
+    let batches = engine
+        .execute_query("SELECT a, b FROM t ORDER BY 2 ASC")
+        .unwrap();
+    let b_col = batches[0].get_column(1).unwrap();
+    match b_col {
+        Column::String(vals) => {
+            assert_eq!(
+                vals,
+                &[
+                    Some("aa".to_string()),
+                    Some("mm".to_string()),
+                    Some("zz".to_string())
+                ]
+            );
+        }
+        _ => panic!("expected string column"),
+    }
+}
+
+#[test]
+fn test_join() {
+    let engine = setup();
+    engine
+        .execute("CREATE TABLE dept (id INTEGER, name TEXT)")
+        .unwrap();
+    engine.execute("INSERT INTO dept VALUES (1, 'eng')").unwrap();
+    engine.execute("INSERT INTO dept VALUES (2, 'ops')").unwrap();
+    engine.execute("INSERT INTO dept VALUES (3, 'sales')").unwrap();
+
+    engine
+        .execute("CREATE TABLE emp (eid INTEGER, did INTEGER, ename TEXT)")
+        .unwrap();
+    engine.execute("INSERT INTO emp VALUES (10, 1, 'alice')").unwrap();
+    engine.execute("INSERT INTO emp VALUES (11, 2, 'bob')").unwrap();
+    engine.execute("INSERT INTO emp VALUES (12, 2, 'carol')").unwrap();
+    engine.execute("INSERT INTO emp VALUES (13, 99, 'orphan')").unwrap();
+
+    // Inner join: each matching pair is produced.
+    let batches = engine
+        .execute_query("SELECT id, eid, ename FROM dept JOIN emp ON id = did")
+        .unwrap();
+    assert_eq!(batches[0].num_rows, 3);
+    assert_eq!(batches[0].num_columns(), 3);
+}
+
+#[test]
+fn test_cross_join() {
+    let engine = setup();
+    engine.execute("CREATE TABLE a (x INTEGER)").unwrap();
+    engine.execute("INSERT INTO a VALUES (1)").unwrap();
+    engine.execute("INSERT INTO a VALUES (2)").unwrap();
+    engine.execute("CREATE TABLE b (y INTEGER)").unwrap();
+    engine.execute("INSERT INTO b VALUES (10)").unwrap();
+    engine.execute("INSERT INTO b VALUES (20)").unwrap();
+
+    // CROSS join (JOIN without ON) produces the full product.
+    let batches = engine.execute_query("SELECT * FROM a JOIN b").unwrap();
+    assert_eq!(batches[0].num_rows, 4);
+    assert_eq!(batches[0].num_columns(), 2);
 }

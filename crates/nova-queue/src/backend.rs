@@ -426,9 +426,8 @@ impl QueueBackend for StorageQueueBackend {
     }
 
     async fn stats(&self, queue_name: &str) -> Result<QueueStats> {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
-        // Count available messages
+        // Count messages by state
+        // Note: stats is point-in-time counts, not time-dependent, so now_ms not needed
         let avail_start =
             nova_core::Key::from(format!("queue:available:{}:", queue_name).into_bytes());
         let avail_end = {

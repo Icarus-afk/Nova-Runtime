@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod blob;
 pub mod cache;
+pub mod http;
 pub mod queue;
 pub mod scheduler;
 pub mod search;

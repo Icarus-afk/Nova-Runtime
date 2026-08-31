@@ -1,6 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
-use axum::extract::{Path, State};
+use crate::routes::http::pagination_links;
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::{
     Router,
@@ -192,23 +194,52 @@ async fn sql_execute(
     }
 }
 
-async fn list_tables(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct ListTablesParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_tables(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<ListTablesParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let engine = state
         .sql_engine
         .as_ref()
         .ok_or_else(|| ApiError::internal("SQL engine not available"))?;
     let tables = engine.table_names();
+    let total = tables.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = offset + limit < total;
     let data: Vec<Value> = tables
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .map(|name| {
             let count = engine.num_rows(&name).unwrap_or(0);
             json!({ "name": name, "document_count": count })
         })
         .collect();
-    Ok(Json(json!({
-        "data": data,
-        "pagination": {"cursor": null, "limit": 50, "has_more": false}
-    })))
+    let link = pagination_links(
+        "/api/v1/sql/tables",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
+    ))
 }
 
 async fn get_table_schema(

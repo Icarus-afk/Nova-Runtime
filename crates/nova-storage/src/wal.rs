@@ -438,17 +438,8 @@ impl GroupCommit {
         let mut batch: Vec<WalRecord> = std::mem::take(&mut *pending);
         drop(pending);
 
-        // Sort by LSN and deduplicate by key (keep last per key, deterministic)
+        // Sort by LSN only — WAL is an ordered log; dedup by key drops writes
         batch.sort_by_key(|r| r.lsn.value());
-        {
-            use std::collections::BTreeMap;
-            let mut latest: BTreeMap<Vec<u8>, WalRecord> = BTreeMap::new();
-            for r in batch {
-                latest.insert(r.key.as_bytes().to_vec(), r);
-            }
-            batch = latest.into_values().collect();
-            batch.sort_by_key(|r| r.lsn.value());
-        }
 
         for record in &batch {
             wal.append(record)?;
@@ -767,11 +758,13 @@ mod tests {
         writer.close().unwrap();
 
         let mut reader = WalReader::open(&dir).unwrap();
+        // WAL is an ordered log — all writes preserved in LSN order, no dedup
         let r1 = reader.read_next().unwrap().unwrap();
-        // After sort-by-lsn and dedup-by-key: duplicates removed, sorted by key for determinism
-        assert_eq!(r1.key, Key::from("a"));
+        assert_eq!(r1.key, Key::from("b"));
         let r2 = reader.read_next().unwrap().unwrap();
-        assert_eq!(r2.key, Key::from("b"));
+        assert_eq!(r2.key, Key::from("a"));
+        let r3 = reader.read_next().unwrap().unwrap();
+        assert_eq!(r3.key, Key::from("b"));
         assert!(reader.read_next().unwrap().is_none());
         cleanup(&dir);
     }

@@ -257,7 +257,7 @@ pub fn eval_binary_op(
     }
 }
 
-fn eval_unary_op(op: UnaryOperator, val: &LiteralValue) -> Result<LiteralValue> {
+pub fn eval_unary_op(op: UnaryOperator, val: &LiteralValue) -> Result<LiteralValue> {
     match op {
         UnaryOperator::Neg => match val {
             LiteralValue::Integer(i) => Ok(LiteralValue::Integer(-i)),

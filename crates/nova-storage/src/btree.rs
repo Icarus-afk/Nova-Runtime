@@ -99,28 +99,40 @@ fn get_int_child_index(data: &[u8], hash: u64) -> usize {
 }
 
 pub struct BTree {
-    root_id: std::cell::Cell<Option<PageId>>,
+    root_id: std::sync::atomic::AtomicU64,
     order: usize,
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 impl BTree {
     pub fn new(order: usize) -> Self {
         BTree {
-            root_id: std::cell::Cell::new(None),
+            root_id: std::sync::atomic::AtomicU64::new(0),
             order: if order < 4 { 128 } else { order },
+            next_id: std::sync::atomic::AtomicU64::new(1000),
         }
     }
 
     pub fn set_root(&self, id: PageId) {
-        self.root_id.set(Some(id));
+        self.root_id.store(id.value(), std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_root(&self) -> Option<PageId> {
-        self.root_id.get()
+        let v = self.root_id.load(std::sync::atomic::Ordering::Relaxed);
+        if v == 0 {
+            None
+        } else {
+            Some(PageId::new(v))
+        }
+    }
+
+    fn allocate_page_id(&self) -> u64 {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn get(&self, cache: &super::page_cache::PageCache, key: &Key) -> Result<Option<Value>> {
-        let root_id = match self.root_id.get() {
+        let root_id = match self.get_root() {
             Some(id) => id,
             None => return Ok(None),
         };
@@ -183,7 +195,7 @@ impl BTree {
         key: Key,
         value: Value,
     ) -> Result<()> {
-        let root_id = self.root_id.get();
+        let root_id = self.get_root();
         let root_id = match root_id {
             Some(id) => id,
             None => {
@@ -197,7 +209,7 @@ impl BTree {
                 page.id = page_id;
                 page.mark_dirty();
                 cache.insert(page)?;
-                self.root_id.set(Some(page_id));
+                self.set_root(page_id);
                 page_id
             }
         };
@@ -205,7 +217,7 @@ impl BTree {
         let result = self.insert_into(cache, root_id, key, value)?;
         if let Some((sep_key, new_child_id)) = result {
             let old_root_id = root_id;
-            let new_root_id = PageId::new(allocate_page_id());
+            let new_root_id = PageId::new(self.allocate_page_id());
             let mut new_root = Page::new(new_root_id);
             write_u16(&mut new_root.data, NODE_TYPE_OFF, INTERNAL_NODE);
             write_u16(&mut new_root.data, COUNT_OFF, 1);
@@ -229,7 +241,7 @@ impl BTree {
                 cache.insert(new_page)?;
             }
 
-            self.root_id.set(Some(new_root_id));
+            self.set_root(new_root_id);
         }
         Ok(())
     }
@@ -342,7 +354,7 @@ impl BTree {
         entries.insert(insert_pos, (key.clone(), value.clone(), 0));
 
         let split_key = entries[mid].0.clone();
-        let new_page_id = PageId::new(allocate_page_id());
+        let new_page_id = PageId::new(self.allocate_page_id());
         let mut new_page = Page::new(new_page_id);
         write_u16(&mut new_page.data, NODE_TYPE_OFF, LEAF_NODE);
         write_u16(&mut new_page.data, COUNT_OFF, 0);
@@ -432,7 +444,7 @@ impl BTree {
 
         let mid = order;
         let promoted = entries[mid].clone();
-        let new_page_id = PageId::new(allocate_page_id());
+        let new_page_id = PageId::new(self.allocate_page_id());
         let mut new_page = Page::new(new_page_id);
         write_u16(&mut new_page.data, NODE_TYPE_OFF, INTERNAL_NODE);
         write_u16(&mut new_page.data, COUNT_OFF, 0);
@@ -478,7 +490,7 @@ impl BTree {
     }
 
     pub fn delete(&self, cache: &super::page_cache::PageCache, key: &Key) -> Result<bool> {
-        let root_id = match self.root_id.get() {
+        let root_id = match self.get_root() {
             Some(id) => id,
             None => return Ok(false),
         };
@@ -532,7 +544,7 @@ impl BTree {
         cache: &super::page_cache::PageCache,
         range: Range<Key>,
     ) -> Result<Vec<(Key, Value)>> {
-        let root_id = match self.root_id.get() {
+        let root_id = match self.get_root() {
             Some(id) => id,
             None => return Ok(vec![]),
         };
@@ -635,12 +647,6 @@ fn push_int_entry(data: &mut [u8], idx: usize, key_hash: u64, child_id: u64, key
     data[entry_off + 8..entry_off + 16].copy_from_slice(&child_id.to_le_bytes());
     data[entry_off + 16..entry_off + 18].copy_from_slice(&(key_off as u16).to_le_bytes());
     data[entry_off + 18..entry_off + 20].copy_from_slice(&(key_bytes.len() as u16).to_le_bytes());
-}
-
-static NEXT_ALLOC_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
-
-fn allocate_page_id() -> u64 {
-    NEXT_ALLOC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]

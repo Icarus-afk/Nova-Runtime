@@ -212,8 +212,9 @@ impl Store {
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         let mt = self.memtable.read();
-        if let Some(val) = mt.get(key) {
-            return Ok(Some(val));
+        if let Some(value) = mt.get_with_tombstone(key) {
+            // Memtable holds the most recent write; a tombstone here is authoritative.
+            return Ok(value);
         }
         drop(mt);
 
@@ -282,9 +283,27 @@ impl Store {
             }
         }
         drop(mt);
+
+        let mut seen: std::collections::BTreeSet<Vec<u8>> = results
+            .iter()
+            .map(|(k, _)| k.as_bytes().to_vec())
+            .collect();
+
+        let sstables = self.sstables.read();
+        for sstable in sstables.iter() {
+            if let Ok(sst_results) = sstable.scan(&range) {
+                for (k, v) in sst_results {
+                    if seen.insert(k.as_bytes().to_vec()) {
+                        results.push((k, v));
+                    }
+                }
+            }
+        }
+        drop(sstables);
+
         let btree_results = self.btree.scan(&self.page_cache, range)?;
         for (k, v) in btree_results {
-            if !results.iter().any(|(rk, _)| rk.as_bytes() == k.as_bytes()) {
+            if seen.insert(k.as_bytes().to_vec()) {
                 results.push((k, v));
             }
         }
@@ -445,18 +464,14 @@ impl Store {
             return Ok(());
         }
         let all_entries: Vec<(Key, Value)> = {
-            let mut merged: Vec<(Vec<u8>, Value)> = Vec::new();
+            use std::collections::BTreeMap;
+            let mut merged: BTreeMap<Vec<u8>, Value> = BTreeMap::new();
             for sst in sstables.iter() {
                 let sst_entries = sst.scan(&(Key::new(vec![])..Key::new(vec![0xFF; 256])))?;
                 for (key, value) in sst_entries {
-                    if let Some(pos) = merged.iter().position(|(k, _)| *k == key.as_bytes()) {
-                        merged[pos] = (key.as_bytes().to_vec(), value);
-                    } else {
-                        merged.push((key.as_bytes().to_vec(), value));
-                    }
+                    merged.insert(key.as_bytes().to_vec(), value);
                 }
             }
-            merged.sort_by(|a, b| a.0.cmp(&b.0));
             merged.into_iter().map(|(k, v)| (Key::new(k), v)).collect()
         };
 

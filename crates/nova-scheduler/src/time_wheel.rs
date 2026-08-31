@@ -89,6 +89,14 @@ impl TimeWheel {
     pub fn num_slots(&self) -> usize {
         self.slots.len()
     }
+
+    pub fn uptime_ms(&self) -> i64 {
+        chrono::Utc::now().timestamp_millis() - *self.started_at.read()
+    }
+
+    pub fn started_at(&self) -> i64 {
+        *self.started_at.read()
+    }
 }
 
 /// Priority queue for long-interval jobs (>36s).

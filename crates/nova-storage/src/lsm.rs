@@ -42,6 +42,17 @@ impl MemTable {
         Some(entry.value.clone())
     }
 
+    /// Like [`Self::get`] but distinguishes "absent" from "tombstoned".
+    /// Returns `Some(Some(v))` for an active value, `Some(None)` for a
+    /// key that was deleted, and `None` when the key is unknown.
+    pub fn get_with_tombstone(&self, key: &Key) -> Option<Option<Value>> {
+        let entry = self.data.get(key.as_bytes())?;
+        if entry.flags & 0x01 != 0 {
+            return Some(None);
+        }
+        Some(Some(entry.value.clone()))
+    }
+
     pub fn insert(&mut self, key: Key, value: Value) {
         let entry = MemTableEntry {
             value: value.clone(),

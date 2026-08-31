@@ -253,16 +253,16 @@ impl EventBus {
     }
 
     pub fn pause_subscriber(&self, subscription_id: Uuid) -> Result<()> {
-        let subs = self.trie.all_subscriptions();
-        for sub in &subs {
-            if sub.id == subscription_id {
-                return Ok(());
-            }
+        if self.trie.set_active(subscription_id, false) {
+            return Ok(());
         }
         Err(EventError::SubscriberNotFound)
     }
 
-    pub fn resume_subscriber(&self, _subscription_id: Uuid) -> Result<()> {
+    pub fn resume_subscriber(&self, subscription_id: Uuid) -> Result<()> {
+        // Best-effort: set active if found, always Ok for backward compat
+        // (pause correctly returns Err when not found; resume is more lenient)
+        self.trie.set_active(subscription_id, true);
         Ok(())
     }
 

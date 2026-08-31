@@ -40,11 +40,12 @@ impl PageCache {
     }
 
     pub fn get(&self, id: PageId) -> Result<Option<Page>> {
-        let inner = self.inner.read();
-        if let Some(page) = inner.dirty.get(&id) {
-            return Ok(Some(page.clone()));
+        // Use write lock for LRU promotion on hit — peek does not update LRU order
+        let mut inner = self.inner.write();
+        if let Some(page) = inner.dirty.get(&id).cloned() {
+            return Ok(Some(page));
         }
-        match inner.clean.peek(&id) {
+        match inner.clean.get(&id) {
             Some(page) => Ok(Some(page.clone())),
             None => Ok(None),
         }
@@ -70,15 +71,21 @@ impl PageCache {
     }
 
     pub fn flush(&self) -> Result<usize> {
+        // If no writeback is configured, flushing is a no-op — keep dirty pages
+        // Previously this drained and discarded dirty pages, losing B-Tree data
+        if self.writeback.is_none() {
+            let inner = self.inner.read();
+            return Ok(inner.dirty.len());
+        }
         let mut inner = self.inner.write();
         let dirty_pages: Vec<Page> = inner.dirty.drain().map(|(_, p)| p).collect();
         let count = dirty_pages.len();
-        if let Some(ref wb) = self.writeback {
-            for page in dirty_pages {
-                let mut p = page;
-                p.clear_dirty();
-                wb(p)?;
-            }
+        // writeback is Some here — safe to unwrap
+        let wb = self.writeback.as_ref().unwrap();
+        for page in dirty_pages {
+            let mut p = page;
+            p.clear_dirty();
+            wb(p)?;
         }
         Ok(count)
     }
@@ -184,7 +191,8 @@ mod tests {
 
     #[test]
     fn test_flush_dirty_pages() {
-        let cache = PageCache::new(16);
+        let mut cache = PageCache::new(16);
+        cache.set_writeback(|_| Ok(()));
         cache.insert(make_dirty_page(1)).unwrap();
         cache.insert(make_dirty_page(2)).unwrap();
         assert_eq!(cache.dirty_count(), 2);
@@ -221,10 +229,15 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        let cache = PageCache::new(16);
+        let mut cache = PageCache::new(16);
+        // Without writeback, flush is a no-op and dirty remains
         assert_eq!(cache.dirty_count(), 0);
         cache.insert(make_dirty_page(1)).unwrap();
         assert_eq!(cache.dirty_count(), 1);
+        cache.flush().unwrap();
+        assert_eq!(cache.dirty_count(), 1);
+        // With writeback, flush drains dirty
+        cache.set_writeback(|_| Ok(()));
         cache.flush().unwrap();
         assert_eq!(cache.dirty_count(), 0);
     }

@@ -1,10 +1,12 @@
 use crate::admin::{self, AdminState};
-use crate::middleware::{auth_layer, cors_layer, request_logger};
+use crate::error::ApiError;
+use crate::middleware::{
+    IdempotencyState, RateLimitState, auth_layer, cors_layer, idempotency_layer, rate_limit_layer,
+    request_logger,
+};
 use crate::routes;
 use axum::http::StatusCode;
-use axum::response::Json;
 use axum::{Router, middleware};
-use serde_json::json;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -19,12 +21,14 @@ pub async fn start_server(
     let fallback = || async {
         (
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "not_found",
-                "message": "The requested resource was not found"
-            })),
+            axum::response::IntoResponse::into_response(ApiError::not_found(
+                "The requested resource was not found",
+            )),
         )
     };
+
+    let rate_limit_state = Arc::new(RateLimitState::new(600, 60_000));
+    let idempotency_state = Arc::new(IdempotencyState::new());
 
     let mut app = Router::new()
         .nest("/", admin::routes(admin_state.clone()))
@@ -37,6 +41,14 @@ pub async fn start_server(
         .layer(middleware::from_fn_with_state(
             admin_state.clone(),
             auth_layer,
+        ))
+        .layer(middleware::from_fn_with_state(
+            rate_limit_state,
+            rate_limit_layer,
+        ))
+        .layer(middleware::from_fn_with_state(
+            idempotency_state,
+            idempotency_layer,
         ))
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))

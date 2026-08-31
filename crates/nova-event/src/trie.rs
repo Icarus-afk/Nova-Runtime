@@ -154,6 +154,36 @@ impl SubscriptionTrie {
             self.collect_subscriptions(child, subs);
         }
     }
+
+    pub fn set_active(&self, sub_id: Uuid, active: bool) -> bool {
+        self.set_active_recursive(&self.root, sub_id, active)
+    }
+
+    fn set_active_recursive(&self, node: &Arc<TrieNode>, sub_id: Uuid, active: bool) -> bool {
+        {
+            let mut subs = node.subscriptions.write();
+            if let Some(s) = subs.iter_mut().find(|s| s.id == sub_id) {
+                s.active = active;
+                return true;
+            }
+        }
+        for child in node.literal_children.read().values() {
+            if self.set_active_recursive(child, sub_id, active) {
+                return true;
+            }
+        }
+        if let Some(ref child) = *node.single_wildcard.read() {
+            if self.set_active_recursive(child, sub_id, active) {
+                return true;
+            }
+        }
+        if let Some(ref child) = *node.multi_wildcard.read() {
+            if self.set_active_recursive(child, sub_id, active) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]

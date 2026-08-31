@@ -1,8 +1,12 @@
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::Request;
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
-use axum::response::Response;
-use std::time::Instant;
+use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 pub async fn request_logger(req: Request<Body>, next: Next) -> Response {
@@ -119,15 +123,11 @@ pub async fn auth_layer(
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
-    // Public paths: health checks, openapi, login/refresh, graphql playground (GET), and OPTIONS preflight
+    // Explicit allowlist — deny by default (OWASP)
     let is_public = path == "/health"
         || path == "/ready"
         || path == "/live"
-        || path == "/metrics"
         || path == "/openapi.json"
-        || path == "/runtime/status"
-        || path == "/runtime/info"
-        || path == "/graphql" && method == axum::http::Method::GET
         || path == "/api/v1/auth/login"
         || path == "/api/v1/auth/refresh"
         || method == axum::http::Method::OPTIONS;
@@ -136,49 +136,347 @@ pub async fn auth_layer(
         return next.run(req).await;
     }
 
-    // Only protect /api/v1 and /admin and /runtime/config (mutating) — health stays public but admin/config needs auth
-    let needs_auth =
-        path.starts_with("/api/v1/") || path.starts_with("/admin/") || path == "/runtime/config";
+    // All API/admin/runtime/graphql require auth — deny by default
+    let needs_auth = path.starts_with("/api/")
+        || path.starts_with("/admin/")
+        || path.starts_with("/runtime/")
+        || path.starts_with("/graphql")
+        || path == "/metrics"
+        || path == "/ws";
 
     if !needs_auth {
-        return next.run(req).await;
+        // Unknown path — deny with RFC7807 problem+json
+        return crate::error::ApiError::not_found("Not found").into_response();
     }
 
     let auth_mgr = match &state.auth_mgr {
         Some(m) => m,
-        None => return next.run(req).await, // if auth disabled, allow
+        None => {
+            // Auth disabled but route requires auth — deny (not bypass)
+            let mut res =
+                crate::error::ApiError::unauthorized("Authentication required").into_response();
+            res.headers_mut()
+                .insert("www-authenticate", "Bearer".parse().unwrap());
+            return res;
+        }
     };
 
-    let token = req
+    // Try Bearer token first
+    let bearer_token = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string());
 
-    match token {
-        Some(t) => {
-            if auth_mgr.validate_session(&t).is_ok() {
-                next.run(req).await
-            } else {
-                let body = serde_json::json!({"type":"about:blank","title":"Unauthorized","status":401,"detail":"Invalid or expired token"});
-                let mut res = Response::new(Body::from(body.to_string()));
-                *res.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
-                res.headers_mut()
-                    .insert("content-type", "application/json".parse().unwrap());
-                res
+    // Try X-Api-Key header or Authorization: ApiKey
+    let api_key = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            req.headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("ApiKey "))
+                .map(|s| s.to_string())
+        });
+
+    // Try Bearer
+    if let Some(ref t) = bearer_token {
+        if let Ok(session) = auth_mgr.validate_session(t) {
+            // RBAC check for mutating auth endpoints — require admin
+            if path.starts_with("/api/v1/auth/")
+                && matches!(
+                    method,
+                    axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
+                )
+            {
+                // Allow login/refresh already handled as public, other auth mutating requires admin
+                if !auth_mgr.check_permission(&session.user_id, "admin:users:write")
+                    && !session.roles.contains(&"admin".to_string())
+                {
+                    // For non-admin, only allow self-service (e.g., change own password) — handled in handler
+                    // For now, require admin for /users and /api-keys creation
+                    if path == "/api/v1/auth/users"
+                        || path == "/api/v1/auth/api-keys"
+                        || path.contains("/roles")
+                        || path.contains("/api-keys/")
+                    {
+                        return crate::error::ApiError::forbidden("Admin role required")
+                            .into_response();
+                    }
+                }
             }
-        }
-        None => {
-            // Also accept api-key via X-Api-Key or Authorization: ApiKey <key> ?
-            let body = serde_json::json!({"type":"about:blank","title":"Unauthorized","status":401,"detail":"Missing Authorization Bearer token"});
-            let mut res = Response::new(Body::from(body.to_string()));
-            *res.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
-            res.headers_mut()
-                .insert("content-type", "application/json".parse().unwrap());
-            res
+            return next.run(req).await;
         }
     }
+
+    // Try API key
+    if let Some(ref k) = api_key {
+        // Hash and lookup
+        use sha2::{Digest, Sha256};
+        let hash = hex::encode(Sha256::digest(k.as_bytes()));
+        let found = auth_mgr.list_api_keys().into_iter().find(|ak| {
+            ak.key_hash == hash
+                && ak.enabled
+                && ak
+                    .expires_at
+                    .map(|exp| exp > chrono::Utc::now().timestamp_millis())
+                    .unwrap_or(true)
+        });
+        if found.is_some() {
+            return next.run(req).await;
+        }
+    }
+
+    let mut res = if bearer_token.is_some() || api_key.is_some() {
+        crate::error::ApiError::unauthorized("Invalid or expired token or API key").into_response()
+    } else {
+        crate::error::ApiError::unauthorized("Missing Authorization Bearer token or X-Api-Key")
+            .into_response()
+    };
+    res.headers_mut()
+        .insert("www-authenticate", "Bearer".parse().unwrap());
+    res
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn client_key(req: &Request<Body>) -> String {
+    if let Some(v) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+    {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    if let Some(v) = req
+        .headers()
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+    {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    "local".to_string()
+}
+
+/// Fixed-window rate limiter keyed by client IP.
+pub struct RateLimitState {
+    limit: u32,
+    window_ms: u64,
+    windows: Mutex<HashMap<String, Window>>,
+}
+
+struct Window {
+    start: u64,
+    count: u32,
+}
+
+impl RateLimitState {
+    pub fn new(limit: u32, window_ms: u64) -> Self {
+        Self {
+            limit,
+            window_ms,
+            windows: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+pub async fn rate_limit_layer(
+    axum::extract::State(state): axum::extract::State<Arc<RateLimitState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let client = client_key(&req);
+    let now = now_ms();
+    let (permit, remaining, reset_in) = {
+        let mut windows = state.windows.lock().unwrap();
+        if windows.len() > 10_000 {
+            windows.retain(|_, w| now.saturating_sub(w.start) < state.window_ms);
+        }
+        let w = windows.entry(client).or_insert(Window {
+            start: now,
+            count: 0,
+        });
+        if now.saturating_sub(w.start) >= state.window_ms {
+            w.start = now;
+            w.count = 0;
+        }
+        w.count += 1;
+        let remaining = state.limit.saturating_sub(w.count);
+        let reset_at = w.start + state.window_ms;
+        (
+            w.count <= state.limit,
+            remaining,
+            reset_at.saturating_sub(now),
+        )
+    };
+
+    let mut response = if permit {
+        next.run(req).await
+    } else {
+        crate::error::ApiError::too_many_requests("Rate limit exceeded")
+            .with_header("retry-after", reset_in.max(1).to_string())
+            .with_header("x-ratelimit-limit", state.limit.to_string())
+            .with_header("x-ratelimit-remaining", "0".to_string())
+            .with_header("x-ratelimit-reset", reset_in.to_string())
+            .into_response()
+    };
+
+    if !response.headers().contains_key("x-ratelimit-limit") {
+        if let Ok(v) = HeaderValue::from_str(&state.limit.to_string()) {
+            response.headers_mut().insert("x-ratelimit-limit", v);
+        }
+    }
+    if let Ok(v) = HeaderValue::from_str(&remaining.to_string()) {
+        response.headers_mut().insert("x-ratelimit-remaining", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&reset_in.to_string()) {
+        response.headers_mut().insert("x-ratelimit-reset", v);
+    }
+    response
+}
+
+/// Idempotency-Key deduplication for mutating methods.
+pub struct IdempotencyState {
+    store: Mutex<HashMap<String, StoredResponse>>,
+    ttl_ms: u64,
+}
+
+struct StoredResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Bytes,
+}
+
+impl Clone for StoredResponse {
+    fn clone(&self) -> Self {
+        Self {
+            status: self.status,
+            headers: self.headers.clone(),
+            body: self.body.clone(),
+        }
+    }
+}
+
+impl IdempotencyState {
+    pub fn new() -> Self {
+        Self {
+            store: Mutex::new(HashMap::new()),
+            ttl_ms: 60_000,
+        }
+    }
+}
+
+impl Default for IdempotencyState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub async fn idempotency_layer(
+    axum::extract::State(state): axum::extract::State<Arc<IdempotencyState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let m = req.method();
+    let mutating =
+        m == &Method::POST || m == &Method::PUT || m == &Method::PATCH || m == &Method::DELETE;
+    let key = req
+        .headers()
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if !mutating || key.is_none() {
+        return next.run(req).await;
+    }
+
+    let store_key = format!("{}:{}", key.as_deref().unwrap_or(""), req.uri().path());
+    {
+        let mut store = state.store.lock().unwrap();
+        if store.len() > 10_000 {
+            let cutoff = now_ms().saturating_sub(state.ttl_ms);
+            store.retain(|_, s| {
+                s.headers
+                    .iter()
+                    .find(|(n, _)| n == "__created")
+                    .and_then(|(_, v)| v.parse::<u64>().ok())
+                    .map(|t| t >= cutoff)
+                    .unwrap_or(true)
+            });
+        }
+        if let Some(stored) = store.get(&store_key).cloned() {
+            return build_response(stored);
+        }
+    }
+
+    let response = next.run(req).await;
+    let status = response.status().as_u16();
+    let headers: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .filter(|(n, _)| {
+            *n != axum::http::header::TRANSFER_ENCODING && *n != axum::http::header::CONTENT_LENGTH
+        })
+        .map(|(n, v)| (n.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let body = match to_bytes(response.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(_) => Bytes::new(),
+    };
+
+    let mut headers = headers;
+    headers.push(("__created".to_string(), now_ms().to_string()));
+
+    if (200..300).contains(&status) {
+        state.store.lock().unwrap().insert(
+            store_key,
+            StoredResponse {
+                status,
+                headers: headers.clone(),
+                body: body.clone(),
+            },
+        );
+    }
+
+    build_response(StoredResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+fn build_response(stored: StoredResponse) -> Response {
+    let mut resp = Response::new(Body::from(stored.body));
+    *resp.status_mut() =
+        StatusCode::from_u16(stored.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    for (n, v) in stored.headers {
+        if n == "__created" {
+            continue;
+        }
+        if let (Ok(hn), Ok(hv)) = (
+            HeaderName::from_bytes(n.as_bytes()),
+            HeaderValue::from_str(&v),
+        ) {
+            resp.headers_mut().insert(hn, hv);
+        }
+    }
+    resp
 }
 
 #[cfg(test)]
@@ -383,5 +681,86 @@ mod tests {
             response.headers()["access-control-allow-origin"],
             "http://localhost:5173"
         );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_headers_and_throttle() {
+        let state = Arc::new(RateLimitState::new(2, 60_000));
+        let app = Router::new()
+            .route("/rl", get(|| async { Json(json!({"ok": true})) }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                rate_limit_layer,
+            ));
+
+        let r1 = app
+            .clone()
+            .oneshot(Request::get("/rl").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r1.headers()["x-ratelimit-limit"], "2");
+        assert_eq!(r1.headers()["x-ratelimit-remaining"], "1");
+        assert!(r1.headers().contains_key("x-ratelimit-reset"));
+        assert!(r1.status().is_success());
+
+        let r2 = app
+            .clone()
+            .oneshot(Request::get("/rl").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r2.headers()["x-ratelimit-remaining"], "0");
+        assert!(r2.status().is_success());
+
+        let r3 = app
+            .clone()
+            .oneshot(Request::get("/rl").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r3.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(r3.headers()["x-ratelimit-remaining"], "0");
+        assert!(r3.headers().contains_key("retry-after"));
+    }
+
+    #[derive(Clone)]
+    struct IdemCtx {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    async fn idem_handler(
+        axum::extract::State(ctx): axum::extract::State<IdemCtx>,
+    ) -> Json<serde_json::Value> {
+        ctx.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Json(json!({"created": true, "seq": 1}))
+    }
+
+    #[tokio::test]
+    async fn test_idempotency_replays_response() {
+        let state = Arc::new(IdempotencyState::new());
+        let ctx = IdemCtx {
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/idem", axum::routing::post(idem_handler))
+            .with_state(ctx.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                idempotency_layer,
+            ));
+
+        let req1 = Request::post("/idem")
+            .header("idempotency-key", "abc-123")
+            .body(Body::empty())
+            .unwrap();
+        let r1 = app.clone().oneshot(req1).await.unwrap();
+        assert!(r1.status().is_success());
+
+        let req2 = Request::post("/idem")
+            .header("idempotency-key", "abc-123")
+            .body(Body::empty())
+            .unwrap();
+        let r2 = app.clone().oneshot(req2).await.unwrap();
+
+        assert_eq!(ctx.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(r1.status(), r2.status());
     }
 }

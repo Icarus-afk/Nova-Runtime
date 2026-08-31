@@ -1,6 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
-use axum::extract::{Path, State};
+use crate::routes::http::{Created, created, pagination_links};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::{
     Router,
@@ -54,7 +56,7 @@ struct IndexFieldDef {
 async fn create_index(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateIndexRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let _mgr = state
         .search_mgr
         .as_ref()
@@ -99,24 +101,46 @@ async fn create_index(
         req.name,
         fields.len()
     );
-    Ok(Json(json!({
-        "id": format!("idx_{}", &req.name),
-        "name": req.name,
-        "fields": fields,
-        "status": "created",
-    })))
+    let name = req.name.clone();
+    Ok(created(
+        &format!("/api/v1/search/indexes/{name}"),
+        json!({
+            "id": format!("idx_{name}"),
+            "name": req.name,
+            "fields": fields,
+            "status": "created",
+        }),
+    ))
 }
 
-async fn list_indexes(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct ListIndexesParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_indexes(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<ListIndexesParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let _mgr = state
         .search_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
     let reg = registry().read();
-    let data: Vec<Value> = reg
-        .values()
-        .map(|m| {
+    let mut names: Vec<String> = reg.keys().cloned().collect();
+    names.sort();
+    let total = names.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = offset + limit < total;
+    let data: Vec<Value> = names
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|n| {
             let stats = _mgr.stats();
+            let m = &reg[&n];
             json!({
                 "name": m.name,
                 "fields": m.fields,
@@ -126,10 +150,24 @@ async fn list_indexes(State(state): State<Arc<AdminState>>) -> Result<Json<Value
             })
         })
         .collect();
-    Ok(Json(json!({
-        "data": data,
-        "pagination": {"cursor": null, "limit": 50, "has_more": false}
-    })))
+    let link = pagination_links(
+        "/api/v1/search/indexes",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
+    ))
 }
 
 async fn get_index(
@@ -252,7 +290,7 @@ async fn search_query(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
     Json(req): Json<SearchQueryRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .search_mgr
         .as_ref()
@@ -296,14 +334,28 @@ async fn search_query(
             })
         })
         .collect();
-    Ok(Json(json!({
-        "index": name,
-        "hits": hits,
-        "total_hits": total_hits,
-        "offset": offset,
-        "limit": limit,
-        "execution_time_ms": 0,
-    })))
+    let link = pagination_links(
+        &format!("/api/v1/search/indexes/{name}/query"),
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total_hits,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "index": name,
+            "hits": hits,
+            "total_hits": total_hits,
+            "offset": offset,
+            "limit": limit,
+            "execution_time_ms": 0,
+        })),
+    ))
 }
 
 async fn index_stats(

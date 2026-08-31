@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 use uuid::Uuid;
 
 /// Type of credential a provider handles.
@@ -228,6 +227,14 @@ pub fn generate_session_token() -> String {
     let bytes: [u8; 32] = rand::thread_rng().r#gen();
     let encoded = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
     format!("nova_sess_{}", encoded)
+}
+
+/// Generate a cryptographically random password (URL-safe base64, 24 bytes).
+/// Used to bootstrap the initial admin account instead of a hardcoded default.
+pub fn generate_random_password() -> String {
+    use rand::Rng;
+    let bytes: [u8; 24] = rand::thread_rng().r#gen();
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
 /// Validate password against policy.

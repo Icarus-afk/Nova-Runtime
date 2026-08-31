@@ -142,6 +142,18 @@ impl PipelineExecutor {
             return OperationResponse::error(ErrorCode::ServiceUnavailable, "pipeline is draining");
         }
 
+        // Check idempotency first — return cached response if available
+        if let Some(key) = req.options.idempotency_key {
+            if let Some(cached) = self.check_idempotency(key, req.operation_type) {
+                return cached;
+            }
+        }
+
+        // Check operation queue depth for backpressure
+        if self.operation_queue.len() >= self.operation_queue.capacity() {
+            return OperationResponse::error(ErrorCode::ServiceUnavailable, "operation queue full");
+        }
+
         let _permit = self.max_concurrent.acquire().await;
         self.active_operations.fetch_add(1, Ordering::AcqRel);
 
@@ -165,7 +177,15 @@ impl PipelineExecutor {
         let clamped = timeout_ms.min(self.config.max_operation_timeout_ms);
         ctx.deadline = Instant::now() + Duration::from_millis(clamped);
 
-        let response = self.run_pipeline(started_at, &mut ctx, &mut req);
+        let response = self.run_pipeline(started_at, &mut ctx, &mut req).await;
+
+        // Store idempotency for successful mutations
+        if let Some(key) = req.options.idempotency_key {
+            self.store_idempotency(key, &response);
+        }
+
+        // Touch operation queue for metrics (len/capacity now used above)
+        let _depth = self.operation_queue.len();
 
         self.metrics
             .record_operation(req.operation_type, response.status);
@@ -175,7 +195,7 @@ impl PipelineExecutor {
         response
     }
 
-    fn run_pipeline(
+    async fn run_pipeline(
         &self,
         started_at: Instant,
         ctx: &mut OperationContext,
@@ -218,7 +238,7 @@ impl PipelineExecutor {
             Some(PipelineResult::Error(e)) => {
                 return Self::build_error_response(ctx, started_at, e);
             }
-            None => self.execute_with_retry(ctx, req),
+            None => self.execute_with_retry(ctx, req).await,
             _ => unreachable!(),
         };
 
@@ -270,7 +290,7 @@ impl PipelineExecutor {
         }
     }
 
-    fn execute_with_retry(
+    async fn execute_with_retry(
         &self,
         ctx: &mut OperationContext,
         req: &mut OperationRequest,
@@ -292,7 +312,11 @@ impl PipelineExecutor {
                     )
                     .with_stage(PipelineStage::Execute));
                 }
-                let jitter_frac = (Instant::now().elapsed().as_nanos() % 26) as f64 / 100.0;
+                // Jitter using thread_rng for real randomness
+                let jitter_frac = {
+                    use rand::Rng;
+                    rand::thread_rng().gen_range(0.0..0.2)
+                };
                 let jitter_ms = (delay.as_millis() as f64 * jitter_frac) as u64;
                 let actual = delay + Duration::from_millis(jitter_ms);
                 if ctx.remaining_deadline() <= actual {
@@ -302,7 +326,7 @@ impl PipelineExecutor {
                     )
                     .with_stage(PipelineStage::Execute));
                 }
-                std::thread::sleep(actual);
+                tokio::time::sleep(actual).await;
             }
 
             if ctx.is_expired() {

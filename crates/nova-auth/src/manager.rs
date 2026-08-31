@@ -250,8 +250,6 @@ impl AuthManager {
         password: &str,
         roles: Vec<String>,
     ) -> Result<UserRecord> {
-        use bcrypt::{DEFAULT_COST, hash};
-
         if self.users.contains_key(username) {
             return Err(AuthError::InvalidArgument(format!(
                 "user '{}' already exists",
@@ -259,12 +257,14 @@ impl AuthManager {
             )));
         }
 
-        let cost = if self.config.bcrypt_cost == 0 {
-            DEFAULT_COST
-        } else {
-            self.config.bcrypt_cost
-        };
-        let password_hash = hash(password, cost).map_err(|e| AuthError::Internal(e.to_string()))?;
+        let password_hash = crate::providers::PasswordProvider::hash_password(
+            password,
+            self.config.bcrypt_cost,
+        );
+        // Verify hash was created correctly by checking it verifies
+        if !crate::providers::PasswordProvider::verify_password(password, &password_hash) {
+            return Err(AuthError::Internal("hash verification failed".into()));
+        }
 
         let now = chrono::Utc::now().timestamp_millis();
         let user = UserRecord {
@@ -323,14 +323,13 @@ impl AuthManager {
     }
 
     pub fn change_password(&self, id: &Uuid, new_password: &str) -> Result<()> {
-        use bcrypt::{DEFAULT_COST, hash};
-        let cost = if self.config.bcrypt_cost == 0 {
-            DEFAULT_COST
-        } else {
-            self.config.bcrypt_cost
-        };
-        let password_hash =
-            hash(new_password, cost).map_err(|e| AuthError::Internal(e.to_string()))?;
+        let password_hash = crate::providers::PasswordProvider::hash_password(
+            new_password,
+            self.config.bcrypt_cost,
+        );
+        if !crate::providers::PasswordProvider::verify_password(new_password, &password_hash) {
+            return Err(AuthError::Internal("hash verification failed".into()));
+        }
 
         let mut found = false;
         if let Some(mut entry) = self.users.iter_mut().find(|e| e.value().id == *id) {

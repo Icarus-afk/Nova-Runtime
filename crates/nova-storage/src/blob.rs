@@ -35,6 +35,7 @@ pub struct BlobStore {
     pub region_start: u64,
     pub region_end: AtomicU64,
     blob_index: RwLock<HashMap<u128, BlobRecord>>,
+    data: RwLock<HashMap<u128, Vec<u8>>>,
 }
 
 impl BlobStore {
@@ -45,6 +46,7 @@ impl BlobStore {
             region_start,
             region_end: AtomicU64::new(region_start + 1),
             blob_index: RwLock::new(HashMap::new()),
+            data: RwLock::new(HashMap::new()),
         }
     }
 
@@ -87,6 +89,7 @@ impl BlobStore {
 
         let mut index = self.blob_index.write();
         index.insert(blob_id, record);
+        self.data.write().insert(blob_id, data.to_vec());
         Ok(blob_id)
     }
 
@@ -107,7 +110,11 @@ impl BlobStore {
             }
         }
 
-        let checksum = crc32c::crc32c(&[]);
+        let data = self.data.read().get(&blob_id).cloned().ok_or_else(|| {
+            RuntimeError::Internal("blob data missing from store".into())
+        })?;
+
+        let checksum = crc32c::crc32c(&data);
         if checksum != record.checksum {
             return Err(RuntimeError::ChecksumMismatch {
                 expected: record.checksum,
@@ -115,12 +122,13 @@ impl BlobStore {
             });
         }
 
-        Ok(Some(Vec::new()))
+        Ok(Some(data))
     }
 
     pub fn delete(&self, blob_id: u128) -> Result<()> {
         let mut index = self.blob_index.write();
         index.remove(&blob_id);
+        self.data.write().remove(&blob_id);
         Ok(())
     }
 
@@ -199,6 +207,15 @@ mod tests {
         let store = setup();
         let result = store.get(999_999).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_blob_put_get_roundtrip() {
+        let store = setup();
+        let data = vec![0x55u8; (MIN_BLOB_SIZE + 64) as usize];
+        let id = store.put(&data, None).unwrap();
+        let out = store.get(id).unwrap().unwrap();
+        assert_eq!(out, data);
     }
 
     #[test]

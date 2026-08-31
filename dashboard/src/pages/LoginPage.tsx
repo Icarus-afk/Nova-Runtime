@@ -73,9 +73,12 @@ export default function LoginPage() {
                         {loading ? 'Signing in...' : 'Sign In'}
                     </button>
                 </form>
-                <div style={{ marginTop: 16, textAlign: 'center', fontSize: 12, color: 'var(--text-secondary)' }}>
-                    Default: admin / admin123
-                </div>
+                <details style={{ marginTop: 16, fontSize: 11, color: 'var(--text-muted)' }}>
+                    <summary style={{ cursor: 'pointer', listStyle: 'none' }}>Need help signing in?</summary>
+                    <div style={{ marginTop: 8, padding: 8, background: 'var(--bg-tertiary)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                        Contact your administrator for credentials. Default setup uses a temporary account that should be changed after first login.
+                    </div>
+                </details>
             </div>
         </div>
     );

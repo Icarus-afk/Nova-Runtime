@@ -15,12 +15,39 @@ pub struct SelectStatement {
     pub distinct: bool,
     pub select_list: Vec<SelectItem>,
     pub from: TableRef,
+    pub joins: Vec<Join>,
     pub where_clause: Option<Expr>,
     pub group_by: Vec<Expr>,
     pub having: Option<Expr>,
     pub order_by: Vec<OrderByExpr>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Join {
+    pub right: TableRef,
+    pub on: Option<Expr>,
+}
+
+impl SelectStatement {
+    pub fn new() -> Self {
+        SelectStatement {
+            distinct: false,
+            select_list: Vec::new(),
+            from: TableRef {
+                name: String::new(),
+                alias: None,
+            },
+            joins: Vec::new(),
+            where_clause: None,
+            group_by: Vec::new(),
+            having: None,
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

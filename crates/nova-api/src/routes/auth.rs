@@ -1,5 +1,6 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
+use crate::routes::http::{Created, created};
 use axum::extract::{Path, State};
 use axum::response::Json;
 use axum::{
@@ -35,7 +36,8 @@ fn check_login_rate_limit(ip: &str) -> Result<(), ApiError> {
         return Err(ApiError::too_many_requests(format!(
             "too many login attempts, retry in {retry_after}s"
         ))
-        .with_extra(json!({"retry_after_secs": retry_after})));
+        .with_extra(json!({"retry_after_secs": retry_after}))
+        .with_header("Retry-After", retry_after.to_string()));
     }
     entry.push(now);
     Ok(())
@@ -155,7 +157,7 @@ struct CreateApiKeyRequest {
 async fn create_api_key(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateApiKeyRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
@@ -185,15 +187,18 @@ async fn create_api_key(
             }
         }
     }
-    Ok(Json(json!({
-        "id": record.id.to_string(),
-        "name": record.name,
-        "key": full_key,
-        "prefix": record.prefix,
-        "permissions": record.permissions,
-        "created_at": record.created_at,
-        "expires_at": record.expires_at,
-    })))
+    Ok(created(
+        &format!("/api/v1/auth/api-keys/{}", record.id),
+        json!({
+            "id": record.id.to_string(),
+            "name": record.name,
+            "key": full_key,
+            "prefix": record.prefix,
+            "permissions": record.permissions,
+            "created_at": record.created_at,
+            "expires_at": record.expires_at,
+        }),
+    ))
 }
 
 async fn list_api_keys(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
@@ -248,7 +253,7 @@ struct CreateUserRequest {
 async fn create_user(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateUserRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
@@ -259,12 +264,16 @@ async fn create_user(
     let user = mgr
         .create_user(&req.username, &req.password, req.roles.unwrap_or_default())
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    Ok(Json(json!({
-        "id": user.id.to_string(),
-        "username": user.username,
-        "roles": user.roles,
-        "status": "created",
-    })))
+    let user_id = user.id.to_string();
+    Ok(created(
+        &format!("/api/v1/auth/users/{user_id}"),
+        json!({
+            "id": user_id,
+            "username": user.username,
+            "roles": user.roles,
+            "status": "created",
+        }),
+    ))
 }
 
 async fn list_users(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {

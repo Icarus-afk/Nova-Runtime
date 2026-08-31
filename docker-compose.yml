@@ -1,8 +1,8 @@
-version: "3.8"
-
 services:
   novad:
     build: .
+    image: ghcr.io/icarus-afk/nova-runtime:${TAG:-latest}
+    pull_policy: build
     ports:
       - "8642:8642"      # REST + GraphQL + /health
     volumes:
@@ -11,14 +11,30 @@ services:
       # - ./novad.toml:/etc/novad/novad.toml:ro
     environment:
       - RUST_LOG=info
+      - NOVA_GENERAL__DATA_DIR=/data
+      - NOVA_STORAGE__WAL_DIR=/data/wal
+      - NOVA_BLOB__DATA_DIR=/data/blobs
       # Override any TOML via NOVA_* env, e.g. NOVA_NETWORKING__LISTEN_PORT=8642
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Dashboard is already built into the novad image at /usr/share/novad/dashboard
   # If you use a separate nginx, uncomment:

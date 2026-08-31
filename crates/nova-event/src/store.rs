@@ -58,7 +58,11 @@ impl EventStore {
 
     pub fn scan_from(&self, offset: u64, limit: usize) -> Vec<StoredEvent> {
         let events = self.events.read();
-        let start = offset as usize;
+        // Index by stored offset, not Vec position — Vec is trimmed on capacity
+        let start = events
+            .iter()
+            .position(|e| e.offset >= offset)
+            .unwrap_or(events.len());
         if start >= events.len() {
             return vec![];
         }

@@ -1,6 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
-use axum::extract::{Path, State};
+use crate::routes::http::{Created, created, pagination_links};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::{
     Router,
@@ -35,7 +37,7 @@ struct CreateQueueRequest {
 async fn create_queue(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<CreateQueueRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Created, ApiError> {
     let mgr = state
         .queue_mgr
         .as_ref()
@@ -80,17 +82,29 @@ async fn create_queue(
             .await
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
     }
-    Ok(Json(json!({
-        "id": format!("q_{}", &req.name),
-        "name": req.name,
-        "status": "created",
-        "durable": req.durable.unwrap_or(true),
-        "max_length": req.max_length,
-        "max_message_size": req.max_message_size,
-    })))
+    Ok(created(
+        &format!("/api/v1/queues/{}", req.name),
+        json!({
+            "id": format!("q_{}", &req.name),
+            "name": req.name,
+            "status": "created",
+            "durable": req.durable.unwrap_or(true),
+            "max_length": req.max_length,
+            "max_message_size": req.max_message_size,
+        }),
+    ))
 }
 
-async fn list_queues(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct ListQueuesParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_queues(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<ListQueuesParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .queue_mgr
         .as_ref()
@@ -99,8 +113,14 @@ async fn list_queues(State(state): State<Arc<AdminState>>) -> Result<Json<Value>
         .list_queues()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let total = queues.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let has_more = offset + limit < total;
     let data: Vec<Value> = queues
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .map(|q| {
             json!({
                 "name": q.name,
@@ -113,8 +133,23 @@ async fn list_queues(State(state): State<Arc<AdminState>>) -> Result<Json<Value>
             })
         })
         .collect();
-    Ok(Json(
-        json!({"data": data, "pagination": {"cursor": null, "limit": 100, "has_more": false}}),
+    let link = pagination_links(
+        "/api/v1/queues",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
     ))
 }
 

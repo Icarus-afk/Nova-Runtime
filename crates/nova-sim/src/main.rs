@@ -248,62 +248,69 @@ fn run_headless(mut eng: SimEngine, ticks: u64, output: &str) -> anyhow::Result<
         eng.tick();
     }
     let wall_secs = start.elapsed().as_secs_f64();
+    let result = {
+        let m = &eng.metrics;
+        let rps = m.requests_total.load(Ordering::Relaxed);
+        let h2 = m.http_2xx.load(Ordering::Relaxed);
+        let h4 = m.http_4xx.load(Ordering::Relaxed);
+        let h5 = m.http_5xx.load(Ordering::Relaxed);
+        let logs: Vec<serde_json::Value> = eng
+            .logs
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "ts": e.timestamp.to_rfc3339(),
+                    "level": format!("{:?}", e.level),
+                    "subsystem": e.subsystem,
+                    "message": e.message,
+                    "request_id": e.request_id,
+                    "duration_ms": e.duration_ms,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "summary": {
+                "wall_clock_secs": wall_secs,
+                "virtual_uptime_secs": m.uptime_secs.load(Ordering::Relaxed),
+                "ticks": ticks,
+                "requests_total": rps,
+                "requests_per_sec": if wall_secs > 0.0 { (rps as f64 / wall_secs * 100.0).round() / 100.0 } else { 0.0 },
+                "http_2xx": h2,
+                "http_4xx": h4,
+                "http_5xx": h5,
+                "http_success_rate": if rps > 0 { (h2 as f64 / rps as f64 * 10000.0).round() / 100.0 } else { 0.0 },
+                "auth_success": m.auth_success.load(Ordering::Relaxed),
+                "auth_failure": m.auth_failure.load(Ordering::Relaxed),
+                "cache_hits": m.cache_hits.load(Ordering::Relaxed),
+                "cache_misses": m.cache_misses.load(Ordering::Relaxed),
+                "sql_queries": m.sql_queries.load(Ordering::Relaxed),
+                "sql_slow": m.sql_slow.load(Ordering::Relaxed),
+                "queue_published": m.queue_published.load(Ordering::Relaxed),
+                "queue_consumed": m.queue_consumed.load(Ordering::Relaxed),
+                "scheduler_jobs_fired": m.scheduler_jobs_fired.load(Ordering::Relaxed),
+                "search_indexed": m.search_indexed.load(Ordering::Relaxed),
+                "search_queries": m.search_queries.load(Ordering::Relaxed),
+                "blob_uploads": m.blob_uploads.load(Ordering::Relaxed),
+                "blob_downloads": m.blob_downloads.load(Ordering::Relaxed),
+                "storage_reads": m.storage_reads.load(Ordering::Relaxed),
+                "storage_writes": m.storage_writes.load(Ordering::Relaxed),
+                "events_published": m.events_published.load(Ordering::Relaxed),
+                "cpu_percent": m.cpu_percent.load(Ordering::Relaxed),
+                "memory_used_mb": m.memory_used_mb.load(Ordering::Relaxed),
+            },
+            "logs": logs,
+        })
+    };
 
+    let json = serde_json::to_string_pretty(&result)?;
+    std::fs::write(output, &json)?;
+
+    eng.shutdown_all();
     let m = &eng.metrics;
     let rps = m.requests_total.load(Ordering::Relaxed);
     let h2 = m.http_2xx.load(Ordering::Relaxed);
     let h4 = m.http_4xx.load(Ordering::Relaxed);
     let h5 = m.http_5xx.load(Ordering::Relaxed);
-    let logs: Vec<serde_json::Value> = eng
-        .logs
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "ts": e.timestamp.to_rfc3339(),
-                "level": format!("{:?}", e.level),
-                "subsystem": e.subsystem,
-                "message": e.message,
-                "request_id": e.request_id,
-                "duration_ms": e.duration_ms,
-            })
-        })
-        .collect();
-
-    let result = serde_json::json!({
-        "summary": {
-            "wall_clock_secs": wall_secs,
-            "virtual_uptime_secs": m.uptime_secs.load(Ordering::Relaxed),
-            "ticks": ticks,
-            "requests_total": rps,
-            "requests_per_sec": if wall_secs > 0.0 { (rps as f64 / wall_secs * 100.0).round() / 100.0 } else { 0.0 },
-            "http_2xx": h2,
-            "http_4xx": h4,
-            "http_5xx": h5,
-            "http_success_rate": if rps > 0 { (h2 as f64 / rps as f64 * 10000.0).round() / 100.0 } else { 0.0 },
-            "auth_success": m.auth_success.load(Ordering::Relaxed),
-            "auth_failure": m.auth_failure.load(Ordering::Relaxed),
-            "cache_hits": m.cache_hits.load(Ordering::Relaxed),
-            "cache_misses": m.cache_misses.load(Ordering::Relaxed),
-            "sql_queries": m.sql_queries.load(Ordering::Relaxed),
-            "sql_slow": m.sql_slow.load(Ordering::Relaxed),
-            "queue_published": m.queue_published.load(Ordering::Relaxed),
-            "queue_consumed": m.queue_consumed.load(Ordering::Relaxed),
-            "scheduler_jobs_fired": m.scheduler_jobs_fired.load(Ordering::Relaxed),
-            "search_indexed": m.search_indexed.load(Ordering::Relaxed),
-            "search_queries": m.search_queries.load(Ordering::Relaxed),
-            "blob_uploads": m.blob_uploads.load(Ordering::Relaxed),
-            "blob_downloads": m.blob_downloads.load(Ordering::Relaxed),
-            "storage_reads": m.storage_reads.load(Ordering::Relaxed),
-            "storage_writes": m.storage_writes.load(Ordering::Relaxed),
-            "events_published": m.events_published.load(Ordering::Relaxed),
-            "cpu_percent": m.cpu_percent.load(Ordering::Relaxed),
-            "memory_used_mb": m.memory_used_mb.load(Ordering::Relaxed),
-        },
-        "logs": logs,
-    });
-
-    let json = serde_json::to_string_pretty(&result)?;
-    std::fs::write(output, &json)?;
 
     println!("═══ Nova Sim — Headless Results ═══");
     println!(
@@ -575,6 +582,7 @@ fn main() -> anyhow::Result<()> {
         "system",
         "Shutting down gracefully...".into(),
     );
+    eng.shutdown_all();
     let _ = terminal.draw(|f| {
         let size = f.area();
         render_header(f, size, &eng);

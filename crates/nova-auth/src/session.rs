@@ -1,7 +1,6 @@
 use crate::error::{AuthError, Result};
 use crate::types::*;
 use dashmap::DashMap;
-use std::sync::Arc;
 use uuid::Uuid;
 
 /// Manages user sessions with in-memory cache + storage backend persistence.

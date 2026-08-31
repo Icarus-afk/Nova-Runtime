@@ -3,6 +3,7 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use clap::Parser;
 use nova_auth::providers::PasswordProvider;
+use nova_auth::types::generate_random_password;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -325,11 +326,18 @@ async fn main() -> anyhow::Result<()> {
         mgr.register_provider(password_provider)
             .map_err(|e| anyhow::anyhow!("Failed to register auth provider: {}", e))?;
 
-        // Bootstrap default admin user if no users exist
+        // Bootstrap default admin user if no users exist. Never use a hardcoded
+        // password — generate a strong random one from a session token and log it
+        // once so operators can log in on first boot.
         if mgr.list_users().is_empty() {
-            mgr.create_user("admin", "admin123", vec!["admin".to_string()])
+            let admin_password = std::env::var("NOVA_ADMIN_PASSWORD").ok().filter(|p| !p.is_empty())
+                .unwrap_or_else(|| generate_random_password());
+            mgr.create_user("admin", &admin_password, vec!["admin".to_string()])
                 .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
-            tracing::info!("Bootstrapped default admin user (admin/admin123)");
+            tracing::info!(
+                "Bootstrapped default admin user 'admin'. Password: {} (set NOVA_ADMIN_PASSWORD to override; change after first login)",
+                admin_password
+            );
         }
 
         let middleware_reg = mgr.create_middleware_registration(0);

@@ -194,15 +194,15 @@ async function fetchBoard() {
   // Populate dropdowns
   const projSel = document.getElementById('filterProject');
   const taskProj = document.getElementById('taskProject');
-  const projOptions = '<option value="">All Projects</option>' + projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-  const taskProjOptions = projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  const projOptions = '<option value="">All Projects</option>' + projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  const taskProjOptions = projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
   projSel.innerHTML = projOptions;
   taskProj.innerHTML = taskProjOptions;
   // Users
   const assigneeSel = document.getElementById('filterAssignee');
   const taskAssignee = document.getElementById('taskAssignee');
-  const userOptions = '<option value="">All</option>' + users.map(u => `<option value="${u.username}">${u.username} (${u.role})</option>`).join('');
-  const taskUserOptions = users.map(u => `<option value="${u.username}">${u.username}</option>`).join('');
+  const userOptions = '<option value="">All</option>' + users.map(u => `<option value="${escapeHtml(u.username)}">${escapeHtml(u.username)} (${escapeHtml(u.role)})</option>`).join('');
+  const taskUserOptions = users.map(u => `<option value="${escapeHtml(u.username)}">${escapeHtml(u.username)}</option>`).join('');
   assigneeSel.innerHTML = userOptions;
   taskAssignee.innerHTML = taskUserOptions || '<option>alice</option><option>bob</option><option>carol</option><option>dave</option><option>eve</option>';
   // Fallback if no users from API
@@ -213,7 +213,7 @@ async function fetchBoard() {
   }
   document.getElementById('projectList').innerHTML = projects.map(p => `
     <div class="project-item" onclick="filterByProject(${p.id})">
-      <span><span class="dot" style="background:${p.color}"></span>${p.name}</span>
+      <span><span class="dot" style="background:${p.color}"></span>${escapeHtml(p.name)}</span>
       <span style="font-size:10px; color:var(--muted);">${tasks.filter(t=>t.project_id==p.id).length}</span>
     </div>
   `).join('') || '<div class="empty">No projects</div>';
@@ -256,8 +256,8 @@ function render() {
           <p>${escapeHtml(t.description || '')}</p>
           <div class="meta">
             <span class="badge ${t.priority==0?'p0':t.priority==1?'p1':'p2'}">P${t.priority}</span>
-            <span>${proj ? proj.name : ''}</span>
-            <span class="assignee" title="${t.assignee}">${(t.assignee||'')[0]?.toUpperCase()||'?'}</span>
+            <span>${proj ? escapeHtml(proj.name) : ''}</span>
+            <span class="assignee" title="${escapeHtml(t.assignee)}">${escapeHtml((t.assignee||'')[0]?.toUpperCase()||'?')}</span>
             <span style="${dueColor}">${t.due_at||''}</span>
           </div>
         </div>`;
@@ -334,10 +334,10 @@ async function openDetail(id){
   const comments=res.comments||[];
   document.getElementById('detailTitle').textContent=task.title;
   document.getElementById('detailBody').innerHTML=`
-    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">#${task.id} • ${projects.find(p=>p.id==task.project_id)?.name||''} • <span class="badge ${task.priority==0?'p0':task.priority==1?'p1':'p2'}">P${task.priority}</span> • ${task.status} • due ${task.due_at||'-'}</div>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">#${task.id} • ${escapeHtml(projects.find(p=>p.id==task.project_id)?.name||'')} • <span class="badge ${task.priority==0?'p0':task.priority==1?'p1':'p2'}">P${task.priority}</span> • ${task.status} • due ${task.due_at||'-'}</div>
     <p style="font-size:13px; margin-bottom:12px;">${escapeHtml(task.description||'No description')}</p>
     <div class="form-row" style="margin-bottom:12px;">
-      <div><strong style="font-size:11px; color:var(--muted)">Assignee</strong><div>${task.assignee}</div></div>
+      <div><strong style="font-size:11px; color:var(--muted)">Assignee</strong><div>${escapeHtml(task.assignee)||''}</div></div>
       <div><strong style="font-size:11px; color:var(--muted)">Created</strong><div>${task.created_at||'-'}</div></div>
     </div>
     <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
