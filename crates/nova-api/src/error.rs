@@ -1,7 +1,7 @@
-use axum::http::header::{self, HeaderName, HeaderValue, HeaderMap};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::http::StatusCode;
+use axum::http::header::{self, HeaderMap, HeaderName, HeaderValue};
+use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 #[derive(Debug, Clone)]
@@ -90,7 +90,10 @@ impl IntoResponse for ApiError {
             HeaderValue::from_static("application/problem+json"),
         );
         for (name, value) in &self.headers {
-            match (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(value)) {
+            match (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) {
                 (Ok(hn), Ok(hv)) => {
                     headers.insert(hn, hv);
                 }
@@ -305,10 +308,7 @@ mod tests {
     fn test_with_header() {
         let err = ApiError::too_many_requests("slow down").with_header("Retry-After", "30");
         let response = err.into_response();
-        assert_eq!(
-            response.headers().get("retry-after").unwrap(),
-            "30"
-        );
+        assert_eq!(response.headers().get("retry-after").unwrap(), "30");
         assert_eq!(
             response.headers().get("content-type").unwrap(),
             "application/problem+json"

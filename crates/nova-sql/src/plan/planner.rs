@@ -47,8 +47,7 @@ impl LogicalPlanner {
             .collect();
 
         let has_group_by = !stmt.group_by.is_empty();
-        let has_aggregate =
-            has_group_by || exprs.iter().any(|(e, _)| contains_aggregate(e));
+        let has_aggregate = has_group_by || exprs.iter().any(|(e, _)| contains_aggregate(e));
 
         if has_aggregate {
             node = LogicalNode::Aggregate {

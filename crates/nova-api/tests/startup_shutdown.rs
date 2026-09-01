@@ -35,17 +35,17 @@ async fn start_server(
     pipeline: Arc<nova_executor::PipelineExecutor>,
     config: Arc<parking_lot::RwLock<nova_config::Config>>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) -> (tokio::task::JoinHandle<()>, Option<Arc<nova_auth::AuthManager>>, Option<String>) {
+) -> (
+    tokio::task::JoinHandle<()>,
+    Option<Arc<nova_auth::AuthManager>>,
+    Option<String>,
+) {
     // Build an auth manager with an admin user so protected admin/metrics
     // endpoints can be exercised without stubbing.
     let auth_cfg = nova_auth::AuthConfig::default();
     let auth_mgr = Arc::new(nova_auth::AuthManager::new(auth_cfg));
     auth_mgr
-        .create_user(
-            "admin",
-            "AdminPassword123!",
-            vec!["admin".to_string()],
-        )
+        .create_user("admin", "AdminPassword123!", vec!["admin".to_string()])
         .ok();
     let password_provider = Arc::new(nova_auth::providers::PasswordProvider::new(
         "local",
@@ -62,10 +62,7 @@ async fn start_server(
         .authenticate("local", creds)
         .await
         .expect("admin authentication should succeed");
-    let token = auth_result
-        .session
-        .expect("session should be issued")
-        .token;
+    let token = auth_result.session.expect("session should be issued").token;
 
     let admin_state = Arc::new(nova_api::admin::AdminState {
         started_at: std::time::Instant::now(),
@@ -104,7 +101,8 @@ async fn full_startup_health_check_and_shutdown() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, _token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, _token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -142,7 +140,8 @@ async fn metrics_endpoint_returns_prometheus_format() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -177,7 +176,8 @@ async fn admin_config_endpoint_returns_config() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -216,7 +216,8 @@ async fn pipeline_status_endpoint_returns_correct_values() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -254,7 +255,8 @@ async fn shutdown_channel_triggers_clean_shutdown() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, _token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, _token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -289,7 +291,8 @@ async fn shutdown_tx_drop_triggers_shutdown() {
     let (addr, _port) = bind_random();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (handle, _auth_mgr, _token) = start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
+    let (handle, _auth_mgr, _token) =
+        start_server(&addr, pipeline.clone(), config.clone(), shutdown_rx).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();

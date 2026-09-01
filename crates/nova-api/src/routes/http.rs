@@ -1,4 +1,4 @@
-use axum::http::{HeaderValue, StatusCode, header, HeaderMap};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Json;
 use serde_json::Value;
 
@@ -58,7 +58,11 @@ pub fn pagination_links(
     }
     if total > 0 {
         let last_page = (total.saturating_sub(1) / limit) * limit;
-        link = Some(push_link(&link, &format!("{path}?{}", query(last_page)), "last"));
+        link = Some(push_link(
+            &link,
+            &format!("{path}?{}", query(last_page)),
+            "last",
+        ));
     }
     link.unwrap_or_default()
 }

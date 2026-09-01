@@ -453,8 +453,14 @@ impl SimEngine {
 impl Drop for SimEngine {
     fn drop(&mut self) {
         // Ensure metrics are read on drop to avoid dead_code warnings
-        let _ = self.metrics.requests_active.load(std::sync::atomic::Ordering::Relaxed);
-        let _ = self.metrics.cache_invalidations.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = self
+            .metrics
+            .requests_active
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let _ = self
+            .metrics
+            .cache_invalidations
+            .load(std::sync::atomic::Ordering::Relaxed);
     }
 }
 

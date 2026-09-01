@@ -330,7 +330,9 @@ async fn main() -> anyhow::Result<()> {
         // password — generate a strong random one from a session token and log it
         // once so operators can log in on first boot.
         if mgr.list_users().is_empty() {
-            let admin_password = std::env::var("NOVA_ADMIN_PASSWORD").ok().filter(|p| !p.is_empty())
+            let admin_password = std::env::var("NOVA_ADMIN_PASSWORD")
+                .ok()
+                .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| generate_random_password());
             mgr.create_user("admin", &admin_password, vec!["admin".to_string()])
                 .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;

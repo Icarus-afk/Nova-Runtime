@@ -114,16 +114,13 @@ impl BTree {
     }
 
     pub fn set_root(&self, id: PageId) {
-        self.root_id.store(id.value(), std::sync::atomic::Ordering::Relaxed);
+        self.root_id
+            .store(id.value(), std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_root(&self) -> Option<PageId> {
         let v = self.root_id.load(std::sync::atomic::Ordering::Relaxed);
-        if v == 0 {
-            None
-        } else {
-            Some(PageId::new(v))
-        }
+        if v == 0 { None } else { Some(PageId::new(v)) }
     }
 
     fn allocate_page_id(&self) -> u64 {

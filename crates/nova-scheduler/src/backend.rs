@@ -64,7 +64,6 @@ impl StorageSchedulerBackend {
     fn job_pending_key(id: &uuid::Uuid, next_run_at: i64) -> nova_core::Key {
         nova_core::Key::from(format!("sched:pending:{:020}:{}", next_run_at, id).into_bytes())
     }
-
 }
 
 #[async_trait]

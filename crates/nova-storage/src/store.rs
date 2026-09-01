@@ -284,10 +284,8 @@ impl Store {
         }
         drop(mt);
 
-        let mut seen: std::collections::BTreeSet<Vec<u8>> = results
-            .iter()
-            .map(|(k, _)| k.as_bytes().to_vec())
-            .collect();
+        let mut seen: std::collections::BTreeSet<Vec<u8>> =
+            results.iter().map(|(k, _)| k.as_bytes().to_vec()).collect();
 
         let sstables = self.sstables.read();
         for sstable in sstables.iter() {

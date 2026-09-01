@@ -431,7 +431,10 @@ mod tests {
     async fn test_jwt_authenticate_rejects_fake_token() {
         let provider = JwtProvider::with_secret("jwt", b"unit-test-secret");
         let ok = provider
-            .authenticate(&HashMap::from([("token".to_string(), "not-a-real-jwt".to_string())]))
+            .authenticate(&HashMap::from([(
+                "token".to_string(),
+                "not-a-real-jwt".to_string(),
+            )]))
             .await;
         assert!(ok.is_err());
 

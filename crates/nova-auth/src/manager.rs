@@ -257,10 +257,8 @@ impl AuthManager {
             )));
         }
 
-        let password_hash = crate::providers::PasswordProvider::hash_password(
-            password,
-            self.config.bcrypt_cost,
-        );
+        let password_hash =
+            crate::providers::PasswordProvider::hash_password(password, self.config.bcrypt_cost);
         // Verify hash was created correctly by checking it verifies
         if !crate::providers::PasswordProvider::verify_password(password, &password_hash) {
             return Err(AuthError::Internal("hash verification failed".into()));

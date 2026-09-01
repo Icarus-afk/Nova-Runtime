@@ -1,3 +1,4 @@
+use crate::ast::{Expr, SQLType};
 use crate::error::Result;
 use crate::execute::iterators::{
     AggregateExecutor, DedupExecutor, Executor, FilterExecutor, JoinExecutor, LimitExecutor,
@@ -7,7 +8,6 @@ use crate::execute::table_store::TableStore;
 use crate::execute::table_store::TableStoreRef;
 use crate::plan::logical::LogicalNode;
 use crate::schema::{ColumnInfo, Schema};
-use crate::ast::{Expr, SQLType};
 
 pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<dyn Executor>> {
     match plan {

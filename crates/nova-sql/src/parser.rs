@@ -141,8 +141,7 @@ impl Parser {
                 None
             } else {
                 return Err(self.err_syntax(
-                    "expected ON <condition> after JOIN (or a valid clause terminator)"
-                        .to_string(),
+                    "expected ON <condition> after JOIN (or a valid clause terminator)".to_string(),
                 ));
             };
             joins.push(Join { right, on });

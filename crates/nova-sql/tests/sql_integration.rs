@@ -810,7 +810,9 @@ fn test_order_by_alias() {
 #[test]
 fn test_order_by_ordinal() {
     let engine = setup();
-    engine.execute("CREATE TABLE t (a INTEGER, b TEXT)").unwrap();
+    engine
+        .execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        .unwrap();
     engine.execute("INSERT INTO t VALUES (1, 'zz')").unwrap();
     engine.execute("INSERT INTO t VALUES (2, 'aa')").unwrap();
     engine.execute("INSERT INTO t VALUES (3, 'mm')").unwrap();
@@ -841,17 +843,31 @@ fn test_join() {
     engine
         .execute("CREATE TABLE dept (id INTEGER, name TEXT)")
         .unwrap();
-    engine.execute("INSERT INTO dept VALUES (1, 'eng')").unwrap();
-    engine.execute("INSERT INTO dept VALUES (2, 'ops')").unwrap();
-    engine.execute("INSERT INTO dept VALUES (3, 'sales')").unwrap();
+    engine
+        .execute("INSERT INTO dept VALUES (1, 'eng')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO dept VALUES (2, 'ops')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO dept VALUES (3, 'sales')")
+        .unwrap();
 
     engine
         .execute("CREATE TABLE emp (eid INTEGER, did INTEGER, ename TEXT)")
         .unwrap();
-    engine.execute("INSERT INTO emp VALUES (10, 1, 'alice')").unwrap();
-    engine.execute("INSERT INTO emp VALUES (11, 2, 'bob')").unwrap();
-    engine.execute("INSERT INTO emp VALUES (12, 2, 'carol')").unwrap();
-    engine.execute("INSERT INTO emp VALUES (13, 99, 'orphan')").unwrap();
+    engine
+        .execute("INSERT INTO emp VALUES (10, 1, 'alice')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO emp VALUES (11, 2, 'bob')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO emp VALUES (12, 2, 'carol')")
+        .unwrap();
+    engine
+        .execute("INSERT INTO emp VALUES (13, 99, 'orphan')")
+        .unwrap();
 
     // Inner join: each matching pair is produced.
     let batches = engine

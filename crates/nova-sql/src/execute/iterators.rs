@@ -3,8 +3,8 @@ use std::hash::{Hash, Hasher};
 
 use crate::ast::{BinaryOperator, Expr, LiteralValue, OrderByExpr};
 use crate::error::Result;
-use crate::execute::evaluate_expr;
 use crate::execute::contains_aggregate;
+use crate::execute::evaluate_expr;
 use crate::execute::table_store::{Row, TableStoreRef};
 use crate::schema::Schema;
 
@@ -359,7 +359,10 @@ fn evaluate_grouped_expr(
             let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
             crate::execute::eval_unary_op(*op, &v)
         }
-        Expr::Cast { expr: inner, target_type } => {
+        Expr::Cast {
+            expr: inner,
+            target_type,
+        } => {
             let v = evaluate_grouped_expr(inner, group_key, group_rows, schema)?;
             crate::type_checker::TypeChecker::coerce_value(&v, target_type)
         }
@@ -714,7 +717,9 @@ impl Executor for JoinExecutor {
 fn sort_key_value(expr: &Expr, row: &[Option<LiteralValue>], schema: &Schema) -> LiteralValue {
     if let Expr::Literal(LiteralValue::Integer(ordinal)) = expr {
         if *ordinal >= 1 && (*ordinal as usize) <= row.len() {
-            return row[(*ordinal as usize) - 1].clone().unwrap_or(LiteralValue::Null);
+            return row[(*ordinal as usize) - 1]
+                .clone()
+                .unwrap_or(LiteralValue::Null);
         }
     }
     match evaluate_expr(expr, row, schema) {

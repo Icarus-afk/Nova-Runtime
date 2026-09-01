@@ -110,9 +110,12 @@ impl BlobStore {
             }
         }
 
-        let data = self.data.read().get(&blob_id).cloned().ok_or_else(|| {
-            RuntimeError::Internal("blob data missing from store".into())
-        })?;
+        let data = self
+            .data
+            .read()
+            .get(&blob_id)
+            .cloned()
+            .ok_or_else(|| RuntimeError::Internal("blob data missing from store".into()))?;
 
         let checksum = crc32c::crc32c(&data);
         if checksum != record.checksum {

@@ -8,7 +8,7 @@ use std::time::Instant;
 use nova_config::Config;
 use nova_executor::PipelineExecutor;
 use std::sync::OnceLock;
-use sysinfo::{System, Disks, Networks};
+use sysinfo::{Disks, Networks, System};
 
 fn merge_json(base: &mut Value, patch: &Value) {
     match (base, patch) {
@@ -68,7 +68,9 @@ static NETWORKS: OnceLock<parking_lot::Mutex<Networks>> = OnceLock::new();
 fn get_system_metrics() -> (f32, u64, u64, u64, u64, u64) {
     // Returns (process_cpu%, process_mem_used, process_mem_total_dummy, disk_total, disk_used, disk_free)
     // For Nova, we want *process* metrics, not whole system
-    let mut sys = SYS.get_or_init(|| parking_lot::Mutex::new(System::new_all())).lock();
+    let mut sys = SYS
+        .get_or_init(|| parking_lot::Mutex::new(System::new_all()))
+        .lock();
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     sys.refresh_processes();
@@ -81,7 +83,9 @@ fn get_system_metrics() -> (f32, u64, u64, u64, u64, u64) {
     // For disk, pick the disk that contains data dir if possible, else first
     drop(sys);
 
-    let mut disks = DISKS.get_or_init(|| parking_lot::Mutex::new(Disks::new_with_refreshed_list())).lock();
+    let mut disks = DISKS
+        .get_or_init(|| parking_lot::Mutex::new(Disks::new_with_refreshed_list()))
+        .lock();
     disks.refresh();
     let (disk_total, disk_used, disk_free) = disks
         .iter()
@@ -100,7 +104,9 @@ fn get_system_metrics() -> (f32, u64, u64, u64, u64, u64) {
 }
 
 fn get_network_metrics() -> (u64, u64, u64, u64, u32) {
-    let mut nets = NETWORKS.get_or_init(|| parking_lot::Mutex::new(Networks::new_with_refreshed_list())).lock();
+    let mut nets = NETWORKS
+        .get_or_init(|| parking_lot::Mutex::new(Networks::new_with_refreshed_list()))
+        .lock();
     nets.refresh();
     let mut rx: u64 = 0;
     let mut tx: u64 = 0;
@@ -119,7 +125,8 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let memory_ok = state.memory_mgr.as_ref().map(|_| true).unwrap_or(true);
     let healthy = storage_ok && memory_ok;
 
-    let (cpu_usage, sys_mem_total, sys_mem_used, disk_total, disk_used, disk_free) = get_system_metrics();
+    let (cpu_usage, sys_mem_total, sys_mem_used, disk_total, disk_used, disk_free) =
+        get_system_metrics();
     let (net_rx, net_tx, _rx_packets, _tx_packets, _conn) = get_network_metrics();
 
     // Memory: prefer Nova's memory manager if it reports >0, otherwise system
@@ -142,7 +149,11 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let ws_subscribers = state
         .event_bus
         .as_ref()
-        .map(|bus| bus.metrics().subscriber_count.load(std::sync::atomic::Ordering::Relaxed) as u64)
+        .map(|bus| {
+            bus.metrics()
+                .subscriber_count
+                .load(std::sync::atomic::Ordering::Relaxed) as u64
+        })
         .unwrap_or(0);
     let connections_active = (pipeline_snap.active_operations as u64)
         .max(ws_subscribers)
