@@ -10,13 +10,13 @@ A Trello-like Kanban board where **every byte lives in Nova** — no Postgres, n
 | **Scheduler** | `due-reminder` cron `*/5 * * * *` + one-shot due dates |
 | **Search** | `tasks_idx` BM25 index for title/description |
 | **Blob** | Task attachments via `POST /api/v1/blobs?namespace=taskboard` |
-| **Auth** | `admin/admin123` + demo users, API keys, JWT |
+| **Auth** | `admin` (password set at first boot) + demo users, API keys, JWT |
 
 ## Prereqs
 
 ```bash
 # 1. Nova must be running
-make dev      # from repo root → http://127.0.0.1:8642 + dashboard 5173
+NOVA_ADMIN_PASSWORD="your-password" make dev   # from repo root → http://127.0.0.1:8642 + dashboard 5173
 # or
 docker compose up --build
 ```
@@ -26,12 +26,14 @@ docker compose up --build
 ```bash
 cd examples/taskboard
 npm install
-npm run seed   # creates tables, 3 projects, 5 users, 24 tasks, cache, queue, scheduler, search index, blobs
-npm run dev    # http://localhost:3000 — Kanban UI
+NOVA_USERNAME=admin NOVA_PASSWORD="your-password" npm run seed   # creates tables, 3 projects, 5 users, 24 tasks, cache, queue, scheduler, search index, blobs
+NOVA_USERNAME=admin NOVA_PASSWORD="your-password" npm run dev    # http://localhost:3000 — Kanban UI
 
 # View same data in Nova Dashboard:
 # http://127.0.0.1:5173 → Database (tasks table), Search (tasks_idx), Blob (taskboard namespace)
 ```
+
+> Nova has **no hardcoded admin password** — authenticate with whatever was set at first boot (`NOVA_ADMIN_PASSWORD` or the random password printed in the log).
 
 ## Seed what?
 
@@ -61,5 +63,5 @@ All state is in Nova — restart Nova and data persists in `./data`.
 ## Clean
 
 ```bash
-npm run clean  # DROP TABLE + purge queues/indexes/blobs
+NOVA_USERNAME=admin NOVA_PASSWORD="your-password" npm run clean  # DROP TABLE + purge queues/indexes/blobs
 ```

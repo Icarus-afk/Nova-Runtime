@@ -24,7 +24,7 @@ help: ## Show this help
 	@echo ""
 	@echo "Binaries after build:"
 	@echo "  target/debug/novad    (or target/release/novad)  — daemon"
-	@echo "  target/debug/novactl  (or target/release/novactl) — CLI (also 'nova' alias)"
+	@echo "  target/debug/novactl  (or target/release/novactl) — CLI"
 	@echo "  Use 'cargo run --bin novad' or 'cargo run --bin novactl -- --help' without installing"
 	@echo "  Or 'make install' to copy to ~/.cargo/bin (ensure ~/.cargo/bin is in PATH)"
 	@echo ""
@@ -46,10 +46,9 @@ build: ## Release build (all binaries)
 install: ## Build release + install to ~/.cargo/bin
 	cargo install --path crates/novad --bin novad --force
 	cargo install --path crates/nova-cli --bin novactl --force
-	cargo install --path crates/nova-cli --bin nova --force
-	@echo "✓ installed to ~/.cargo/bin/novad, ~/.cargo/bin/novactl, ~/.cargo/bin/nova"
+	@echo "✓ installed to ~/.cargo/bin/novad, ~/.cargo/bin/novactl"
 	@echo "  Ensure ~/.cargo/bin is in PATH: export PATH=\"\$$HOME/.cargo/bin:\$$PATH\""
-	@echo "  Try: novactl --help  or  nova --help"
+	@echo "  Try: novactl --help"
 
 test: ## Run workspace tests + SDK tests
 	cargo test --workspace --exclude nova-sim
@@ -89,4 +88,4 @@ clean: ## Remove builds and data
 init-config: ## Generate commented novad.toml from template
 	@cp -n novad.toml novad.toml.bak 2>/dev/null || true
 	@./scripts/setup.sh --config-only
-	@echo "✓ novad.toml created (see docs/02-configuration.md)"
+	@echo "✓ novad.toml created (see docs/configuration.md)"

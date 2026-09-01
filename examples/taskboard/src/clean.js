@@ -5,15 +5,24 @@ async function main() {
   await login();
   console.log('Cleaning NovaBoard data...');
   for (const q of [
-    `DROP TABLE IF EXISTS comments`,
-    `DROP TABLE IF EXISTS tasks`,
-    `DROP TABLE IF EXISTS projects`,
-    `DROP TABLE IF EXISTS users`,
+    `DROP TABLE comments`,
+    `DROP TABLE tasks`,
+    `DROP TABLE projects`,
+    `DROP TABLE users`,
   ]) {
+    // Nova SQL has no DROP TABLE IF EXISTS — dropping a missing table errors; ignore that.
     try { await sqlExecute(q); console.log(`  ${q}`); } catch (e) { console.log(`  warn: ${e.message.slice(0,60)}`); }
   }
   // Purge queues, delete search index, blobs via direct fetch
-  const token = await fetch('http://127.0.0.1:8642/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin123' }) }).then(r => r.json()).then(j => j.access_token);
+  const loginRes = await fetch('http://127.0.0.1:8642/api/v1/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: process.env.NOVA_USERNAME || 'admin',
+      password: process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || '',
+    }),
+  });
+  if (!loginRes.ok) throw new Error(`login ${loginRes.status}: ${await loginRes.text()}`);
+  const token = (await loginRes.json()).access_token;
   const h = { Authorization: `Bearer ${token}` };
   for (const q of ['task-notifications', 'task-reminders']) {
     await fetch(`http://127.0.0.1:8642/api/v1/queues/${q}/purge`, { method: 'POST', headers: h }).catch(() => {});

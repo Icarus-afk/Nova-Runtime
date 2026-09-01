@@ -32,13 +32,14 @@ if curl -s http://127.0.0.1:8642/health >/dev/null 2>&1; then
     echo "⚠  port 8642 already serving (maybe another novad). Continuing anyway."
 fi
 
-# Start backend
+# Start backend (pass through NOVA_ADMIN_PASSWORD — without it novad logs a random admin password)
 echo ""
 echo "--- Starting novad ($BIN) ---"
 cd "$REPO_DIR"
 cargo run --bin novad $RELEASE_FLAG -- --log-level debug &
 BACKEND_PID=$!
-echo "  PID $BACKEND_PID  http://127.0.0.1:8642/health  (admin/admin123)"
+echo "  PID $BACKEND_PID  http://127.0.0.1:8642/health"
+[ -n "${NOVA_ADMIN_PASSWORD:-}" ] && echo "  admin password: from NOVA_ADMIN_PASSWORD (set)" || echo "  admin password: random — see 'Bootstrapped default admin user' in the log above"
 
 # Wait for backend (correct path: /health, not /api/v1/health)
 echo "Waiting for backend..."
@@ -83,13 +84,14 @@ trap cleanup EXIT INT TERM
 echo ""
 echo "=== Running ==="
 echo "  Backend:   http://127.0.0.1:8642/health  http://127.0.0.1:8642/graphql"
-echo "  Dashboard: http://127.0.0.1:5173  (login admin/admin123)"
+echo "  Dashboard: http://127.0.0.1:5173"
+echo "  Login:     admin — password = NOVA_ADMIN_PASSWORD at boot, or the random one in the log"
 echo "  Logs:      tail -f data/novad.log (if configured)  or  RUST_LOG=debug cargo run ..."
 echo ""
 echo "Try:"
 echo "  curl http://127.0.0.1:8642/health | jq"
 echo "  ./target/debug/novactl sql query \"SELECT 1\"  # or cargo run --bin novactl -- sql query ..."
-echo "  NOVA_URL=http://127.0.0.1:8642/api/v1 npx tsx examples/quickstart.ts"
+echo "  NOVA_USERNAME=admin NOVA_PASSWORD=\"<your-password>\" npx tsx examples/quickstart.ts"
 echo ""
 echo "Press Ctrl+C to stop."
 wait

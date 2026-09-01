@@ -57,14 +57,14 @@
     </div>
     <div class="panel">
       <h3>How fresh projects use Nova (copy this)</h3>
-      <div class="log">// 1. health + login
+      <div class="log">// 1. health + login (admin / NOVA_ADMIN_PASSWORD)
 await fetch('http://127.0.0.1:8642/api/v1/auth/login',
-  {method:'POST', body:JSON.stringify({username:'admin', password:'admin123'})})
+  {method:'POST', body:JSON.stringify({username:'admin', password:process.env.NOVA_PASSWORD || 'set-me'})})
 
-// 2. SQL — JOIN sellers & listings
+// 2. SQL — JOIN sellers & listings (bare column names, seller_id = sid)
 await fetch('/api/v1/sql/query', {method:'POST',
   body: JSON.stringify({query:
-    'SELECT listings.title, sellers.stall FROM listings JOIN sellers ON listings.seller_id=sellers.id'})})
+    'SELECT title, stall FROM listings JOIN sellers ON seller_id = sid'})})
 
 // 3. Cache — cart is just a key
 await fetch('/api/v1/cache/cart:sasha', {method:'POST',

@@ -1,7 +1,9 @@
 import { login, sqlExecute, queueCreate } from './nova.js';
 
 async function main() {
-  await login('admin', 'admin123');
+  const u = process.env.NOVA_USERNAME || 'admin';
+  const p = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || '';
+  await login(u, p);
   console.log('→ Cleaning Bloom Market data...');
   for (const q of [
     `DROP TABLE IF EXISTS reviews`,

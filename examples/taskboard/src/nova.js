@@ -4,12 +4,16 @@ const API = `${BASE}/api/v1`;
 let token = null;
 
 export async function login() {
+  // Nova bootstraps 'admin' with NOVA_ADMIN_PASSWORD (or a random password logged at first boot).
+  const username = process.env.NOVA_USERNAME || 'admin';
+  const password = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || '';
+  if (!password) throw new Error('set NOVA_PASSWORD (or start Nova with NOVA_ADMIN_PASSWORD)');
   const res = await fetch(`${API}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) throw new Error(`login ${res.status}`);
+  if (!res.ok) throw new Error(`login ${res.status}: ${await res.text()}`);
   const j = await res.json();
   token = j.access_token;
   return token;

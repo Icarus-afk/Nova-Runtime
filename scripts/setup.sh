@@ -36,7 +36,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [ ! -f "$ROOT_DIR/novad.toml" ] || [ $CONFIG_ONLY -eq 1 ]; then
     echo "--- Creating novad.toml (dev defaults, 8 lines) ---"
     cat > "$ROOT_DIR/novad.toml" << 'TOML'
-# Nova Runtime — dev config (see docs/02-configuration.md for full reference)
+# Nova Runtime — dev config (see docs/configuration.md for full reference)
 # All values have sensible defaults — you can run with *no* config file.
 # This file overrides defaults; delete any section to use defaults.
 [general]
@@ -113,6 +113,7 @@ echo "  make test       # tests"
 echo ""
 echo "Verify:  curl http://127.0.0.1:8642/health"
 echo "         ./target/debug/novactl runtime status  (or: cargo run --bin novactl -- runtime status)"
-echo "Login:   admin / admin123  (auto-created on first run)"
-echo "SDK:     NOVA_URL=http://127.0.0.1:8642/api/v1 npx tsx examples/quickstart.ts"
+echo "Login:   admin — password = NOVA_ADMIN_PASSWORD set at first boot, or the random one in the boot log"
+echo "         (no built-in default; e.g. NOVA_ADMIN_PASSWORD=secret make dev)"
+echo "SDK:     NOVA_USERNAME=admin NOVA_PASSWORD=\"<your-password>\" npx tsx examples/quickstart.ts"
 echo ""

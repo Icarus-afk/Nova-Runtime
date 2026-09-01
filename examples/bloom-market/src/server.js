@@ -27,9 +27,9 @@ function toObjects(r) {
 let ready = false;
 async function ensureAuth() {
   if (ready) return;
-  // Bootstrapped admin password is Ehasan,123 (set via NOVA_ADMIN_PASSWORD)
+  // Bootstrapped admin password is set via NOVA_ADMIN_PASSWORD at boot (no hardcoded default)
   const u = process.env.NOVA_USERNAME || 'admin';
-  const p = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || 'Ehasan,123';
+  const p = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || '';
   await login(u, p);
   ready = true;
 }
@@ -136,13 +136,12 @@ app.get('/api/orders', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Blob + Queue + Scheduler + Search meta for dashboard
+// Blob meta for dashboard
 app.get('/api/meta', async (req, res) => {
   try {
     await ensureAuth();
-    const [blobs, sched] = await Promise.all([
+    const [blobs] = await Promise.all([
       blobList('bloom', 20).catch(() => ({ blobs: [] })),
-      fetch(`http://127.0.0.1:8642/api/v1/scheduler/jobs`, { headers: { Authorization: `Bearer ${ (await import('./nova.js')).login ? '' : ''}` } }).catch(() => null),
     ]);
     res.json({ blobs, note: 'See Nova Dashboard at http://127.0.0.1:5173 for Queue/Scheduler/Search details' });
   } catch (e) { res.json({ ok: true }); }

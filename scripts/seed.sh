@@ -6,11 +6,16 @@ BASE="http://127.0.0.1:8642/api/v1"
 echo "=== Nova Runtime Seed Script ==="
 echo ""
 
-# Login as admin
+# Login as admin (password = NOVA_ADMIN_PASSWORD set at boot, or random one from the log)
+ADMIN_PASS="${NOVA_PASSWORD:-${NOVA_ADMIN_PASSWORD:-}}"
+if [ -z "$ADMIN_PASS" ]; then
+  echo "Set NOVA_PASSWORD (or NOVA_ADMIN_PASSWORD) — Nova has no default admin password." >&2
+  exit 1
+fi
 echo "--- Login ---"
 LOGIN=$(curl -sf -X POST "$BASE/auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}')
+  -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 TOKEN=$(echo "$LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 AUTH="Authorization: Bearer $TOKEN"
 echo "Token: ${TOKEN:0:20}..."

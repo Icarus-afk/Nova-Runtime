@@ -16,9 +16,13 @@ make fmt/lint/check/clean
 
 ## Tests
 
-- `cargo test -p nova-storage --lib` 122 ok (LSM bloom `wrapping_mul` fix)
-- `cargo test -p nova-api --lib` 34 ok, `--test startup_shutdown` 6 ok (health `checks` alias)
-- `cargo test --workspace --exclude nova-sim` ~1,500 total (1 flaky `budget_zero_max` in `nova-sim` not in workspace)
+```bash
+cargo test -p nova-storage --lib          # 123 ok (LSM bloom, BTree, WAL)
+cargo test -p nova-api --lib              # 45 ok (REST handlers, middleware, auth)
+cargo test -p nova-api --test startup_shutdown   # 6 ok (health `checks` alias, clean stop)
+cargo test -p nova-sql --test sql_integration    # 42 ok (JOIN, GROUP BY/HAVING, ORDER BY, unify_types)
+cargo test --workspace --exclude nova-sim        # everything above plus SDK/dashboard build
+```
 
 ## Sim & Bench
 
@@ -34,11 +38,11 @@ cd dashboard && npm install && npm run dev   # 5173 proxy → 8642
 npm run build  # tsc + vite build → dist/
 ```
 
-API client `dashboard/src/api/client.ts`: `request()` now on `401` clears token → `/login`; mutations (`publishMessage`, `triggerJob`, etc.) throw instead of mock `id:''`, reads still degrade to `[]` but log warn.
+API client `dashboard/src/api/client.ts`: `request()` on `401` clears token → `/login`; reads degrade to `[]` but log warn.
 
 ## SDK
 
-`cd sdk && npm run build` → `dist/`. Use `NOVA_URL=http://127.0.0.1:8642/api/v1` via `fromEnv()`.
+`cd sdk && npm run build` → `dist/`. The SDK currently targets an older API surface — for new clients use the raw-fetch pattern in `examples/bloom-market/src/nova.js` (see `docs/sdk.md`). Dashboard api client (`dashboard/src/api/client.ts`) is the reference for current routes.
 
 ## Adding a Subsystem
 

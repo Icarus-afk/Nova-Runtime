@@ -49,4 +49,4 @@ docker compose up --build # uses env_file .env, novad.toml mount optional (defau
 
 `data/` (default `./data`): `wal/`, `blobs/`, `sql:table:*` keys in storage. Backup: snapshot `data/` while `novad` stopped or use `store` WAL segment `fsync`.
 
-See `docs/02-configuration.md` full `novad.toml` and `crates/novad/src/main.rs:1`.
+See `docs/configuration.md` for the full `novad.toml` reference and `crates/novad/src/main.rs`.

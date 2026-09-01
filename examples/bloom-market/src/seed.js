@@ -26,19 +26,19 @@ async function main() {
   await ensureHealth();
   console.log('✓ Nova is up (http://127.0.0.1:8642/health)');
 
-  // Bootstrapped user is always "admin" — password is NOVA_ADMIN_PASSWORD (here: Ehasan,123)
-  // We log in as admin, then optionally create/use Ehasan as a separate marketplace user
+  // Bootstrapped user is always "admin" — password is NOVA_ADMIN_PASSWORD set at boot,
+  // or the random password logged on first boot. No hardcoded default.
   const ADMIN_USER = process.env.NOVA_USERNAME || 'admin';
-  const ADMIN_PASS = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || 'Ehasan,123';
+  const ADMIN_PASS = process.env.NOVA_PASSWORD || process.env.NOVA_ADMIN_PASSWORD || '';
   try {
     await login(ADMIN_USER, ADMIN_PASS);
     console.log(`✓ Logged in as ${ADMIN_USER} (JWT acquired)\n`);
   } catch (e) {
     console.error(`\n✗ Login failed for ${ADMIN_USER}: ${e.message}\n`);
-    console.error('  Nova was just reset with NOVA_ADMIN_PASSWORD=Ehasan,123');
-    console.error('  Try:');
-    console.error('    NOVA_USERNAME=admin NOVA_PASSWORD="Ehasan,123" npm run seed');
-    console.error('  If you want Ehasan as login, first login as admin then create Ehasan:\n');
+    console.error('  Nova has no hardcoded password. Start it with a password, e.g.:');
+    console.error('    NOVA_ADMIN_PASSWORD="your-password" make dev');
+    console.error('  then seed with the same password:');
+    console.error('    NOVA_USERNAME=admin NOVA_PASSWORD="your-password" npm run seed');
     throw e;
   }
 
@@ -199,7 +199,7 @@ async function main() {
   console.log('└────────────────────────────────────────');
   console.log('');
   console.log('  Try:');
-  console.log('    SQL JOIN: curl -s http://127.0.0.1:8642/api/v1/sql/query -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \'{"query":"SELECT listings.title, sellers.stall FROM listings JOIN sellers ON listings.seller_id=sellers.id"}\' | jq');
+  console.log('    SQL JOIN: curl -s http://127.0.0.1:8642/api/v1/sql/query -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \'{"query":"SELECT title, stall FROM listings JOIN sellers ON seller_id = sid WHERE category=\\\'bakery\\\'"}\' | jq');
   console.log('    Search: curl -s http://127.0.0.1:8642/api/v1/search/indexes/listings_idx/query -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \'{"query":"honey","limit":5}\' | jq');
   console.log('    UI: cd examples/bloom-market && npm run dev  -> http://localhost:3001');
   console.log('    Dashboard: http://127.0.0.1:5173 -> Database / Search / Blob / Queue / Scheduler');

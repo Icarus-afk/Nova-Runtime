@@ -23,11 +23,11 @@ async function main() {
 
   // --- SQL ---
   console.log('\n→ SQL: creating tables...');
+  // Nova SQL has no DROP TABLE IF EXISTS — use plain DROP (missing table errors, that's fine)
+  for (const t of ['comments', 'tasks', 'projects', 'users']) {
+    try { await sqlExecute(`DROP TABLE ${t}`); } catch {}
+  }
   for (const q of [
-    `DROP TABLE IF EXISTS comments`,
-    `DROP TABLE IF EXISTS tasks`,
-    `DROP TABLE IF EXISTS projects`,
-    `DROP TABLE IF EXISTS users`,
     `CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, role TEXT)`,
     `CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, color TEXT, description TEXT)`,
     `CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, description TEXT, status TEXT, priority INTEGER, assignee TEXT, due_at TEXT, created_at TEXT)`,

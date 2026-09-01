@@ -6,16 +6,15 @@ const API = `${BASE}/api/v1`;
 let token = null;
 
 export async function login(username = 'admin', password = null) {
-  // Fresh project: try passed password, then env, then known demo passwords
+  // Fresh project: try the passed password, then NOVA_PASSWORD / NOVA_ADMIN_PASSWORD env
   const candidates = [
     password,
     process.env.NOVA_PASSWORD,
     process.env.NOVA_ADMIN_PASSWORD,
-    'Ehasan,123',
-    'admin123',
   ].filter(Boolean);
   // dedupe, keep order
   const tried = [...new Set(candidates)];
+  if (!tried.length) throw new Error('login: set NOVA_PASSWORD or pass the admin password (Nova has no hardcoded default)');
   let lastErr = null;
   for (const pwd of tried) {
     const res = await fetch(`${API}/auth/login`, {
@@ -26,7 +25,6 @@ export async function login(username = 'admin', password = null) {
     if (res.ok) {
       const j = await res.json();
       token = j.access_token;
-      if (tried[0] !== pwd) console.log(`  (logged in with password variant: ${pwd === 'admin123' ? 'admin123' : 'NOVA_ADMIN_PASSWORD'})`);
       return token;
     }
     lastErr = `login ${res.status}: ${await res.text()}`;

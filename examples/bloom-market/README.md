@@ -18,26 +18,35 @@ A neighborhood fresh-goods marketplace where **every byte lives in Nova** — no
 In any new Node.js / TypeScript project:
 
 ```js
-// src/nova.js — 80 lines, copy-paste from examples/bloom-market/src/nova.js
+// src/nova.js — ~80 lines, copy-paste from examples/bloom-market/src/nova.js
 const API = 'http://127.0.0.1:8642/api/v1';
-let token = (await fetch(`${API}/auth/login`, {
-  method: 'POST', body: JSON.stringify({ username: 'admin', password: 'admin123' })
-}).then(r=>r.json())).access_token;
+// Login. Nova has no hardcoded password: use NOVA_ADMIN_PASSWORD (set at first
+// boot) or the random password printed in the boot log.
+const token = (await fetch(`${API}/auth/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    username: process.env.NOVA_USERNAME || 'admin',
+    password: process.env.NOVA_ADMIN_PASSWORD || '',
+  }),
+}).then(r => r.json())).access_token;
 
 // Then:
-await fetch(`${API}/sql/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`}, body: JSON.stringify({ query:'SELECT * FROM listings JOIN sellers ON listings.seller_id=sellers.id' }) })
+await fetch(`${API}/sql/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`}, body: JSON.stringify({ query:'SELECT title, stall FROM listings JOIN sellers ON seller_id = sid' }) })
 await fetch(`${API}/cache/bloom:cart:sasha`, { method:'POST', headers:{Authorization:`Bearer ${token}`}, body: JSON.stringify({ value:{items:[{listing_id:5, qty:2}]}, ttl_ms:30000 }) })
 await fetch(`${API}/queues/bloom:orders/messages`, { method:'POST', headers:{Authorization:`Bearer ${token}`}, body: JSON.stringify({ messages:[{body:{order_id:1}}] }) })
 await fetch(`${API}/search/indexes/listings_idx/query`, { method:'POST', headers:{Authorization:`Bearer ${token}`}, body: JSON.stringify({ query:'honey', limit:5 }) })
 ```
 
-Or use the SDK: `import { createClient } from '@novaruntime/sdk'` — see `examples/quickstart.ts`.
+> **Nova SQL note:** use **bare column names** (`seller_id = sid`) — qualified `listings.seller_id = sellers.id` is a parse error. For a JOIN, the two tables' columns share one namespace, so keep PK names distinct (here `sellers.sid` vs `listings.id`).
+
+> **SDK note:** the TypeScript SDK (`@novaruntime/sdk`) is currently **out of sync with the REST API** — the raw-fetch client above is the recommended pattern for new projects until the SDK is ported (see `docs/sdk.md`). `examples/quickstart.ts` shows the same pattern in TypeScript.
 
 ## Prereqs
 
 ```bash
-# 1. Nova must be running
-make dev          # from repo root → http://127.0.0.1:8642 + dashboard 5173
+# 1. Nova must be running. Pick one:
+NOVA_ADMIN_PASSWORD="your-password" make dev   # from repo root → http://127.0.0.1:8642 + dashboard 5173
 # or
 docker compose up --build
 ```
@@ -47,7 +56,8 @@ docker compose up --build
 ```bash
 cd examples/bloom-market
 npm install
-npm run seed   # creates tables, 2 sellers, 12 listings, orders, cache, queues, scheduler, search index, blobs
+# Seed needs to authenticate — tell it how (must match how Nova was started):
+NOVA_USERNAME=admin NOVA_PASSWORD="your-password" npm run seed
 npm run dev    # http://localhost:3001 — Marketplace UI
 
 # View same data in Nova Dashboard:
