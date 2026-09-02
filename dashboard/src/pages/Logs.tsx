@@ -161,7 +161,7 @@ export default function LogsPage() {
             <div className="loading-spinner">Loading logs</div>
           ) : displayEntries.length === 0 ? (
             <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-              {streaming ? 'Waiting for log entries...' : 'No log entries found'}
+              {streaming ? 'Waiting for log entries...' : 'No log history — click "Live Stream" to stream events from /ws'}
             </div>
           ) : (
             displayEntries.map((entry: LogEntryType, i: number) => (

@@ -42,7 +42,7 @@ export default function ConfigPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const { data: entries, loading, refetch } = useApi<ConfigEntry[]>(() => api.getConfig(), []);
+  const { data: entries, loading, error, refetch } = useApi<ConfigEntry[]>(() => api.getConfig(), []);
 
   const sections = useMemo(() => {
     if (!entries) return {};
@@ -136,6 +136,11 @@ export default function ConfigPage() {
 
           {loading ? (
             <div className="loading-spinner">Loading configuration</div>
+          ) : error ? (
+            <div className="card">
+              <div className="callout error" style={{ marginBottom: 12 }}>Failed to load config: {error}</div>
+              <div className="text-muted" style={{ textAlign: 'center', padding: 12 }}>Check that <code>novad</code> is running and you are logged in.</div>
+            </div>
           ) : !entries || entries.length === 0 ? (
             <div className="card">
               <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No configuration entries</div>

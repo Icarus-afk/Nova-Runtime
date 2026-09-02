@@ -40,16 +40,24 @@ function GaugeRing({ percent, label, color }: { percent: number; label: string; 
   );
 }
 
-const recentActivity = [
-  { type: 'success', text: 'Database query completed (12 rows in 3.2ms)', time: '2s ago' },
-  { type: 'info', text: 'Cache eviction policy ran: 47 entries removed', time: '15s ago' },
-  { type: 'warning', text: 'Queue "emails" depth at 85% capacity', time: '1m ago' },
-  { type: 'success', text: 'Scheduled job "cleanup" completed successfully', time: '3m ago' },
-  { type: 'error', text: 'Search query timeout on index "posts"', time: '5m ago' },
-];
+function buildRecentActivity(health: SystemHealth | null) {
+  if (!health) return [];
+  const items: { type: 'success' | 'info' | 'warning' | 'error'; text: string; time: string }[] = [];
+  items.push({ type: 'success', text: `Uptime ${formatUptime(health.uptime_seconds)} · v${health.version}`, time: 'now' });
+  for (const sub of health.subsystems) {
+    if (sub.status !== 'healthy') {
+      items.push({ type: sub.status === 'degraded' ? 'warning' : 'error', text: `${sub.name} is ${sub.status}`, time: 'now' });
+    }
+  }
+  if (health.status === 'healthy' && items.length === 1) {
+    items.push({ type: 'success', text: 'All subsystems healthy', time: 'now' });
+  }
+  return items;
+}
 
 export default function DashboardPage() {
   const { data: health, loading } = useApi<SystemHealth>(() => api.getSystemHealth(), []);
+  const recentActivity = buildRecentActivity(health as SystemHealth | null);
 
   const cpuPercent = health?.cpu.usage_percent ?? 0;
   const memPercent = health?.memory.total_bytes ? (health.memory.used_bytes / health.memory.total_bytes) * 100 : 0;
@@ -157,15 +165,21 @@ export default function DashboardPage() {
       <div className="card">
         <div className="card-title">Recent Activity</div>
         <div className="activity-feed" style={{ marginTop: 8 }}>
-          {recentActivity.map((item, i) => (
-            <div key={i} className="activity-item">
-              <div className={`activity-icon ${item.type}`}>
-                {item.type === 'success' ? <CheckCircleIcon size={14} /> : item.type === 'error' ? <XCircleIcon size={14} /> : item.type === 'warning' ? <AlertTriangleIcon size={14} /> : <InfoIcon size={14} />}
-              </div>
-              <div className="activity-text">{item.text}</div>
-              <div className="activity-time">{item.time}</div>
+          {recentActivity.length === 0 ? (
+            <div className="text-muted" style={{ textAlign: 'center', padding: 16 }}>
+              {loading ? 'Loading...' : 'No activity yet — run a query or publish a message to see events here.'}
             </div>
-          ))}
+          ) : (
+            recentActivity.map((item, i) => (
+              <div key={i} className="activity-item">
+                <div className={`activity-icon ${item.type}`}>
+                  {item.type === 'success' ? <CheckCircleIcon size={14} /> : item.type === 'error' ? <XCircleIcon size={14} /> : item.type === 'warning' ? <AlertTriangleIcon size={14} /> : <InfoIcon size={14} />}
+                </div>
+                <div className="activity-text">{item.text}</div>
+                <div className="activity-time">{item.time}</div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
