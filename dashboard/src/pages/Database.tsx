@@ -270,6 +270,37 @@ export default function DatabasePage() {
   const isWriteResult = !!queryResult && queryResult.documents.length === 0 && !queryError;
   const resultCols: string[] = isSelectResult ? Object.keys(queryResult!.documents[0].data) : [];
 
+  const browseColumns = useMemo(() => {
+    const cols = (schema as any)?.columns as Array<{ name: string; type: string; is_primary_key?: boolean }> | undefined;
+    if (!cols || cols.length === 0) return docColumns;
+    const dynamic: any[] = cols.map((c) => ({
+      key: c.name,
+      header: c.name,
+      width: (c as any).is_primary_key ? '140px' : undefined,
+      render: (_: unknown, row: any) => {
+        const v = (row as any).data?.[c.name];
+        const s = v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+        const isPk = (c as any).is_primary_key;
+        return <span title={s} style={{ fontFamily: isPk ? 'var(--font-mono)' : undefined, fontSize: isPk ? 11 : 12, color: s === '—' ? 'var(--text-muted)' : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', maxWidth: 220 }}>{s.length > 40 ? s.slice(0, 40) + '…' : s}</span>;
+      },
+    }));
+    dynamic.push(
+      { key: 'updated_at', header: 'Updated', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
+      {
+        key: 'actions',
+        header: '',
+        width: '140px',
+        render: (_: unknown, row: any) => (
+          <div className="actions" onClick={e => e.stopPropagation()}>
+            <button className="btn btn-sm" onClick={() => openEdit(row as Document)}>Edit</button>
+            <button className="btn btn-sm btn-danger" onClick={() => setDeleteDoc(row as Document)}>Delete</button>
+          </div>
+        ),
+      },
+    );
+    return dynamic;
+  }, [schema]);
+
   const copyResults = async () => {
     if (!queryResult) return;
     const payload = JSON.stringify(queryResult.documents.map(d => d.data), null, 2);
@@ -295,94 +326,129 @@ export default function DatabasePage() {
         <button className={`tab ${activeTab === 'query' ? 'active' : ''}`} onClick={() => setActiveTab('query')}>Query</button>
       </div>
 
-      <div className="flex gap-4">
-        <div className="schema-sidebar">
-          <div className="section-title" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
-            <span>Collections</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{collections?.length ?? 0}</span>
+        <div className="flex gap-4" style={{ alignItems: 'flex-start' }}>
+        <div className="schema-sidebar" style={{ position: 'sticky', top: 0, maxHeight: 'calc(100vh - 96px)', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Tables</span>
+            <span style={{ fontSize: 10, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '2px 6px', borderRadius: 999, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{collections?.length ?? 0}</span>
+          </div>
+          <div className="form-group" style={{ marginBottom: 10 }}>
+            <input className="form-input" placeholder="Filter tables…" value={(collections as any)?.filter ?? ''} onChange={() => {}} style={{ display: 'none' }} />
+            <button className="btn btn-sm" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setShowCreateTable(true)}>+ New table</button>
           </div>
           {collectionsLoading ? (
             <div className="loading-spinner" style={{ padding: 16 }}>Loading</div>
           ) : (collections || []).length === 0 ? (
-            <div className="empty-cta" style={{ padding: 16 }}>
-              <p>No tables yet</p>
-              <button className="btn btn-sm btn-primary" onClick={() => setShowCreateTable(true)}>Create Table</button>
+            <div className="card" style={{ padding: 16, textAlign: 'center', background: 'var(--bg-primary)', borderStyle: 'dashed' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>No tables yet</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.5 }}>Create a table to start storing documents. Try <code style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3, fontFamily: 'var(--font-mono)' }}>users</code> first.</div>
+              <button className="btn btn-sm btn-primary" onClick={() => setShowCreateTable(true)}>Create table</button>
             </div>
           ) : (
-            (collections || []).map((col) => (
-              <div
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {(collections || []).map((col) => {
+              const isActive = selectedCollection === col.name;
+              return (
+              <button
                 key={col.name}
-                className={`schema-item ${selectedCollection === col.name ? 'active' : ''}`}
+                className={`schema-item ${isActive ? 'active' : ''}`}
                 onClick={() => setSelectedCollection(col.name)}
+                style={{ width: '100%', textAlign: 'left', border: '1px solid', borderColor: isActive ? 'var(--border-strong)' : 'transparent', background: isActive ? 'var(--bg-tertiary)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}
               >
-                <span style={{ flex: 1 }}>{col.name}</span>
-                <span className="schema-count">{col.document_count.toLocaleString()}</span>
-                <button
-                  className="btn btn-sm"
-                  style={{ marginLeft: 6, padding: '2px 6px', fontSize: 10 }}
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: isActive ? 'var(--success)' : 'var(--border-strong)', flexShrink: 0 }} />
+                <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{col.name}</span>
+                <span className="schema-count" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', padding: '1px 5px', borderRadius: 999 }}>{col.document_count.toLocaleString()}</span>
+                <span
+                  role="button"
+                  style={{ marginLeft: 4, padding: '2px 6px', fontSize: 11, lineHeight: 1, borderRadius: 4, border: '1px solid transparent', color: 'var(--text-muted)' }}
                   onClick={(e) => { e.stopPropagation(); setDeleteTableName(col.name); }}
                   title="Delete table"
                 >
                   ×
-                </button>
-              </div>
-            ))
+                </span>
+              </button>
+            )})}
+            </div>
           )}
-          {schema && (
-            <div className="card" style={{ marginTop: 12, padding: 12 }}>
-              <div className="text-sm text-muted" style={{ fontWeight: 600, marginBottom: 6 }}>Schema: {selectedCollection}</div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+          {schema && selectedCollection && (
+            <div className="card" style={{ marginTop: 12, padding: 12, background: 'var(--bg-primary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' }}>{selectedCollection} schema</span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{(schema as any).columns?.length ?? 0} cols</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {(schema as any).columns?.map((c: any) => {
-                  const flags = [c.is_primary_key && 'PK', !c.nullable && 'NOT NULL', c.unique && 'UNIQUE'].filter(Boolean).join(' · ');
+                  const badges: string[] = [];
+                  if (c.is_primary_key) badges.push('PK');
+                  if (c.unique) badges.push('UNIQUE');
+                  if (!c.nullable) badges.push('NOT NULL');
                   return (
-                    <div key={c.name} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-                      <div className="detail-row" style={{ padding: 0 }}>
-                        <span>{c.name}</span>
-                        <span style={{ color: 'var(--accent)' }}>{c.type}</span>
-                      </div>
-                      <div className="text-muted" style={{ fontSize: 9.5, color: flags ? undefined : 'var(--text-muted)' }}>
-                        {flags || 'nullable'}
-                      </div>
+                    <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, background: c.is_primary_key ? 'rgba(99,102,241,0.06)' : 'var(--bg-secondary)' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600 }}>{c.name}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 10, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '1px 5px', borderRadius: 999, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{c.type}</span>
+                        {badges.length > 0 && <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.3 }}>{badges.join(' · ')}</span>}
+                      </span>
                     </div>
                   );
-                }) || <span className="text-muted">No schema</span>}
+                }) || <span className="text-muted" style={{ fontSize: 11 }}>No schema</span>}
               </div>
+              <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.5 }}>Click <b style={{ color: 'var(--text-secondary)' }}>Insert</b> to add a row — or <b style={{ color: 'var(--text-secondary)' }}>Query</b> for SQL. PK is auto-indexed.</div>
             </div>
           )}
         </div>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {activeTab === 'browse' ? (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {selectedCollection ? (
-                <div>
-                  <div className="flex items-center justify-between mb-4" style={{ marginBottom: 12 }}>
-                    <div>
-                      <div className="section-title" style={{ marginBottom: 2 }}>{selectedCollection}</div>
-                      {collections?.find(c => c.name === selectedCollection) && (
-                        <div className="text-sm text-muted">
-                          {formatBytes(collections!.find(c => c.name === selectedCollection)!.total_size_bytes)} total · {collections!.find(c => c.name === selectedCollection)!.index_count} indexes
-                        </div>
-                      )}
+                <>
+                  <div className="card" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700 }}>{selectedCollection}</span>
+                        <span style={{ fontSize: 11, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 999, color: 'var(--text-muted)' }}>{(docsData as any)?.pagination?.total?.toLocaleString?.() ?? (docsData as any)?.data?.length ?? 0} docs</span>
+                        <span style={{ width: 4, height: 4, borderRadius: 999, background: 'var(--border-strong)' }} />
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatBytes(collections!.find(c => c.name === selectedCollection)!.total_size_bytes)} · {(schema as any)?.columns?.length ?? 0} cols</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Click a row to view JSON · Edit is param-safe <code style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3, fontFamily: 'var(--font-mono)' }}>SET field=$1 WHERE id=$2</code></div>
                     </div>
-                    <div className="flex gap-2">
-                      <button className="btn btn-sm btn-primary" onClick={() => setShowInsert(true)}>+ Insert</button>
+                    <div className="flex gap-2" style={{ flexShrink: 0 }}>
                       <button className="btn btn-sm" onClick={() => { setDocPage(1); refetchDocs(); }}>Refresh</button>
+                      <button className="btn btn-sm btn-primary" onClick={() => setShowInsert(true)}>+ Insert row</button>
                     </div>
                   </div>
-                  <DataTable
-                    columns={docColumns}
-                    data={(docsData?.data || []) as unknown as Record<string, unknown>[]}
-                    loading={docsLoading}
-                    pagination={docsData?.pagination}
-                    onPageChange={setDocPage}
-                    emptyMessage="No documents — click Insert to add one"
-                  />
-                </div>
+                  <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg-primary)' }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Documents</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>Page {docPage} · click row to inspect</span>
+                    </div>
+                    <DataTable
+                      columns={browseColumns}
+                      data={(docsData?.data || []) as unknown as Record<string, unknown>[]}
+                      loading={docsLoading}
+                      pagination={docsData?.pagination}
+                      onPageChange={setDocPage}
+                      onRowClick={(row) => openEdit(row as unknown as Document)}
+                      emptyMessage="No documents — click Insert row to add one"
+                    />
+                    {(docsData as any)?.data?.length === 0 && !docsLoading && (
+                      <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg-primary)' }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Quick insert:</span>
+                        <code style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '2px 6px', borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 11 }}>{"{"} "name": "alice", "age": 30 {"}"}</code>
+                        <button className="btn btn-sm btn-primary" onClick={() => setShowInsert(true)}>Insert row</button>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>or Query → INSERT</span>
+                      </div>
+                    )}
+                  </div>
+                </>
               ) : (
-                <div className="card">
-                  <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-                    Select a collection from the sidebar or create a table to browse documents
+                <div className="card" style={{ padding: 32, textAlign: 'center', background: 'var(--bg-primary)', borderStyle: 'dashed' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Pick a table to browse</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: 440, margin: '0 auto 12px' }}>Choose a collection from the left. You can view schema, insert rows, or switch to <b style={{ color: 'var(--text-secondary)' }}>Query</b> for SQL.</div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button className="btn btn-sm btn-primary" onClick={() => setShowCreateTable(true)}>Create table</button>
+                    <button className="btn btn-sm" onClick={() => setActiveTab('query')}>Go to Query</button>
                   </div>
                 </div>
               )}
