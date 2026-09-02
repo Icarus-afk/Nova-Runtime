@@ -191,15 +191,15 @@ impl CircuitBreaker {
 }
 
 fn is_tracked_failure(err: &nova_core::RuntimeError) -> bool {
-    match err {
-        nova_core::RuntimeError::Timeout(_) => true,
-        nova_core::RuntimeError::TransactionConflict(_) => true,
-        nova_core::RuntimeError::DeadlockDetected(_) => true,
-        nova_core::RuntimeError::TransactionError(_) => true,
-        nova_core::RuntimeError::Busy(_) => true,
-        nova_core::RuntimeError::Io(_) => true,
-        _ => false,
-    }
+    matches!(
+        err,
+        nova_core::RuntimeError::Timeout(_)
+            | nova_core::RuntimeError::TransactionConflict(_)
+            | nova_core::RuntimeError::DeadlockDetected(_)
+            | nova_core::RuntimeError::TransactionError(_)
+            | nova_core::RuntimeError::Busy(_)
+            | nova_core::RuntimeError::Io(_)
+    )
 }
 
 #[derive(Debug, Clone)]

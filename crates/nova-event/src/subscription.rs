@@ -111,18 +111,16 @@ fn get_field<'a>(value: &'a serde_json::Value, field: &[String]) -> Option<&'a s
 impl FilterExpr {
     pub fn evaluate(&self, payload: &serde_json::Value) -> bool {
         match self {
-            FilterExpr::FieldEquals { field, value } => {
-                get_field(payload, field).map_or(false, |actual| actual == value)
-            }
+            FilterExpr::FieldEquals { field, value } => get_field(payload, field) == Some(value),
             FilterExpr::FieldExists { field } => get_field(payload, field).is_some(),
             FilterExpr::FieldMatches { field, regex } => match get_field(payload, field) {
                 Some(serde_json::Value::String(s)) => {
-                    regex::Regex::new(regex).map_or(false, |re| re.is_match(s))
+                    regex::Regex::new(regex).is_ok_and(|re| re.is_match(s))
                 }
                 _ => false,
             },
             FilterExpr::FieldIn { field, values } => {
-                get_field(payload, field).map_or(false, |actual| values.contains(actual))
+                get_field(payload, field).is_some_and(|actual| values.contains(actual))
             }
             FilterExpr::FieldRange { field, min, max } => match get_field(payload, field) {
                 Some(actual) => {

@@ -45,7 +45,7 @@ impl MfaProvider {
         let time_bytes = time_step.to_be_bytes();
         let mut hasher = Sha256::new();
         hasher.update(secret);
-        hasher.update(&time_bytes);
+        hasher.update(time_bytes);
         let hash = hasher.finalize();
 
         // Truncate to 6 digits

@@ -185,16 +185,14 @@ impl BlobStore for FilesystemBackend {
                 .await
                 .map(|t| t.is_file())
                 .unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+                && let Some(blob_id) = name.strip_suffix(".json")
             {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(blob_id) = name.strip_suffix(".json") {
-                        let data = fs::read(entry.path()).await?;
-                        if let Ok(meta) = serde_json::from_slice::<BlobMetadata>(&data) {
-                            if meta.namespace == namespace {
-                                blobs.push(blob_id.to_string());
-                            }
-                        }
-                    }
+                let data = fs::read(entry.path()).await?;
+                if let Ok(meta) = serde_json::from_slice::<BlobMetadata>(&data)
+                    && meta.namespace == namespace
+                {
+                    blobs.push(blob_id.to_string());
                 }
             }
         }
@@ -253,10 +251,10 @@ impl BlobStore for FilesystemBackend {
             .map_err(|e| BlobError::Internal(e.to_string()))?;
         let mut namespaces = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
-            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                if let Some(name) = entry.file_name().to_str() {
-                    namespaces.push(name.to_string());
-                }
+            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+            {
+                namespaces.push(name.to_string());
             }
         }
         Ok(namespaces)

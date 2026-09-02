@@ -19,3 +19,6 @@ start.md
 LINKEDIN*.md
 FIX_LOG.md
 AUDIT*.md
+/internal/
+dashboard/dist/
+crates/novad/novad-blobs/

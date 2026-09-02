@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// How a job is triggered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ScheduleType {
     /// Run once at a specific time.
+    #[default]
     OneTime,
     /// Run repeatedly at a fixed interval.
     Interval,
@@ -14,15 +15,10 @@ pub enum ScheduleType {
     Cron,
 }
 
-impl Default for ScheduleType {
-    fn default() -> Self {
-        ScheduleType::OneTime
-    }
-}
-
 /// Current state of a job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum JobState {
+    #[default]
     Pending,
     Running,
     Completed,
@@ -30,12 +26,6 @@ pub enum JobState {
     Cancelled,
     Skipped,
     Paused,
-}
-
-impl Default for JobState {
-    fn default() -> Self {
-        JobState::Pending
-    }
 }
 
 /// A scheduled job.

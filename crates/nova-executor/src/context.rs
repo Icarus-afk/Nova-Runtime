@@ -98,7 +98,7 @@ impl OperationContextBuilder {
     }
 
     pub fn build(self) -> OperationContext {
-        let trace_id = self.trace_id.unwrap_or_else(|| generate_trace_id());
+        let trace_id = self.trace_id.unwrap_or_else(generate_trace_id);
         let span_id = self.span_id.unwrap_or_else(generate_span_id);
         let deadline = self
             .deadline

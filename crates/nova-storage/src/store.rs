@@ -89,7 +89,7 @@ impl Store {
 
         let page_cache = Arc::new(PageCache::new(config.page_cache_size));
 
-        let wal = WalWriter::open(wal_dir, config.fsync_policy.clone())?;
+        let wal = WalWriter::open(wal_dir, config.fsync_policy)?;
         let wal = Arc::new(Mutex::new(Some(wal)));
 
         let btree = BTree::new(config.btree_order);
@@ -138,33 +138,28 @@ impl Store {
     ) -> Result<()> {
         let mut reader = WalReader::open(wal_dir)?;
         let mut recovered = 0u64;
-        loop {
-            match reader.read_next()? {
-                Some(record) => {
-                    if record.lsn.value() == 0 || record.lsn.value() > max_lsn {
-                        continue;
-                    }
-                    if record.lsn.value() <= after_lsn {
-                        continue;
-                    }
-                    match record.record_type {
-                        WalRecordType::Insert | WalRecordType::Update => {
-                            let mt = &mut *memtable.write();
-                            mt.insert(
-                                record.key,
-                                record.value.unwrap_or_else(|| Value::new(vec![])),
-                            );
-                            recovered += 1;
-                        }
-                        WalRecordType::Delete => {
-                            let mt = &mut *memtable.write();
-                            mt.delete(&record.key);
-                            recovered += 1;
-                        }
-                        _ => {}
-                    }
+        while let Some(record) = reader.read_next()? {
+            if record.lsn.value() == 0 || record.lsn.value() > max_lsn {
+                continue;
+            }
+            if record.lsn.value() <= after_lsn {
+                continue;
+            }
+            match record.record_type {
+                WalRecordType::Insert | WalRecordType::Update => {
+                    let mt = &mut *memtable.write();
+                    mt.insert(
+                        record.key,
+                        record.value.unwrap_or_else(|| Value::new(vec![])),
+                    );
+                    recovered += 1;
                 }
-                None => break,
+                WalRecordType::Delete => {
+                    let mt = &mut *memtable.write();
+                    mt.delete(&record.key);
+                    recovered += 1;
+                }
+                _ => {}
             }
         }
         tracing::info!(
@@ -183,18 +178,14 @@ impl Store {
                 let entry = entry?;
                 let name = entry.file_name();
                 let name = name.to_string_lossy().to_string();
-                if let Some(stem) = name.strip_suffix(".cp") {
-                    if let Some(num_str) = stem.strip_prefix(cp_pattern) {
-                        if let Ok(checkpoint_id) = num_str.parse::<u64>() {
-                            if best_seq.map_or(true, |best| checkpoint_id > best) {
-                                if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                                    if let Ok(seq) = content.trim().parse::<u64>() {
-                                        best_seq = Some(seq);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if let Some(stem) = name.strip_suffix(".cp")
+                    && let Some(num_str) = stem.strip_prefix(cp_pattern)
+                    && let Ok(checkpoint_id) = num_str.parse::<u64>()
+                    && best_seq.is_none_or(|best| checkpoint_id > best)
+                    && let Ok(content) = std::fs::read_to_string(entry.path())
+                    && let Ok(seq) = content.trim().parse::<u64>()
+                {
+                    best_seq = Some(seq);
                 }
             }
         }
@@ -529,22 +520,22 @@ unsafe impl Sync for StorageEngineStore {}
 
 impl nova_core::StorageEngine for StorageEngineStore {
     fn get(&self, key: &nova_core::Key) -> nova_core::Result<Option<nova_core::Value>> {
-        Ok(self.inner.get(key)?)
+        self.inner.get(key)
     }
 
     fn set(&self, key: &nova_core::Key, value: nova_core::Value) -> nova_core::Result<()> {
-        Ok(self.inner.set(key.clone(), value)?)
+        self.inner.set(key.clone(), value)
     }
 
     fn delete(&self, key: &nova_core::Key) -> nova_core::Result<bool> {
-        Ok(self.inner.delete(key)?)
+        self.inner.delete(key)
     }
 
     fn scan(
         &self,
         range: std::ops::Range<nova_core::Key>,
     ) -> nova_core::Result<Vec<(nova_core::Key, nova_core::Value)>> {
-        Ok(self.inner.scan(range)?)
+        self.inner.scan(range)
     }
 
     fn batch(&self, ops: Vec<nova_core::WriteOperation>) -> nova_core::Result<()> {
@@ -555,15 +546,15 @@ impl nova_core::StorageEngine for StorageEngineStore {
                 nova_core::WriteOperation::Delete { key } => WriteOperation::Delete { key },
             })
             .collect();
-        Ok(self.inner.batch(store_ops)?)
+        self.inner.batch(store_ops)
     }
 
     fn flush(&self) -> nova_core::Result<()> {
-        Ok(self.inner.flush()?)
+        self.inner.flush()
     }
 
     fn sync(&self) -> nova_core::Result<()> {
-        Ok(self.inner.sync()?)
+        self.inner.sync()
     }
 }
 

@@ -32,7 +32,7 @@ impl BruteForceDetector {
         // Add attempt
         self.attempts
             .entry(identifier.to_string())
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back(now);
 
         // Prune old attempts outside the window

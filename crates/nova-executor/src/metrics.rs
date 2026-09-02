@@ -95,6 +95,7 @@ impl Histogram {
         self.percentile(99.0)
     }
 
+    #[allow(clippy::manual_checked_ops)]
     pub fn avg(&self) -> u64 {
         if self.total == 0 {
             0

@@ -45,7 +45,7 @@ jobs:
       - name: Check
         run: cargo check --workspace
       - name: Test
-        run: cargo test --workspace --exclude nova-sim
+        run: cargo test --workspace
       - name: Audit
         run: cargo audit --deny warnings || echo "cargo audit not installed, skipping"
 

@@ -142,10 +142,10 @@ impl EventBus {
                 continue;
             }
 
-            if let Some(ref filter) = sub.content_filter {
-                if !filter.evaluate(&event) {
-                    continue;
-                }
+            if let Some(ref filter) = sub.content_filter
+                && !filter.evaluate(&event)
+            {
+                continue;
             }
 
             let _shard = match &event.metadata.ordering_key {
@@ -302,10 +302,10 @@ impl EventBus {
             }
 
             for stored in &stored_events {
-                if let Some(target) = cursor.target_timestamp {
-                    if stored.timestamp > target {
-                        return Ok(current);
-                    }
+                if let Some(target) = cursor.target_timestamp
+                    && stored.timestamp > target
+                {
+                    return Ok(current);
                 }
 
                 for sub in &subs {
@@ -339,10 +339,10 @@ impl EventBus {
                         payload: stored.payload.clone(),
                     };
 
-                    if let Some(ref filter) = sub.content_filter {
-                        if !filter.evaluate(&event) {
-                            continue;
-                        }
+                    if let Some(ref filter) = sub.content_filter
+                        && !filter.evaluate(&event)
+                    {
+                        continue;
                     }
 
                     match sub.sender.try_send(event) {

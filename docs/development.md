@@ -7,7 +7,7 @@ make help         Show help
 make setup        Checks cargo+node, debug builds novad+novactl, npm install, creates novad.toml
 make dev          Runs novad (8642) + vite (5173) with health-wait on /health, Ctrl+C cleanup
 make build        cargo build --release --bin novad --bin novactl
-make test         cargo test --workspace --exclude nova-sim + sdk/dashboard builds
+make test         cargo test --workspace + sdk/dashboard builds
 make docker       docker compose up --build
 make fmt/lint/check/clean
 ```
@@ -21,14 +21,7 @@ cargo test -p nova-storage --lib          # 123 ok (LSM bloom, BTree, WAL)
 cargo test -p nova-api --lib              # 45 ok (REST handlers, middleware, auth)
 cargo test -p nova-api --test startup_shutdown   # 6 ok (health `checks` alias, clean stop)
 cargo test -p nova-sql --test sql_integration    # 42 ok (JOIN, GROUP BY/HAVING, ORDER BY, unify_types)
-cargo test --workspace --exclude nova-sim        # everything above plus SDK/dashboard build
-```
-
-## Sim & Bench
-
-```bash
-cargo run -p nova-sim -- --headless --ticks 10000 --output results.json
-jq .summary results.json
+cargo test --workspace        # everything above plus SDK/dashboard build
 ```
 
 ## Dashboard
@@ -53,6 +46,6 @@ API client `dashboard/src/api/client.ts`: `request()` on `401` clears token → 
 
 ## Style
 
-`cargo fmt --all`, `cargo clippy --workspace -- -D warnings` (199 warnings → 27 after fixes, remaining `dead_code` intentional).
+`cargo fmt --all`, `cargo clippy --workspace -- -D warnings` (clean — 0 warnings).
 
 See `crates/*/src/*.rs` and `BUILD_REPORT.md`/`docs/compile-report.md`.

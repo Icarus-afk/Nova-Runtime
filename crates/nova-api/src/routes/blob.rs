@@ -74,7 +74,12 @@ fn extract_multipart_file(content_type: &str, body: &[u8]) -> Option<(Vec<u8>, S
         let mut ct = "application/octet-stream".to_string();
         for line in String::from_utf8_lossy(header).lines() {
             if line.to_ascii_lowercase().starts_with("content-type:") {
-                let v = line.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+                let v = line
+                    .split_once(':')
+                    .map(|x| x.1)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 if !v.is_empty() {
                     ct = v;
                 }
@@ -250,10 +255,10 @@ async fn list_blobs(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     // Honor prefix filter
-    if let Some(prefix) = &params.prefix {
-        if !prefix.is_empty() {
-            blob_ids.retain(|id| id.starts_with(prefix.as_str()));
-        }
+    if let Some(prefix) = &params.prefix
+        && !prefix.is_empty()
+    {
+        blob_ids.retain(|id| id.starts_with(prefix.as_str()));
     }
     let total = blob_ids.len();
     let offset = params.offset.unwrap_or(0);

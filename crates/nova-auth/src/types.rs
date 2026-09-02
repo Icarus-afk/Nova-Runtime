@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Type of credential a provider handles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum CredentialType {
+    #[default]
     Password,
     Token,
     ApiKey,
@@ -12,12 +13,6 @@ pub enum CredentialType {
     OAuth2,
     MfaTotp,
     Session,
-}
-
-impl Default for CredentialType {
-    fn default() -> Self {
-        CredentialType::Password
-    }
 }
 
 /// A user session.

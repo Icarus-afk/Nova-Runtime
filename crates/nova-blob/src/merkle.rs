@@ -54,11 +54,15 @@ impl MerkleTree {
         let mut level: Vec<String> = chunk_hashes.to_vec();
         let mut idx = chunk_index;
         while level.len() > 1 {
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
             if sibling_idx < level.len() {
                 proof.push(ProofStep {
                     hash: level[sibling_idx].clone(),
-                    is_right: idx % 2 == 0,
+                    is_right: idx.is_multiple_of(2),
                 });
             }
             let mut next = Vec::new();

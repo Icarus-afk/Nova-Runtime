@@ -24,6 +24,27 @@ class ApiError extends Error {
   }
 }
 
+function mapScheduleType(t: unknown): import('../types').JobType {
+  switch (String(t ?? 'OneTime').toLowerCase()) {
+    case 'cron':
+      return 'cron';
+    case 'interval':
+      return 'interval';
+    case 'onetime':
+      return 'once';
+    default:
+      return 'once';
+  }
+}
+
+function mapUserRole(permissions: unknown): import('../types').UserRole {
+  if (Array.isArray(permissions)) {
+    const role = permissions.find((p) => p === 'admin' || p === 'operator' || p === 'viewer');
+    if (role) return role as import('../types').UserRole;
+  }
+  return 'operator';
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -183,15 +204,21 @@ export const api = {
     return Promise.all([dataPromise, countPromise])
       .then(([dataR, countR]) => {
         const names: string[] = dataR.column_names || dataR.columns;
-        const docs = dataR.rows.map((row: unknown[], i: number) => ({
-          id: String(offset + i + 1),
-          collection,
-          data: Object.fromEntries(names.map((c: string, j: number) => [c, row[j]])),
-          created_at: 0,
-          updated_at: 0,
-          version: 1,
-          size_bytes: 0,
-        }) as import('../types').Document);
+        const idIdx = names.indexOf('id');
+        const docs = dataR.rows.map((row: unknown[], i: number) => {
+          const id = idIdx >= 0 && row[idIdx] !== null && row[idIdx] !== undefined
+            ? String(row[idIdx])
+            : String(offset + i + 1);
+          return {
+            id,
+            collection,
+            data: Object.fromEntries(names.map((c: string, j: number) => [c, row[j]])),
+            created_at: 0,
+            updated_at: 0,
+            version: 1,
+            size_bytes: 0,
+          } as import('../types').Document;
+        });
         const total = countR.row_count > 0 ? Number(countR.rows[0][0]) : 0;
         return {
           data: docs,
@@ -204,8 +231,8 @@ export const api = {
       });
   },
 
-  queryDatabase: (query: { collection: string; filter?: Record<string, unknown>; limit?: number }) =>
-    request<{ column_names?: string[]; columns: string[]; rows: unknown[][]; row_count: number; execution_time_ms: number }>('POST', '/sql/query', { query: query.collection, ...query.filter })
+  queryDatabase: (query: { collection: string; filter?: Record<string, unknown>; limit?: number; params?: unknown[] }) =>
+    request<{ column_names?: string[]; columns: string[]; rows: unknown[][]; row_count: number; execution_time_ms: number }>('POST', '/sql/query', { query: query.collection, params: query.params, limit: query.limit, ...query.filter })
       .then(r => {
         const names = r.column_names || r.columns;
         return { documents: r.rows.map((row, i) => ({ id: `${i}`, collection: '', data: Object.fromEntries(names.map((c, j) => [c, row[j]])), created_at: 0, updated_at: 0, version: 1, size_bytes: 0 })), total_count: r.row_count, execution_time_ms: r.execution_time_ms, warning: null } as unknown as import('../types').QueryResult;
@@ -239,7 +266,7 @@ export const api = {
       }),
 
   getCacheKeys: (_search?: string, _page = 1) =>
-    request<{ data: string[]; total: number; pattern: string | null }>('GET', '/cache/keys')
+    request<{ data: string[]; total: number; pattern: string | null }>('GET', '/cache/keys', undefined, { pattern: _search || undefined })
       .then(r => ({
         data: (r.data || []).map(k => ({ key: k, value_size_bytes: 0, created_at: 0, expires_at: null, last_access_at: 0, access_count: 0, ttl_seconds: null } as unknown as import('../types').CacheEntry)),
         pagination: { page: _page, per_page: 100, total: r.total ?? 0, total_pages: 1 },
@@ -252,12 +279,12 @@ export const api = {
   deleteCacheKey: (key: string) =>
     request<void>('DELETE', `/cache/${encodeURIComponent(key)}`),
 
-  clearCache: () =>
-    request<void>('POST', '/cache/clear').catch(() => {
-      // server has no /clear endpoint — treat as noop but surface error in logs
-      console.warn('clearCache: endpoint not implemented');
-      return undefined;
-    }),
+  clearCache: async () => {
+    // Backend has no /cache/clear route — enumerate keys and delete each.
+    const r = await request<{ data: string[] }>('GET', '/cache/keys', undefined, { pattern: '*' });
+    const keys = r.data || [];
+    await Promise.all(keys.map((k) => request<void>('DELETE', `/cache/${encodeURIComponent(k)}`).catch(() => {})));
+  },
 
   getQueues: () =>
     request<{ data: any[]; pagination: any }>('GET', '/queues')
@@ -335,12 +362,12 @@ export const api = {
       .then(r => (r.data || []).map(j => ({
         id: j.id ?? '',
         name: j.name ?? '',
-        type: String(j.schedule_type ?? 'one_time').toLowerCase(),
-        schedule: j.cron_expression ?? null,
+        type: mapScheduleType(j.schedule_type),
+        schedule: null,
         handler: '',
         payload: {},
         status: (j.state === 'Paused' || j.state === 'Cancelled' || j.state === 'Failed') ? 'paused' as const : 'active' as const,
-        max_retries: j.retry_count ?? 0,
+        max_retries: 0,
         retry_delay_seconds: 0,
         timeout_seconds: 0,
         created_at: 0,
@@ -355,8 +382,8 @@ export const api = {
         return [];
       }),
 
-  getJobExecutions: (_jobId: string, page = 1) =>
-    Promise.resolve({ data: [] as import('../types').JobExecution[], pagination: { page, per_page: 20, total: 0, total_pages: 0 } }),
+  getSchedulerStats: () =>
+    request<{ jobs_pending: number; jobs_running: number; jobs_completed: number; jobs_failed: number; jobs_cancelled: number; total_scheduled: number; total_executed: number; total_failures: number }>('GET', '/scheduler/stats'),
 
   triggerJob: (jobId: string) =>
     request<{ status: string }>('POST', `/scheduler/jobs/${jobId}/trigger`)
@@ -387,8 +414,15 @@ export const api = {
   deleteJob: (jobId: string) =>
     request<void>('DELETE', `/scheduler/jobs/${jobId}`),
 
-  createJob: (job: { name: string; type: string; schedule?: string; handler: string; payload?: Record<string, unknown>; max_retries?: number }) =>
-    request<{ id: string; name: string; status: string }>('POST', '/scheduler/jobs', { name: job.name, type: job.type === 'scheduled' ? 'cron' : job.type, schedule: job.schedule ?? '*/5 * * * *', max_retries: job.max_retries ?? 0 })
+  createJob: (job: { name: string; type: string; schedule?: string; handler?: string; payload?: Record<string, unknown>; max_retries?: number }) => {
+    const body: Record<string, unknown> = {
+      name: job.name,
+      type: job.type === 'interval' ? 'interval' : job.type === 'once' ? 'once' : 'cron',
+      max_retries: job.max_retries ?? 0,
+    };
+    if (job.type !== 'interval' && job.type !== 'once') body.schedule = job.schedule || '*/5 * * * *';
+    if (job.payload && Object.keys(job.payload).length > 0) body.action = job.payload;
+    return request<{ id: string; name: string; status: string }>('POST', '/scheduler/jobs', body)
       .then(r => ({
         id: r.id,
         name: job.name,
@@ -406,7 +440,8 @@ export const api = {
         next_run_at: null,
         tags: [],
         concurrency_policy: 'allow' as const,
-      })),
+      }));
+  },
 
   getIndexes: () =>
     request<{ data: any[]; pagination: any }>('GET', '/search/indexes')
@@ -425,7 +460,12 @@ export const api = {
 
   searchQuery: (index: string, query: string, page = 1) =>
     request<{ hits: any[]; total_hits: number; execution_time_ms: number }>('POST', `/search/indexes/${index}/query`, { query, limit: 10, offset: (page - 1) * 10 })
-      .then(r => ({ hits: r.hits || [], total: r.total_hits || 0, execution_time_ms: r.execution_time_ms || 0, max_score: 0 } as import('../types').SearchResult))
+      .then(r => ({
+        hits: (r.hits || []).map(h => ({ id: h.id, score: h.score ?? 0, fields: h.source ?? h.fields ?? {} } as import('../types').SearchHit)),
+        total: r.total_hits || 0,
+        execution_time_ms: r.execution_time_ms || 0,
+        max_score: 0,
+      } as import('../types').SearchResult))
       .catch(() => {
         console.warn('searchQuery: backend unavailable');
         return { hits: [], total: 0, execution_time_ms: 0, max_score: 0 };
@@ -434,21 +474,19 @@ export const api = {
   deleteIndex: (name: string) =>
     request<void>('DELETE', `/search/indexes/${name}`),
 
-  getBuckets: async () => {
-    // Try to discover namespaces via stats, fallback to known ones
+  getBuckets: async (): Promise<import('../types').BucketInfo[]> => {
     try {
-      // Fetch both default and taskboard and any via stats
-      const [statsRes, defaultRes, taskboardRes] = await Promise.all([
-        request<{ total_blobs: number; total_bytes: number; namespaces: number; total_chunks: number }>('GET', '/blobs/stats').catch(() => null),
-        request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'default' } as any).catch(() => ({ data: [] })),
-        request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'taskboard' } as any).catch(() => ({ data: [] })),
-      ]);
+      const stats = await request<{ total_blobs: number; namespaces?: string[] }>('GET', '/blobs/stats');
+      const fromStats = stats.namespaces || [];
+      const namespaces = ['default', ...fromStats.filter(n => n !== 'default')];
       const buckets: import('../types').BucketInfo[] = [];
-      const addBucket = (name: string, data: any[]) => {
-        if (data.length > 0 || name === 'default') {
+      for (const ns of namespaces) {
+        try {
+          const r = await request<{ data: any[]; pagination?: { total?: number } }>('GET', '/blobs', undefined, { namespace: ns, limit: 1 });
+          const data = r.data || [];
           buckets.push({
-            name,
-            file_count: data.length,
+            name: ns,
+            file_count: r.pagination?.total ?? data.length,
             total_size_bytes: data.reduce((s: number, b: any) => s + (b.size_bytes ?? 0), 0),
             created_at: data[0]?.created_at ?? Date.now(),
             last_modified_at: data[0]?.created_at ?? Date.now(),
@@ -457,22 +495,7 @@ export const api = {
             versioning_enabled: false,
             public: false,
           } as import('../types').BucketInfo);
-        }
-      };
-      addBucket('default', (defaultRes as any)?.data || []);
-      addBucket('taskboard', (taskboardRes as any)?.data || []);
-      // If stats says more blobs than we found, also try without namespace (legacy)
-      if (buckets.length === 0 && statsRes && (statsRes as any).total_blobs > 0) {
-        const all = await request<{ data: any[] }>('GET', '/blobs').catch(() => ({ data: [] }));
-        if ((all as any).data?.length) {
-          addBucket('default', (all as any).data);
-        }
-      }
-      // Always ensure at least taskboard shows if it has data (even if stats namespaces wrong)
-      if (buckets.length === 0) {
-        // Last resort: try taskboard again
-        const tb = await request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: 'taskboard' } as any).catch(() => ({ data: [] }));
-        if ((tb as any).data?.length) addBucket('taskboard', (tb as any).data);
+        } catch {}
       }
       return buckets;
     } catch {
@@ -543,8 +566,17 @@ export const api = {
   },
 
   getUsers: () =>
-    request<{ data: import('../types').DashboardUser[] }>('GET', '/auth/users')
-      .then(r => (r.data || []))
+    request<{ data: any[] }>('GET', '/auth/users')
+      .then(r => (r.data || []).map((u: any) => ({
+        id: u.id ?? '',
+        username: u.username ?? '',
+        email: '',
+        role: (Array.isArray(u.roles) ? u.roles[0] : undefined) ?? 'viewer' as import('../types').UserRole,
+        mfa_enabled: false,
+        created_at: u.created_at ?? 0,
+        last_login_at: null,
+        enabled: true,
+      } as import('../types').DashboardUser)))
       .catch(() => {
         console.warn('getUsers: backend unavailable');
         return [];
@@ -554,16 +586,37 @@ export const api = {
     request<void>('DELETE', `/auth/users/${id}`),
 
   getApiKeys: () =>
-    request<{ data: import('../types').ApiKey[] }>('GET', '/auth/api-keys')
-      .then(r => (r.data || []))
+    request<{ data: any[] }>('GET', '/auth/api-keys')
+      .then(r => (r.data || []).map((k: any) => ({
+        id: k.id ?? '',
+        name: k.name ?? '',
+        key_prefix: k.prefix ?? '',
+        role: mapUserRole(k.permissions),
+        permissions: k.permissions ?? [],
+        created_at: k.created_at ?? 0,
+        last_used_at: null,
+        expires_at: k.expires_at ?? null,
+        enabled: k.enabled ?? true,
+      } as import('../types').ApiKey)))
       .catch(() => {
         console.warn('getApiKeys: backend unavailable');
         return [];
       }),
 
   createApiKey: (name: string, role: string) =>
-    request<import('../types').ApiKey & { full_key: string }>('POST', '/auth/api-keys', { name, permissions: [role], expires_at: null })
-      .then(r => ({ ...r, role: role as import('../types').UserRole })),
+    request<any>('POST', '/auth/api-keys', { name, permissions: [role], expires_at: null })
+      .then(r => ({
+        id: r.id ?? '',
+        name: r.name ?? name,
+        key_prefix: r.prefix ?? '',
+        role: role as import('../types').UserRole,
+        permissions: r.permissions ?? [role],
+        created_at: r.created_at ?? 0,
+        last_used_at: null,
+        expires_at: r.expires_at ?? null,
+        enabled: true,
+        full_key: r.key ?? '',
+      } as import('../types').ApiKey & { full_key: string })),
 
   deleteApiKey: (id: string) =>
     request<void>('DELETE', `/auth/api-keys/${id}`),
@@ -682,8 +735,7 @@ export const api = {
   },
 
   getWsUrl: () => {
-    const wsBase = baseUrl.replace(/^http/, 'ws');
-    return `${wsBase}/logs/stream`;
+    return `${baseUrl}/ws`;
   },
 
   // === SQL / Database extended CRUD ===
@@ -693,8 +745,15 @@ export const api = {
   getTableSchema: (table: string) =>
     request<{ table: string; columns: Array<{ name: string; type: string; nullable: boolean; is_primary_key: boolean; unique: boolean }> }>('GET', `/sql/tables/${encodeURIComponent(table)}/schema`),
 
-  createTable: (name: string, columns: Array<{ name: string; type: string; nullable?: boolean; primaryKey?: boolean; unique?: boolean }>) => {
-    const cols = columns.map(c => `${c.name} ${c.type}${c.primaryKey ? ' PRIMARY KEY' : ''}${c.unique ? ' UNIQUE' : ''}${c.nullable === false ? ' NOT NULL' : ''}`).join(', ');
+  createTable: (name: string, columns: Array<{ name: string; type: string; nullable?: boolean; primaryKey?: boolean; unique?: boolean; autoIncrement?: boolean; default?: string }>) => {
+    const cols = columns.map(c => {
+      const defaultClause = c.default ? (() => {
+        const d = c.default.trim();
+        if (/^-?\d+(\.\d+)?$/.test(d) || /^(TRUE|FALSE|NULL|CURRENT_TIMESTAMP)$/i.test(d)) return ` DEFAULT ${d}`;
+        return ` DEFAULT '${String(d).replace(/'/g, "''")}'`;
+      })() : '';
+      return `${c.name} ${c.type}${c.primaryKey ? ' PRIMARY KEY' : ''}${c.unique ? ' UNIQUE' : ''}${c.autoIncrement ? ' AUTO_INCREMENT' : ''}${c.nullable === false ? ' NOT NULL' : ''}${defaultClause}`;
+    }).join(', ');
     return request('POST', '/sql/execute', { query: `CREATE TABLE ${name} (${cols})` });
   },
 
@@ -729,12 +788,33 @@ export const api = {
   getQueue: (name: string) =>
     request<{ name: string; queue_type: string; max_size: number; paused: boolean }>('GET', `/queues/${encodeURIComponent(name)}`),
 
+  getQueueStats: (name: string) =>
+    request<{ available_messages: number; in_flight_messages: number; delayed_messages: number; total_messages: number; dlq_messages: number; messages_enqueued: number; messages_dequeued: number }>('GET', `/queues/${encodeURIComponent(name)}/stats`),
+
   ackMessage: (queue: string, id: string) =>
     request('POST', `/queues/${encodeURIComponent(queue)}/messages/${encodeURIComponent(id)}/ack`),
 
   // === Scheduler extended ===
   getJob: (id: string) =>
-    request<import('../types').JobInfo>('GET', `/scheduler/jobs/${encodeURIComponent(id)}`),
+    request<any>('GET', `/scheduler/jobs/${encodeURIComponent(id)}`)
+      .then(j => ({
+        id: j.id ?? '',
+        name: j.name ?? '',
+        type: mapScheduleType(j.schedule_type),
+        schedule: null,
+        handler: '',
+        payload: {},
+        status: (j.state === 'Paused' || j.state === 'Cancelled') ? 'paused' as const : 'active' as const,
+        max_retries: j.max_retries ?? 0,
+        retry_delay_seconds: 0,
+        timeout_seconds: 0,
+        created_at: 0,
+        updated_at: 0,
+        last_run_at: j.last_run_at ?? null,
+        next_run_at: j.next_run_at ?? null,
+        tags: [],
+        concurrency_policy: 'allow' as const,
+      }) as unknown as import('../types').JobInfo),
 
   updateJob: (id: string, data: Partial<{ name: string; schedule: string; enabled: boolean }>) =>
     request('PUT', `/scheduler/jobs/${encodeURIComponent(id)}`, data),
@@ -763,10 +843,20 @@ export const api = {
     request<{ total_blobs: number; total_bytes: number; total_chunks: number; unique_chunks: number; active_uploads: number; namespaces: string[] }>('GET', '/blobs/stats'),
 
   createBucket: (name: string) =>
-    request('POST', '/blobs', {}, { namespace: name } as any).catch(() => request('GET', '/blobs', undefined, { namespace: name })),
+    Promise.reject(new Error('Buckets map to namespaces; upload to a new namespace to create one')),
 
-  deleteBucket: (name: string) =>
-    request('DELETE', `/blobs`, undefined, { namespace: name } as any),
+  deleteBucket: async (name: string) => {
+    // No backend DELETE-by-namespace route — delete every object in the namespace.
+    let offset = 0;
+    const per = 100;
+    while (true) {
+      const r = await request<{ data: any[] }>('GET', '/blobs', undefined, { namespace: name, limit: per, offset });
+      const ids = (r.data || []).map((b: any) => b.id).filter(Boolean);
+      await Promise.all(ids.map((id: string) => request<void>('DELETE', `/blobs/${encodeURIComponent(id)}`).catch(() => {})));
+      if (ids.length < per) break;
+      offset += per;
+    }
+  },
 
   // === Auth extended ===
   createUser: (data: { username: string; password: string; roles?: string[] }) =>

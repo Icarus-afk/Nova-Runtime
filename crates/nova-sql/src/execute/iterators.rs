@@ -332,6 +332,7 @@ fn evaluate_group_key(
 /// - A plain column that matches a GROUP BY column yields the group's value.
 /// - An aggregate function aggregates over the group's rows.
 /// - Nested expressions propagate accordingly.
+#[allow(clippy::only_used_in_recursion)]
 fn evaluate_grouped_expr(
     expr: &Expr,
     group_key: &[LiteralValue],
@@ -715,12 +716,13 @@ impl Executor for JoinExecutor {
 /// 1-based ordinal into the projected row; anything else is evaluated as an
 /// expression against the output schema (aliases resolve by column name).
 fn sort_key_value(expr: &Expr, row: &[Option<LiteralValue>], schema: &Schema) -> LiteralValue {
-    if let Expr::Literal(LiteralValue::Integer(ordinal)) = expr {
-        if *ordinal >= 1 && (*ordinal as usize) <= row.len() {
-            return row[(*ordinal as usize) - 1]
-                .clone()
-                .unwrap_or(LiteralValue::Null);
-        }
+    if let Expr::Literal(LiteralValue::Integer(ordinal)) = expr
+        && *ordinal >= 1
+        && (*ordinal as usize) <= row.len()
+    {
+        return row[(*ordinal as usize) - 1]
+            .clone()
+            .unwrap_or(LiteralValue::Null);
     }
     match evaluate_expr(expr, row, schema) {
         Ok(v) => v,

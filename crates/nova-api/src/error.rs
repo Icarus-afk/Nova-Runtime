@@ -90,14 +90,11 @@ impl IntoResponse for ApiError {
             HeaderValue::from_static("application/problem+json"),
         );
         for (name, value) in &self.headers {
-            match (
+            if let (Ok(hn), Ok(hv)) = (
                 HeaderName::from_bytes(name.as_bytes()),
                 HeaderValue::from_str(value),
             ) {
-                (Ok(hn), Ok(hv)) => {
-                    headers.insert(hn, hv);
-                }
-                _ => {}
+                headers.insert(hn, hv);
             }
         }
 

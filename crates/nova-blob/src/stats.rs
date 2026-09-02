@@ -23,6 +23,12 @@ pub struct StatsCollector {
     dedup: Option<Arc<DeduplicationEngine>>,
 }
 
+impl Default for StatsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatsCollector {
     pub fn new() -> Self {
         Self {

@@ -3,7 +3,7 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use clap::Parser;
 use nova_auth::providers::PasswordProvider;
-use nova_auth::types::generate_random_password;
+use nova_auth::types::{Role, generate_random_password};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ struct DaemonArgs {
 async fn main() -> anyhow::Result<()> {
     let args = DaemonArgs::parse();
 
-    let _subscriber = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::builder().parse_lossy(&args.log_level))
         .init();
 
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let loader = config_path
         .as_ref()
         .map(|p| nova_config::ConfigLoader::with_path(p.clone()))
-        .unwrap_or_else(nova_config::ConfigLoader::new);
+        .unwrap_or_default();
 
     let mut config = match &args.config {
         Some(path) => nova_config::ConfigLoader::parse_file(Path::new(path))?,
@@ -50,12 +50,12 @@ async fn main() -> anyhow::Result<()> {
     if let Some(dir) = &args.data_dir {
         config.general.data_dir = std::path::PathBuf::from(dir);
     }
-    if let Some(listen) = &args.listen {
-        if let Some((addr, port)) = listen.split_once(':') {
-            config.networking.listen_address = addr.to_string();
-            if let Ok(p) = port.parse() {
-                config.networking.listen_port = p;
-            }
+    if let Some(listen) = &args.listen
+        && let Some((addr, port)) = listen.split_once(':')
+    {
+        config.networking.listen_address = addr.to_string();
+        if let Ok(p) = port.parse() {
+            config.networking.listen_port = p;
         }
     }
 
@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
     let exec_config = nova_executor::PipelineConfig {
         max_concurrent_ops: config.read().execution.max_concurrent_ops,
         pipeline_queue_depth: config.read().execution.pipeline_queue_depth,
-        worker_threads: config.read().execution.worker_threads as u32,
+        worker_threads: config.read().execution.worker_threads,
         default_operation_timeout_ms: config.read().execution.default_operation_timeout_ms,
         max_operation_timeout_ms: config.read().execution.max_operation_timeout_ms,
         rate_limit_global_per_sec: config.read().execution.rate_limit_global_per_sec as f64,
@@ -326,6 +326,40 @@ async fn main() -> anyhow::Result<()> {
         mgr.register_provider(password_provider)
             .map_err(|e| anyhow::anyhow!("Failed to register auth provider: {}", e))?;
 
+        // Bootstrap default RBAC roles so check_permission() works.
+        // Without these, the RBAC engine has zero role definitions and
+        // every permission check returns false, even for admin users.
+        mgr.define_role(Role {
+            name: "admin".to_string(),
+            description: "Full system access".to_string(),
+            permissions: vec!["*:*".to_string()],
+            created_at: chrono::Utc::now().timestamp_millis(),
+        });
+        mgr.define_role(Role {
+            name: "editor".to_string(),
+            description: "Read and write access".to_string(),
+            permissions: vec![
+                "read:*".to_string(),
+                "write:*".to_string(),
+                "admin:users:read".to_string(),
+            ],
+            created_at: chrono::Utc::now().timestamp_millis(),
+        });
+        mgr.define_role(Role {
+            name: "viewer".to_string(),
+            description: "Read-only access".to_string(),
+            permissions: vec!["read:*".to_string()],
+            created_at: chrono::Utc::now().timestamp_millis(),
+        });
+
+        // Assign admin role to the admin user in the RBAC engine so
+        // check_permission(&admin_user_id, ...) resolves correctly.
+        if let Some(admin_user) = mgr.get_user_by_username("admin")
+            && let Err(e) = mgr.assign_role(admin_user.id, "admin")
+        {
+            tracing::warn!("Failed to assign admin role: {}", e);
+        }
+
         // Bootstrap default admin user if no users exist. Never use a hardcoded
         // password — generate a strong random one from a session token and log it
         // once so operators can log in on first boot.
@@ -333,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
             let admin_password = std::env::var("NOVA_ADMIN_PASSWORD")
                 .ok()
                 .filter(|p| !p.is_empty())
-                .unwrap_or_else(|| generate_random_password());
+                .unwrap_or_else(generate_random_password);
             mgr.create_user("admin", &admin_password, vec!["admin".to_string()])
                 .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
             tracing::info!(
@@ -564,9 +598,9 @@ fn resolve_config_path(cli_path: &Option<String>) -> Option<PathBuf> {
     if local.exists() {
         return Some(local);
     }
-    let user_path = if let Some(config_dir) = std::env::var("XDG_CONFIG_HOME").ok() {
+    let user_path = if let Ok(config_dir) = std::env::var("XDG_CONFIG_HOME") {
         PathBuf::from(config_dir).join("nova/novad.toml")
-    } else if let Some(home) = std::env::var("HOME").ok() {
+    } else if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join(".config/nova/novad.toml")
     } else {
         PathBuf::from("/etc/novad/novad.toml")

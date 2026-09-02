@@ -141,8 +141,7 @@ impl Document {
             return false;
         }
         let mut current = &mut self.data;
-        for i in 0..parts.len() - 1 {
-            let key = parts[i];
+        for &key in parts.iter().take(parts.len() - 1) {
             match current.get_mut(key) {
                 Some(Value::Object(map)) => {
                     current = map;

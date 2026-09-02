@@ -94,7 +94,7 @@ impl AuthProvider for PasswordProvider {
     }
 
     fn validate_credential(&self, credential: &str) -> Result<()> {
-        let _ = validate_password(credential, &self.config)
+        validate_password(credential, &self.config)
             .map_err(|errors| AuthError::PasswordPolicyViolation(errors.join("; ")))?;
         Ok(())
     }
@@ -237,11 +237,11 @@ impl JwtProvider {
             opad[i] ^= key[i];
         }
         let mut inner = Sha256::new();
-        inner.update(&ipad);
+        inner.update(ipad);
         inner.update(data);
         let inner_hash = inner.finalize();
         let mut outer = Sha256::new();
-        outer.update(&opad);
+        outer.update(opad);
         outer.update(inner_hash);
         outer.finalize().into()
     }

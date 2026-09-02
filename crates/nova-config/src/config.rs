@@ -900,21 +900,12 @@ impl Default for SessionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AuthConfig {
     #[serde(default)]
     pub internal: InternalAuthConfig,
     #[serde(default)]
     pub session: SessionConfig,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            internal: InternalAuthConfig::default(),
-            session: SessionConfig::default(),
-        }
-    }
 }
 
 // ---- Security ----

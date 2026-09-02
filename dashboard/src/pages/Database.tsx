@@ -13,10 +13,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
+const SQL_TYPES = [
+  'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT',
+  'FLOAT', 'DOUBLE', 'REAL', 'DECIMAL', 'NUMERIC',
+  'TEXT', 'VARCHAR', 'CHAR', 'STRING', 'TINYTEXT', 'LONGTEXT',
+  'BOOLEAN', 'BOOL',
+  'TIMESTAMP', 'DATETIME', 'DATE', 'TIME',
+  'BLOB', 'BINARY', 'VARBINARY', 'NULL',
+];
+
 export default function DatabasePage() {
   const [activeTab, setActiveTab] = useState<'browse' | 'query'>('browse');
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [queryInput, setQueryInput] = useState('SELECT * FROM users LIMIT 10');
+  const [queryParams, setQueryParams] = useState('');
+  const [queryLimit, setQueryLimit] = useState('');
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -25,7 +36,11 @@ export default function DatabasePage() {
   // Create table
   const [showCreateTable, setShowCreateTable] = useState(false);
   const [newTableName, setNewTableName] = useState('');
-  const [newColumns, setNewColumns] = useState<Array<{ name: string; type: string }>>([{ name: 'id', type: 'INTEGER PRIMARY KEY' }, { name: 'name', type: 'TEXT' }]);
+  const [newColumns, setNewColumns] = useState<Array<{ name: string; type: string; nullable?: boolean; primaryKey?: boolean; unique?: boolean; autoIncrement?: boolean; default?: string }>>([
+    { name: 'id', type: 'INTEGER', primaryKey: true, autoIncrement: true },
+    { name: 'name', type: 'TEXT', nullable: true },
+    { name: 'age', type: 'INTEGER' },
+  ]);
   const [createTableLoading, setCreateTableLoading] = useState(false);
   const [createTableError, setCreateTableError] = useState<string | null>(null);
 
@@ -68,10 +83,16 @@ export default function DatabasePage() {
     setQueryLoading(true);
     setQueryError(null);
     try {
+      let params: unknown[] | undefined;
+      if (queryParams.trim()) {
+        const parsed = JSON.parse(queryParams.trim());
+        params = Array.isArray(parsed) ? parsed : [parsed];
+      }
       const result = await api.queryDatabase({
         collection: queryInput,
         filter: {},
-        limit: 100,
+        limit: queryLimit ? parseInt(queryLimit, 10) : undefined,
+        params,
       });
       setQueryResult(result);
     } catch (err: unknown) {
@@ -89,7 +110,7 @@ export default function DatabasePage() {
     setCreateTableLoading(true);
     setCreateTableError(null);
     try {
-      await api.createTable(newTableName.trim(), newColumns.filter(c => c.name.trim()).map(c => ({ name: c.name.trim(), type: c.type })));
+      await api.createTable(newTableName.trim(), newColumns.filter(c => c.name.trim()));
       showToast(`Table ${newTableName} created`, 'success');
       setShowCreateTable(false);
       setNewTableName('');
@@ -248,12 +269,20 @@ export default function DatabasePage() {
             <div className="card" style={{ marginTop: 12, padding: 12 }}>
               <div className="text-sm text-muted" style={{ fontWeight: 600, marginBottom: 6 }}>Schema: {selectedCollection}</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                {(schema as any).columns?.map((c: any) => (
-                  <div key={c.name} className="detail-row" style={{ padding: '4px 0' }}>
-                    <span>{c.name}</span>
-                    <span style={{ color: 'var(--accent)' }}>{c.type}</span>
-                  </div>
-                )) || <span className="text-muted">No schema</span>}
+                {(schema as any).columns?.map((c: any) => {
+                  const flags = [c.is_primary_key && 'PK', !c.nullable && 'NOT NULL', c.unique && 'UNIQUE'].filter(Boolean).join(' · ');
+                  return (
+                    <div key={c.name} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div className="detail-row" style={{ padding: 0 }}>
+                        <span>{c.name}</span>
+                        <span style={{ color: 'var(--accent)' }}>{c.type}</span>
+                      </div>
+                      <div className="text-muted" style={{ fontSize: 9.5, color: flags ? undefined : 'var(--text-muted)' }}>
+                        {flags || 'nullable'}
+                      </div>
+                    </div>
+                  );
+                }) || <span className="text-muted">No schema</span>}
               </div>
             </div>
           )}
@@ -305,8 +334,18 @@ export default function DatabasePage() {
                     value={queryInput}
                     onChange={(e) => setQueryInput(e.target.value)}
                     rows={6}
-                    placeholder="SELECT * FROM users WHERE age > 21 LIMIT 10"
+                    placeholder="SELECT * FROM users WHERE age > $1 LIMIT 10"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 12 }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label>Params (JSON array for $1, $2, ...)</label>
+                    <input className="form-input" value={queryParams} onChange={(e) => setQueryParams(e.target.value)} placeholder='[21]' style={{ fontFamily: 'var(--font-mono)' }} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label>Max rows (optional)</label>
+                    <input className="form-input" value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} placeholder="100" type="number" min={1} max={1000} />
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <button className="btn btn-primary" onClick={handleRunQuery} disabled={queryLoading}>
@@ -316,7 +355,7 @@ export default function DatabasePage() {
                   <button className="btn" onClick={() => setQueryInput('SELECT * FROM users LIMIT 10')}>Example</button>
                 </div>
                 <div className="text-sm text-muted" style={{ marginTop: 8 }}>
-                  Supports: SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE. Use params like $1 via API.
+                  Supports: SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE. Parameter placeholders ($1, $2...) are interpolated by the server.
                 </div>
               </div>
 
@@ -387,22 +426,38 @@ export default function DatabasePage() {
         <div className="form-group">
           <label>Columns</label>
           {newColumns.map((col, idx) => (
-            <div key={idx} className="flex gap-2" style={{ marginBottom: 8 }}>
-              <input className="form-input" value={col.name} onChange={e => { const c=[...newColumns]; c[idx].name=e.target.value; setNewColumns(c); }} placeholder="column name" style={{ flex: 1 }} />
-              <select className="form-select" value={col.type} onChange={e => { const c=[...newColumns]; c[idx].type=e.target.value; setNewColumns(c); }} style={{ flex: 1 }}>
-                <option>TEXT</option>
-                <option>INTEGER PRIMARY KEY</option>
-                <option>INTEGER</option>
-                <option>FLOAT</option>
-                <option>BOOLEAN</option>
-              </select>
-              <button className="btn btn-sm btn-danger" onClick={() => setNewColumns(newColumns.filter((_, i) => i !== idx))}>×</button>
+            <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+              <div className="flex gap-2" style={{ marginBottom: 8 }}>
+                <input className="form-input" value={col.name} onChange={e => { const c=[...newColumns]; c[idx].name=e.target.value; setNewColumns(c); }} placeholder="column name" style={{ flex: 1 }} />
+                <select className="form-select" value={col.type} onChange={e => { const c=[...newColumns]; c[idx].type=e.target.value; setNewColumns(c); }} style={{ flex: 1 }}>
+                  {SQL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <button className="btn btn-sm btn-danger" onClick={() => setNewColumns(newColumns.filter((_, i) => i !== idx))}>×</button>
+              </div>
+              <div className="flex gap-3" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                <label className="flex items-center gap-1" style={{ fontSize: 12 }}>
+                  <input type="checkbox" checked={!!col.primaryKey} onChange={e => { const c=[...newColumns]; c[idx]={ ...c[idx], primaryKey: e.target.checked }; setNewColumns(c); }} /> PK
+                </label>
+                <label className="flex items-center gap-1" style={{ fontSize: 12 }}>
+                  <input type="checkbox" checked={!!col.unique} onChange={e => { const c=[...newColumns]; c[idx]={ ...c[idx], unique: e.target.checked }; setNewColumns(c); }} /> UNIQUE
+                </label>
+                <label className="flex items-center gap-1" style={{ fontSize: 12 }}>
+                  <input type="checkbox" checked={!!col.autoIncrement} onChange={e => { const c=[...newColumns]; c[idx]={ ...c[idx], autoIncrement: e.target.checked }; setNewColumns(c); }} /> AUTO_INCREMENT
+                </label>
+                <label className="flex items-center gap-1" style={{ fontSize: 12 }}>
+                  <input type="checkbox" checked={col.nullable === false} onChange={e => { const c=[...newColumns]; c[idx]={ ...c[idx], nullable: !e.target.checked }; setNewColumns(c); }} /> NOT NULL
+                </label>
+                <label className="flex items-center gap-1" style={{ fontSize: 12 }}>
+                  DEFAULT
+                  <input className="form-input" style={{ width: 130, padding: '3px 6px', fontSize: 12 }} value={col.default ?? ''} placeholder="0 / 'x' / CURRENT_TIMESTAMP" onChange={e => { const c=[...newColumns]; c[idx]={ ...c[idx], default: e.target.value }; setNewColumns(c); }} />
+                </label>
+              </div>
             </div>
           ))}
           <button className="btn btn-sm" onClick={() => setNewColumns([...newColumns, { name: '', type: 'TEXT' }])}>+ Add Column</button>
         </div>
         {createTableError && <div className="callout error">{createTableError}</div>}
-        <div className="text-sm text-muted">Example: id INTEGER PRIMARY KEY, name TEXT, age INTEGER</div>
+        <div className="text-sm text-muted">Types: INTEGER, FLOAT, TEXT, BOOLEAN, VARCHAR, TIMESTAMP, DATE, BLOB, ... · PK implies NOT NULL</div>
       </Modal>
 
       {/* Insert Modal */}

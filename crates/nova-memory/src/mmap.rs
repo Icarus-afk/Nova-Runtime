@@ -32,6 +32,9 @@ impl MmapRegion {
         self.len() == 0
     }
 
+    /// # Safety
+    /// Caller must ensure the returned pointer is not used after `unmap` and that
+    /// aliasing rules are respected (no concurrent mutable access).
     pub unsafe fn map(&self) -> Result<*mut u8> {
         use std::os::unix::io::AsRawFd;
         let fd = self
@@ -64,6 +67,9 @@ impl MmapRegion {
         Ok(ptr as *mut u8)
     }
 
+    /// # Safety
+    /// `ptr` must have been returned by a previous call to `map` on the same
+    /// region with the same `len`, and the memory must not be accessed after this call.
     pub unsafe fn unmap(&self, ptr: *mut u8) -> Result<()> {
         // SAFETY: The following invariants hold:
         // - `ptr` was returned by a previous `mmap` call on this region

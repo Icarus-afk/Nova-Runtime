@@ -55,11 +55,7 @@ impl Highlighter {
                 continue;
             }
 
-            let raw_snippet_start = if start > snippet_len / 2 {
-                start - snippet_len / 2
-            } else {
-                0
-            };
+            let raw_snippet_start = start.saturating_sub(snippet_len / 2);
 
             let snippet_start = char_boundary(text, raw_snippet_start);
             let raw_snippet_end = std::cmp::min(snippet_start + snippet_len, text.len());

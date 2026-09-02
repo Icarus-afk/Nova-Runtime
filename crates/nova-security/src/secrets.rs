@@ -22,8 +22,7 @@ impl SecretValue {
     }
 
     pub fn into_inner(mut self) -> Vec<u8> {
-        let result = std::mem::take(&mut self.data);
-        result
+        std::mem::take(&mut self.data)
     }
 }
 
@@ -134,10 +133,10 @@ impl SecretsManager {
                 if let Ok(entries) = fs::read_dir(&dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if let Some(name) = path.file_stem() {
-                            if path.extension().map_or(false, |e| e == "secret") {
-                                secrets.push(name.to_string_lossy().to_string());
-                            }
+                        if let Some(name) = path.file_stem()
+                            && path.extension().is_some_and(|e| e == "secret")
+                        {
+                            secrets.push(name.to_string_lossy().to_string());
                         }
                     }
                 }

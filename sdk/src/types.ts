@@ -586,56 +586,44 @@ export interface SearchResponse<T> {
 }
 
 export interface AuthResult {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-  tokenType: string;
-  user: User;
+  token_type: string;
+  access_token: string;
+  expires_in: number;
+  refresh_token: string | null;
+  refresh_expires_in: number | null;
 }
 
 export interface User {
   id: string;
   username: string;
-  email: string;
-  displayName: string;
-  roles: Role[];
-  status: string;
-  emailVerified: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastLoginAt?: string;
-}
-
-export interface Role {
-  name: string;
-  description: string;
-  permissions: string[];
-  isSystem: boolean;
-  createdAt: string;
+  roles: string[];
+  created_at: number;
 }
 
 export interface ApiKey {
   id: string;
   name: string;
-  keyPrefix: string;
+  prefix: string;
   permissions: string[];
-  roles?: string[];
-  expiresAt?: string;
-  lastUsedAt?: string;
-  createdAt: string;
-  isActive: boolean;
+  created_at: number;
+  expires_at: number | null;
+  enabled: boolean;
 }
 
 export interface ApiKeyFull {
-  apiKey: ApiKey;
-  rawKey: string;
+  id: string;
+  name: string;
+  key: string;
+  prefix: string;
+  permissions: string[];
+  created_at: number;
+  expires_at: number | null;
 }
 
 export interface RegisterInput {
   username: string;
-  email: string;
   password: string;
-  displayName: string;
+  roles?: string[];
 }
 
 export interface ConnectionInfo {

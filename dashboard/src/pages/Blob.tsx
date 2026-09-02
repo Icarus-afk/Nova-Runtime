@@ -19,11 +19,6 @@ export default function BlobPage() {
   const [objectPage, setObjectPage] = useState(1);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
-  // Create bucket
-  const [showCreateBucket, setShowCreateBucket] = useState(false);
-  const [newBucketName, setNewBucketName] = useState('');
-  const [createBucketError, setCreateBucketError] = useState<string | null>(null);
-
   // Delete bucket/object
   const [deleteBucketName, setDeleteBucketName] = useState<string | null>(null);
   const [deleteObjectKey, setDeleteObjectKey] = useState<string | null>(null);
@@ -45,23 +40,6 @@ export default function BlobPage() {
   );
 
   const selectedInfo = buckets?.find(b => b.name === selectedBucket);
-
-  const handleCreateBucket = async () => {
-    if (!newBucketName.trim()) {
-      setCreateBucketError('Name required');
-      return;
-    }
-    setCreateBucketError(null);
-    try {
-      await api.createBucket(newBucketName.trim());
-      showToast(`Bucket ${newBucketName} created`);
-      setShowCreateBucket(false);
-      setNewBucketName('');
-      refetchBuckets();
-    } catch (err: unknown) {
-      setCreateBucketError(err instanceof Error ? err.message : 'Create failed');
-    }
-  };
 
   const handleDeleteBucket = async () => {
     if (!deleteBucketName) return;
@@ -166,7 +144,10 @@ export default function BlobPage() {
             <h1>Blob Storage</h1>
             <p>Namespaces with deduplicated, chunked storage and SHA-256</p>
           </div>
-          <button className="btn btn-primary" onClick={() => setShowCreateBucket(true)}>+ Create Bucket</button>
+          <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+            Upload File
+            <input type="file" style={{ display: 'none' }} onChange={(e) => { if (selectedBucket) handleUpload(e); else setUploadStatus('Select a namespace first'); }} />
+          </label>
         </div>
       </div>
 
@@ -188,7 +169,7 @@ export default function BlobPage() {
           data={(buckets || []) as unknown as Record<string, unknown>[]}
           loading={bucketsLoading}
           onRowClick={(row) => { setSelectedBucket(row.name as string); setObjectPage(1); }}
-          emptyMessage="No buckets — create one to store files"
+          emptyMessage="No namespaces yet — upload a file to one to create it"
         />
       </div>
 
@@ -226,21 +207,6 @@ export default function BlobPage() {
           />
         </div>
       )}
-
-      <Modal isOpen={showCreateBucket} onClose={() => setShowCreateBucket(false)} title="Create Bucket (Namespace)" size="sm"
-        footer={
-          <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn" onClick={() => setShowCreateBucket(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleCreateBucket}>Create</button>
-          </div>
-        }>
-        <div className="form-group">
-          <label>Name *</label>
-          <input className="form-input" value={newBucketName} onChange={e => setNewBucketName(e.target.value)} placeholder="my-bucket (a-z, 0-9, _, -)" />
-          <div className="form-hint">Maps to storage namespace; used as ?namespace= in API. Example: uploads, avatars</div>
-        </div>
-        {createBucketError && <div className="callout error">{createBucketError}</div>}
-      </Modal>
 
       <Modal isOpen={!!viewObject} onClose={() => setViewObject(null)} title="Object Details" size="md"
         footer={<button className="btn" onClick={() => setViewObject(null)}>Close</button>}>

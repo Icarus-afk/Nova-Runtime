@@ -368,9 +368,9 @@ impl BTree {
         write_u64(&mut new_page.data, PREV_LEAF_OFF, page.id.value());
 
         let mut new_count = 0usize;
-        for i in mid..entries.len() {
-            insert_leaf_entry(&mut new_page.data, new_count, &entries[i].0, &entries[i].1)?;
-            if entries[i].2 & 0x01 != 0 {
+        for entry in entries.iter().skip(mid) {
+            insert_leaf_entry(&mut new_page.data, new_count, &entry.0, &entry.1)?;
+            if entry.2 & 0x01 != 0 {
                 let entry_off = LEAF_ENTRIES_OFF + new_count * LEAF_ENTRY_SIZE;
                 new_page.data[entry_off + 22] = 0x01;
             }
@@ -393,14 +393,13 @@ impl BTree {
         cache.insert(page)?;
         cache.insert(new_page)?;
 
-        if new_next_leaf != PageId::INVALID.value() {
-            if let Ok(Some(mut next_page)) = cache.get(PageId::new(new_next_leaf)) {
-                if next_page.id != PageId::INVALID {
-                    write_u64(&mut next_page.data, PREV_LEAF_OFF, new_page_id.value());
-                    next_page.mark_dirty();
-                    cache.insert(next_page)?;
-                }
-            }
+        if new_next_leaf != PageId::INVALID.value()
+            && let Ok(Some(mut next_page)) = cache.get(PageId::new(new_next_leaf))
+            && next_page.id != PageId::INVALID
+        {
+            write_u64(&mut next_page.data, PREV_LEAF_OFF, new_page_id.value());
+            next_page.mark_dirty();
+            cache.insert(next_page)?;
         }
 
         Ok(Some((split_key, new_page_id)))
@@ -452,14 +451,8 @@ impl BTree {
         );
 
         let mut new_count = 0usize;
-        for i in mid + 1..entries.len() {
-            push_int_entry(
-                &mut new_page.data,
-                new_count,
-                entries[i].0,
-                entries[i].1,
-                &entries[i].2,
-            );
+        for entry in entries.iter().skip(mid + 1) {
+            push_int_entry(&mut new_page.data, new_count, entry.0, entry.1, &entry.2);
             new_count += 1;
         }
         write_u16(&mut new_page.data, COUNT_OFF, new_count as u16);

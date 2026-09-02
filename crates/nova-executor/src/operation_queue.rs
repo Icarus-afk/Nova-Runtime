@@ -73,6 +73,7 @@ impl OperationQueue {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn push(&self, op: PendingOperation) -> Result<(), OperationResponse> {
         let mut inner = self.inner.lock();
 
@@ -205,6 +206,7 @@ impl OperationQueue {
         ];
 
         let wait_count = self.wait_time_count.load(Ordering::Relaxed);
+        #[allow(clippy::manual_checked_ops)]
         let avg_wait_ms = if wait_count > 0 {
             self.wait_time_total.load(Ordering::Relaxed) / wait_count / 1_000_000
         } else {

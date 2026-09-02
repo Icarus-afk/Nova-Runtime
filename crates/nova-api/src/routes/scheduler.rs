@@ -72,11 +72,11 @@ async fn create_job(
             "cron schedule requires 'schedule' cron expression",
         ));
     }
-    if let Some(cron) = &req.schedule {
-        if schedule_type == nova_scheduler::ScheduleType::Cron {
-            nova_scheduler::CronSchedule::parse(cron)
-                .map_err(|e| ApiError::bad_request(format!("invalid cron: {e}")))?;
-        }
+    if let Some(cron) = &req.schedule
+        && schedule_type == nova_scheduler::ScheduleType::Cron
+    {
+        nova_scheduler::CronSchedule::parse(cron)
+            .map_err(|e| ApiError::bad_request(format!("invalid cron: {e}")))?;
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -103,10 +103,10 @@ async fn create_job(
 
     let mut job = nova_scheduler::Job::new(&req.name, next_run_at, payload);
     job.schedule_type = schedule_type;
-    if let Some(cron) = &req.schedule {
-        if job.schedule_type == nova_scheduler::ScheduleType::Cron {
-            job.cron_expression = Some(cron.clone());
-        }
+    if let Some(cron) = &req.schedule
+        && job.schedule_type == nova_scheduler::ScheduleType::Cron
+    {
+        job.cron_expression = Some(cron.clone());
     }
     let tz_clone = req.timezone.clone();
     let act_clone = req.action.clone();

@@ -10,6 +10,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 parking_lot.workspace = true
+chrono.workspace = true
 tokio = { workspace = true, features = ["full"] }
 nova-config = { path = "../nova-config" }
 nova-core = { path = "../nova-core" }

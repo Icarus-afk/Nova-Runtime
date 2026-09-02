@@ -41,6 +41,12 @@ pub struct TableStore {
     tables: DashMap<String, Arc<TableData>>,
 }
 
+impl Default for TableStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TableStore {
     pub fn new() -> Self {
         TableStore {

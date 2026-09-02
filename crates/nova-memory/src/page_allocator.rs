@@ -49,6 +49,9 @@ impl PageAllocator {
         Ok(ptr)
     }
 
+    /// # Safety
+    /// `ptr` must have been returned by `allocate_pages` with a layout that matches
+    /// this allocator's page size. The memory must not be used after freeing.
     #[allow(unused_variables)] // `count` is unused but kept for API symmetry with `allocate_pages(count)`
     pub unsafe fn free_pages(&mut self, ptr: *mut u8, count: usize) {
         if let Some(&size) = self.allocations.get(&ptr) {

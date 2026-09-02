@@ -55,14 +55,14 @@ impl RbacEngine {
         if pattern == target {
             return true;
         }
-        if let Some((p_action, p_resource)) = pattern.split_once(':') {
-            if let Some((t_action, t_resource)) = target.split_once(':') {
-                if p_action == "*" && p_resource == t_resource {
-                    return true;
-                }
-                if p_resource == "*" && p_action == t_action {
-                    return true;
-                }
+        if let Some((p_action, p_resource)) = pattern.split_once(':')
+            && let Some((t_action, t_resource)) = target.split_once(':')
+        {
+            if p_action == "*" && p_resource == t_resource {
+                return true;
+            }
+            if p_resource == "*" && p_action == t_action {
+                return true;
             }
         }
         false

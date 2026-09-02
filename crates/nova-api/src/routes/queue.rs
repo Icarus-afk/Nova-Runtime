@@ -67,10 +67,10 @@ async fn create_queue(
                 cfg.max_message_size = mms;
             }
             // durable flag — map to queue_type persistence hint via tags; log for observability
-            if let Some(durable) = req.durable {
-                if !durable {
-                    tracing::info!("queue {} created as non-durable (in-mem hint)", req.name);
-                }
+            if let Some(durable) = req.durable
+                && !durable
+            {
+                tracing::info!("queue {} created as non-durable (in-mem hint)", req.name);
             }
             mgr.backend()
                 .update_queue(cfg)
@@ -255,12 +255,12 @@ async fn poll_messages(
         .ok_or_else(|| ApiError::internal("Queue not available"))?;
     let count = req.count.unwrap_or(10).clamp(1, 100);
     let vtimeout_ms = req.visibility_timeout_ms;
-    if let Some(v) = vtimeout_ms {
-        if v > 12 * 60 * 60 * 1000 {
-            return Err(ApiError::bad_request(
-                "visibility_timeout_ms exceeds 12 hours",
-            ));
-        }
+    if let Some(v) = vtimeout_ms
+        && v > 12 * 60 * 60 * 1000
+    {
+        return Err(ApiError::bad_request(
+            "visibility_timeout_ms exceeds 12 hours",
+        ));
     }
     let mut messages = mgr
         .dequeue(&name, count)

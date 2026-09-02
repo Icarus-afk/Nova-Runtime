@@ -27,6 +27,12 @@ pub enum BoundSelectItem {
 
 pub struct Binder;
 
+impl Default for Binder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Binder {
     pub fn new() -> Self {
         Binder

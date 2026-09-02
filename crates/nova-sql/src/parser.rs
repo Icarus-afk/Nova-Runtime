@@ -217,10 +217,8 @@ impl Parser {
         let expr = self.parse_expression()?;
         let asc = if self.eat_if(Token::Asc) {
             true
-        } else if self.eat_if(Token::Desc) {
-            false
         } else {
-            true
+            !self.eat_if(Token::Desc)
         };
         let nulls_first = if self.eat_if(Token::Nulls) {
             if self.eat_if(Token::First) {

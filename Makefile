@@ -51,7 +51,7 @@ install: ## Build release + install to ~/.cargo/bin
 	@echo "  Try: novactl --help"
 
 test: ## Run workspace tests + SDK tests
-	cargo test --workspace --exclude nova-sim
+	cargo test --workspace
 	cd sdk && npm test
 	cd dashboard && npm run build
 
@@ -74,8 +74,8 @@ fmt: ## Format code
 
 lint: ## Lint (clippy + tsc)
 	cargo clippy --workspace -- -D warnings
-	cd dashboard && npm run build
-	cd sdk && npm run build
+	cd dashboard && npx tsc --noEmit
+	cd sdk && npx tsc --noEmit
 
 check: ## Fast check (no build)
 	cargo check --workspace

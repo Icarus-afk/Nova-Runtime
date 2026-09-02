@@ -142,15 +142,16 @@ async fn cache_list_keys(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     // Honor pattern filtering (glob-like * and ?)
-    if let Some(pat) = &params.pattern {
-        if !pat.is_empty() && pat != "*" {
-            let regex_str = format!(
-                "^{}$",
-                regex::escape(pat).replace("\\*", ".*").replace("\\?", ".")
-            );
-            if let Ok(re) = regex::Regex::new(&regex_str) {
-                keys.retain(|k| re.is_match(k));
-            }
+    if let Some(pat) = &params.pattern
+        && !pat.is_empty()
+        && pat != "*"
+    {
+        let regex_str = format!(
+            "^{}$",
+            regex::escape(pat).replace("\\*", ".*").replace("\\?", ".")
+        );
+        if let Ok(re) = regex::Regex::new(&regex_str) {
+            keys.retain(|k| re.is_match(k));
         }
     }
     Ok(Json(json!({

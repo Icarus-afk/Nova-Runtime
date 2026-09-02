@@ -57,10 +57,9 @@ pub struct WhitespaceTokenizer;
 impl WhitespaceTokenizer {
     pub fn tokenize(text: &str) -> Vec<Token> {
         let mut tokens = Vec::new();
-        let mut position = 0;
         let mut pos = 0;
 
-        for word in text.split_whitespace() {
+        for (position, word) in text.split_whitespace().enumerate() {
             let term = word.to_lowercase();
             let start = pos + word.as_ptr() as usize - text[pos..].as_ptr() as usize;
             let end = start + word.len();
@@ -72,7 +71,6 @@ impl WhitespaceTokenizer {
                 end_offset: end,
                 position,
             });
-            position += 1;
         }
 
         tokens

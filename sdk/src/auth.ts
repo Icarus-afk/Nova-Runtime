@@ -1,5 +1,5 @@
 import type { HttpClient } from './client';
-import type { AuthResult, User, ApiKey, ApiKeyFull, Role, Connection, PaginationInput } from './types';
+import type { AuthResult, User, ApiKey, PaginationInput } from './types';
 
 export class AuthClient {
   constructor(
@@ -11,18 +11,8 @@ export class AuthClient {
     return response.data;
   }
 
-  async register(input: {
-    username: string;
-    email: string;
-    password: string;
-    displayName: string;
-  }): Promise<AuthResult> {
-    const response = await this.http.post<AuthResult>('/auth/register', input);
-    return response.data;
-  }
-
   async refreshToken(refreshToken: string): Promise<AuthResult> {
-    const response = await this.http.post<AuthResult>('/auth/token/refresh', { refreshToken });
+    const response = await this.http.post<AuthResult>('/auth/refresh', { refresh_token: refreshToken });
     return response.data;
   }
 
@@ -30,18 +20,8 @@ export class AuthClient {
     await this.http.post('/auth/logout');
   }
 
-  async me(): Promise<User> {
-    const response = await this.http.get<User>('/auth/me');
-    return response.data;
-  }
-
-  async listUsers(options?: {
-    status?: string;
-    role?: string;
-    search?: string;
-    pagination?: PaginationInput;
-  }): Promise<Connection<User>> {
-    const response = await this.http.get<Connection<User>>('/auth/users', { query: options as Record<string, unknown> });
+  async listUsers(options?: PaginationInput): Promise<{ data: User[]; pagination: { cursor: string | null; limit: number; has_more: boolean } }> {
+    const response = await this.http.get<{ data: User[]; pagination: { cursor: string | null; limit: number; has_more: boolean } }>('/auth/users', { query: options as Record<string, unknown> });
     return response.data;
   }
 
@@ -52,78 +32,47 @@ export class AuthClient {
 
   async createUser(input: {
     username: string;
-    email: string;
-    password?: string;
-    displayName?: string;
+    password: string;
     roles?: string[];
-  }): Promise<User> {
-    const response = await this.http.post<User>('/auth/users', input);
+  }): Promise<{ id: string; username: string; roles: string[]; status: string }> {
+    const response = await this.http.post<{ id: string; username: string; roles: string[]; status: string }>('/auth/users', input);
     return response.data;
   }
 
-  async updateUser(id: string, input: {
-    displayName?: string;
-    email?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<User> {
-    const response = await this.http.patch<User>(`/auth/users/${id}`, input);
+  async deleteUser(id: string): Promise<{ status: string; id: string }> {
+    const response = await this.http.delete<{ status: string; id: string }>(`/auth/users/${id}`);
     return response.data;
   }
 
-  async deleteUser(id: string): Promise<void> {
-    await this.http.delete(`/auth/users/${id}`);
-  }
-
-  async suspendUser(id: string, reason?: string): Promise<User> {
-    const response = await this.http.post<User>(`/auth/users/${id}/suspend`, { reason });
+  async updateRoles(id: string, roles: string[]): Promise<{ status: string; user_id: string; roles: string[] }> {
+    const response = await this.http.put<{ status: string; user_id: string; roles: string[] }>(`/auth/users/${id}/roles`, { roles });
     return response.data;
   }
 
-  async activateUser(id: string): Promise<User> {
-    const response = await this.http.post<User>(`/auth/users/${id}/activate`);
+  async changePassword(id: string, currentPassword: string, newPassword: string): Promise<{ status: string; user_id: string }> {
+    const response = await this.http.put<{ status: string; user_id: string }>(`/auth/users/${id}/password`, {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
     return response.data;
   }
 
-  async listApiKeys(options?: PaginationInput): Promise<Connection<ApiKey>> {
-    const response = await this.http.get<Connection<ApiKey>>('/auth/keys', { query: options as Record<string, unknown> });
+  async listApiKeys(): Promise<{ data: ApiKey[]; pagination: { cursor: string | null; limit: number; has_more: boolean } }> {
+    const response = await this.http.get<{ data: ApiKey[]; pagination: { cursor: string | null; limit: number; has_more: boolean } }>('/auth/api-keys');
     return response.data;
   }
 
   async createApiKey(input: {
     name: string;
     permissions?: string[];
-    roles?: string[];
-    expiresAt?: Date;
-  }): Promise<ApiKeyFull> {
-    const response = await this.http.post<ApiKeyFull>('/auth/keys', input);
+    expires_at?: string;
+  }): Promise<{ id: string; name: string; key: string; prefix: string; permissions: string[]; created_at: number; expires_at: number | null }> {
+    const response = await this.http.post<{ id: string; name: string; key: string; prefix: string; permissions: string[]; created_at: number; expires_at: number | null }>('/auth/api-keys', input);
     return response.data;
   }
 
-  async deleteApiKey(id: string): Promise<void> {
-    await this.http.delete(`/auth/keys/${id}`);
-  }
-
-  async listRoles(): Promise<Role[]> {
-    const response = await this.http.get<Role[]>('/auth/roles');
-    return response.data;
-  }
-
-  async createRole(input: { name: string; description: string; permissions: string[] }): Promise<Role> {
-    const response = await this.http.post<Role>('/auth/roles', input);
-    return response.data;
-  }
-
-  async deleteRole(name: string): Promise<void> {
-    await this.http.delete(`/auth/roles/${encodeURIComponent(name)}`);
-  }
-
-  async grantRole(userId: string, roleName: string): Promise<User> {
-    const response = await this.http.post<User>(`/auth/users/${userId}/roles`, { role: roleName });
-    return response.data;
-  }
-
-  async revokeRole(userId: string, roleName: string): Promise<User> {
-    const response = await this.http.delete<User>(`/auth/users/${userId}/roles/${encodeURIComponent(roleName)}`);
+  async deleteApiKey(id: string): Promise<{ status: string; id: string }> {
+    const response = await this.http.delete<{ status: string; id: string }>(`/auth/api-keys/${id}`);
     return response.data;
   }
 }

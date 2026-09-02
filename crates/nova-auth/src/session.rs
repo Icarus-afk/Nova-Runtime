@@ -25,6 +25,25 @@ impl SessionManager {
         session
     }
 
+    /// Create a new session with roles and permissions pre-populated.
+    /// This ensures the stored session in the DashMap has the correct roles
+    /// from the start, avoiding the race where roles are set on a clone
+    /// after the original is already stored.
+    pub fn create_session_with_roles(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        roles: Vec<String>,
+        permissions: Vec<String>,
+    ) -> Session {
+        let mut session = Session::new(user_id, username, self.config.session_ttl_secs);
+        session.roles = roles;
+        session.permissions = permissions;
+        let token = session.token.clone();
+        self.sessions.insert(token, session.clone());
+        session
+    }
+
     /// Validate and retrieve a session by token.
     pub fn get_session(&self, token: &str) -> Result<Session> {
         let session = self
@@ -198,5 +217,27 @@ mod tests {
     fn test_session_manager_invalid_token() {
         let manager = SessionManager::new(AuthConfig::default());
         assert!(manager.get_session("invalid_token").is_err());
+    }
+
+    #[test]
+    fn test_create_session_with_roles_preserves_roles() {
+        let manager = SessionManager::new(AuthConfig::default());
+        let user_id = Uuid::new_v4();
+        let roles = vec!["admin".to_string(), "editor".to_string()];
+        let permissions = vec!["*:*".to_string(), "read:doc".to_string()];
+        let session =
+            manager.create_session_with_roles(user_id, "admin", roles.clone(), permissions.clone());
+
+        let retrieved = manager.get_session(&session.token).unwrap();
+        assert_eq!(retrieved.roles, roles);
+        assert_eq!(retrieved.permissions, permissions);
+    }
+
+    #[test]
+    fn test_create_session_without_roles_has_empty_roles() {
+        let manager = SessionManager::new(AuthConfig::default());
+        let session = manager.create_session(Uuid::new_v4(), "user");
+        let retrieved = manager.get_session(&session.token).unwrap();
+        assert!(retrieved.roles.is_empty());
     }
 }

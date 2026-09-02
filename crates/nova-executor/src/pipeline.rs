@@ -143,10 +143,10 @@ impl PipelineExecutor {
         }
 
         // Check idempotency first — return cached response if available
-        if let Some(key) = req.options.idempotency_key {
-            if let Some(cached) = self.check_idempotency(key, req.operation_type) {
-                return cached;
-            }
+        if let Some(key) = req.options.idempotency_key
+            && let Some(cached) = self.check_idempotency(key, req.operation_type)
+        {
+            return cached;
         }
 
         // Check operation queue depth for backpressure
@@ -485,16 +485,16 @@ impl PipelineExecutor {
                     .with_stage(PipelineStage::Validate),
             );
         }
-        if let Some(timeout) = req.options.timeout {
-            if timeout.as_millis() as u64 > 3_600_000 {
-                return PipelineResult::Error(
-                    PipelineError::new(
-                        ErrorCode::ValidationError,
-                        "operation timeout exceeds maximum",
-                    )
-                    .with_stage(PipelineStage::Validate),
-                );
-            }
+        if let Some(timeout) = req.options.timeout
+            && timeout.as_millis() as u64 > 3_600_000
+        {
+            return PipelineResult::Error(
+                PipelineError::new(
+                    ErrorCode::ValidationError,
+                    "operation timeout exceeds maximum",
+                )
+                .with_stage(PipelineStage::Validate),
+            );
         }
         PipelineResult::Continue
     }

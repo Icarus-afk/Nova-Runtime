@@ -7,5 +7,6 @@
 - [CLI](cli.md) — `novactl` reference (`runtime`, `config`, `auth`, `queue`, `scheduler`, `search`, `blob`, `sql`, `db`, `cache`, `completion`, `run`).
 - [SDK](sdk.md) — `@novaruntime/sdk` is currently out of sync with the REST API (see the mismatch table); use the raw-fetch pattern from `examples/bloom-market/src/nova.js` for new code.
 - [Deployment](deployment.md) — bare metal `systemd`, Docker (`compose`), TLS termination via nginx.
-- [Development](development.md) — `Makefile` targets, `cargo test`, `nova-sim`, dashboard `npm`.
+- [Roadmap](roadmap.md) — production plan: multi-database support, schema migrations, backups/PITR, observability & alerting, operational hardening.
+- [Development](development.md) — `Makefile` targets, `cargo test`, dashboard `npm`.
 - [Compile Report](compile-report.md) — clean `cargo check` + test matrix (123 storage, 45 api, 42 sql, 6 startup).

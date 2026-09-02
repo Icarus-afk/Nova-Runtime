@@ -82,15 +82,15 @@ impl QueryExecutor {
         let mut counts: HashMap<String, usize> = HashMap::new();
 
         for result in &results {
-            if let Some(doc) = &result.document {
-                if let Some(val) = doc.text_value(facet_field) {
-                    *counts.entry(val.to_string()).or_insert(0) += 1;
-                }
+            if let Some(doc) = &result.document
+                && let Some(val) = doc.text_value(facet_field)
+            {
+                *counts.entry(val.to_string()).or_insert(0) += 1;
             }
         }
 
         let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         entries.truncate(limit);
 
         Ok(FacetResult {
@@ -378,7 +378,7 @@ impl QueryExecutor {
                 }
             },
             Query::MatchAll => {
-                for (doc_id_str, _doc) in &self.segment.stored_documents {
+                for doc_id_str in self.segment.stored_documents.keys() {
                     let doc_id: u64 = doc_id_str.parse().map_err(|e| {
                         SearchError::Internal(format!("invalid doc_id in stored_documents: {}", e))
                     })?;

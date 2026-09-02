@@ -24,9 +24,7 @@ pub fn contains_aggregate(expr: &Expr) -> bool {
                     .unwrap_or(false)
         }
         Expr::Cast { expr, .. } => contains_aggregate(expr),
-        Expr::In { expr, list } => {
-            contains_aggregate(expr) || list.iter().any(|e| contains_aggregate(e))
-        }
+        Expr::In { expr, list } => contains_aggregate(expr) || list.iter().any(contains_aggregate),
         Expr::Between { expr, low, high } => {
             contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high)
         }

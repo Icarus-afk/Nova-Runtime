@@ -14,8 +14,7 @@ export default function AuthPage() {
 
   // Users
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [editingUser, setEditingUser] = useState<DashboardUser | null>(null);
-  const [userForm, setUserForm] = useState({ username: '', email: '', password: '', role: 'viewer' as const, enabled: true });
+  const [userForm, setUserForm] = useState({ username: '', password: '', role: 'viewer' as const });
   const [userFormError, setUserFormError] = useState<string | null>(null);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
 
@@ -55,16 +54,10 @@ export default function AuthPage() {
     }
     setUserFormError(null);
     try {
-      if (editingUser) {
-        await api.updateUserRoles(editingUser.id, [userForm.role]);
-        showToast(`Updated ${editingUser.username}`);
-      } else {
-        await execCreateUser(() => api.createUser({ username: userForm.username, password: userForm.password, roles: [userForm.role] } as any));
-        showToast(`User ${userForm.username} created`);
-      }
+      await execCreateUser(() => api.createUser({ username: userForm.username, password: userForm.password, roles: [userForm.role] } as any));
+      showToast(`User ${userForm.username} created`);
       setShowCreateUser(false);
-      setEditingUser(null);
-      setUserForm({ username: '', email: '', password: '', role: 'viewer', enabled: true });
+      setUserForm({ username: '', password: '', role: 'viewer' });
       refetchUsers();
     } catch (err: unknown) {
       setUserFormError(err instanceof Error ? err.message : 'Save failed');
@@ -83,16 +76,8 @@ export default function AuthPage() {
     }
   };
 
-  const openEditUser = (u: DashboardUser) => {
-    setEditingUser(u);
-    setUserForm({ username: u.username, email: u.email, password: '', role: u.role as any, enabled: u.enabled });
-    setUserFormError(null);
-    setShowCreateUser(true);
-  };
-
   const openCreateUser = () => {
-    setEditingUser(null);
-    setUserForm({ username: '', email: '', password: '', role: 'viewer', enabled: true });
+    setUserForm({ username: '', password: '', role: 'viewer' });
     setUserFormError(null);
     setShowCreateUser(true);
   };
@@ -126,18 +111,15 @@ export default function AuthPage() {
 
   const userColumns: any[] = [
     { key: 'username', header: 'Username' },
-    { key: 'email', header: 'Email' },
     { key: 'role', header: 'Role', width: '90px', render: (v: unknown) => <StatusBadge status={v === 'admin' ? 'healthy' : v === 'operator' ? 'degraded' : 'critical'} label={v as string} /> },
-    { key: 'mfa_enabled', header: 'MFA', width: '60px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : '-' },
-    { key: 'enabled', header: 'Enabled', width: '70px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
-    { key: 'last_login_at', header: 'Last Login', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
+    { key: 'created_at', header: 'Created', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
+    { key: 'enabled', header: 'Status', width: '80px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
     {
       key: 'actions',
       header: '',
-      width: '140px',
+      width: '90px',
       render: (_: unknown, row: any) => (
         <div className="actions" onClick={e => e.stopPropagation()}>
-          <button className="btn btn-sm" onClick={() => openEditUser(row as DashboardUser)}>Edit</button>
           <button className="btn btn-sm btn-danger" onClick={() => setDeleteUserId(row.id as string)}>Delete</button>
         </div>
       ),
@@ -263,28 +245,20 @@ export default function AuthPage() {
         </div>
       )}
 
-      <Modal isOpen={showCreateUser} onClose={() => setShowCreateUser(false)} title={editingUser ? `Edit ${editingUser.username}` : 'Create User'} size="md"
+      <Modal isOpen={showCreateUser} onClose={() => setShowCreateUser(false)} title="Create User" size="md"
         footer={
           <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={() => setShowCreateUser(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleCreateUser} disabled={createUserLoading}>{createUserLoading ? 'Saving...' : editingUser ? 'Update' : 'Create'}</button>
+            <button className="btn btn-primary" onClick={handleCreateUser} disabled={createUserLoading}>{createUserLoading ? 'Saving...' : 'Create'}</button>
           </div>
         }>
         <div className="form-group">
           <label>Username *</label>
-          <input className="form-input" value={userForm.username} onChange={e => setUserForm({ ...userForm, username: e.target.value })} placeholder="alice" disabled={!!editingUser} />
-          {editingUser && <div className="form-hint">Username cannot be changed</div>}
+          <input className="form-input" value={userForm.username} onChange={e => setUserForm({ ...userForm, username: e.target.value })} placeholder="alice" />
         </div>
-        {!editingUser && (
-          <div className="form-group">
-            <label>Password *</label>
-            <input className="form-input" type="password" value={userForm.password} onChange={e => setUserForm({ ...userForm, password: e.target.value })} placeholder="•••••••• (min 8 chars)" />
-            <div className="form-hint">Min 8, need upper/lower/digit per policy</div>
-          </div>
-        )}
         <div className="form-group">
-          <label>Email</label>
-          <input className="form-input" value={userForm.email} onChange={e => setUserForm({ ...userForm, email: e.target.value })} placeholder="alice@example.com" type="email" />
+          <label>Password *</label>
+          <input className="form-input" type="password" value={userForm.password} onChange={e => setUserForm({ ...userForm, password: e.target.value })} placeholder="•••••••• (min 8 chars)" />
         </div>
         <div className="form-group">
           <label>Role</label>

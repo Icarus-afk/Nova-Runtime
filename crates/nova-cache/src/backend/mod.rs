@@ -78,10 +78,8 @@ pub trait CacheBackend: Send + Sync {
     async fn delete_matching(&self, pattern: &str) -> Result<usize> {
         let mut count = 0;
         for key in self.keys().await? {
-            if crate::backend::matches_glob(pattern, &key) {
-                if self.delete(&key).await? {
-                    count += 1;
-                }
+            if crate::backend::matches_glob(pattern, &key) && self.delete(&key).await? {
+                count += 1;
             }
         }
         Ok(count)

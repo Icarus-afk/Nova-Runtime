@@ -100,6 +100,7 @@ impl Lexer {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn tokenize(&mut self) -> Result<(Vec<Token>, Vec<(usize, usize)>)> {
         let mut tokens = Vec::new();
         let mut positions = Vec::new();
@@ -332,7 +333,7 @@ impl Lexer {
                     Ok(Token::Concat)
                 } else {
                     Err(SQLError::syntax_at(
-                        format!("unexpected character: |"),
+                        "unexpected character: |".to_string(),
                         self.pos - 1,
                         self.pos,
                     ))

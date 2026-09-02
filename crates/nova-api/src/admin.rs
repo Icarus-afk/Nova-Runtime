@@ -155,9 +155,7 @@ async fn health_check(State(state): State<Arc<AdminState>>) -> Json<Value> {
                 .load(std::sync::atomic::Ordering::Relaxed) as u64
         })
         .unwrap_or(0);
-    let connections_active = (pipeline_snap.active_operations as u64)
-        .max(ws_subscribers)
-        .max(1); // at least this health request
+    let connections_active = pipeline_snap.active_operations.max(ws_subscribers).max(1); // at least this health request
     let request_rate = pipeline_snap.operations_total.saturating_sub(0) / uptime.max(1);
 
     let subsystems = json!({

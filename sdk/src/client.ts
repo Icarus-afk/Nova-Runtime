@@ -35,7 +35,7 @@ class RefreshAuthProvider implements AuthProvider {
   private refreshPromise: Promise<boolean> | null = null;
 
   constructor(
-    private config: { clientId: string; clientSecret: string },
+    _config: { clientId: string; clientSecret: string },
     private httpClient: HttpClient,
     refreshToken?: string
   ) {
@@ -70,18 +70,14 @@ class RefreshAuthProvider implements AuthProvider {
 
   private async _doRefresh(): Promise<boolean> {
     try {
-      const response = await this.httpClient.request<{ access_token: string; refresh_token?: string; expires_in: number }>({
+      const response = await this.httpClient.request<{ token_type: string; access_token: string; expires_in: number }>({
         method: 'POST',
-        path: '/auth/token',
+        path: '/auth/refresh',
         body: {
-          grant_type: 'client_credentials',
-          client_id: this.config.clientId,
-          client_secret: this.config.clientSecret,
           refresh_token: this.refreshTokenValue || undefined,
         },
       });
       this.accessToken = response.data.access_token;
-      this.refreshTokenValue = response.data.refresh_token ?? this.refreshTokenValue;
       this.expiresAt = Date.now() + response.data.expires_in * 1000;
       return true;
     } catch {

@@ -9,7 +9,7 @@
 
 ```
 Finished `dev` profile [unoptimized + debuginfo] target(s) in ~0.3s
-Warnings: 27 (mostly dead_code in nova-executor/auth/sim) — 0 errors
+Warnings: 0 — 0 errors (clippy -- -D warnings clean)
 nova-api: 0 warnings (after fixes, was 13)
 nova-storage: 0 warnings
 ```
@@ -38,7 +38,7 @@ Key warning reduction:
 | `nova-event` | 148 | ok |
 | `nova-executor` | 129 | ok |
 
-**Workspace (exclude `nova-sim`)**: All previously failing 13 `nova-storage` + `nova-api` + `startup_shutdown` now pass. Remaining known flaky: `nova-sim` budget zero_max (intentional edge) — not in workspace run.
+**Workspace**: All previously failing 13 `nova-storage` + `nova-api` + `startup_shutdown` now pass. Remaining known flaky: `nova-memory` budget `zero_max` / pool tests (intentional edge — 3 failures).
 
 ## 3. SDK & Dashboard
 

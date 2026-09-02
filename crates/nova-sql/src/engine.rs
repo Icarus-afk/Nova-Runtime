@@ -106,14 +106,13 @@ pub struct SQLEngine {
 
 impl SQLEngine {
     pub fn new(config: SQLConfig) -> Self {
-        let engine = SQLEngine {
+        SQLEngine {
             config,
             tables: Arc::new(TableStore::new()),
             shutdown: Arc::new(AtomicBool::new(false)),
             storage: None,
             observer: Mutex::new(None),
-        };
-        engine
+        }
     }
 
     pub fn new_with_storage(config: SQLConfig, storage: Arc<dyn StorageEngine>) -> Self {
@@ -137,10 +136,10 @@ impl SQLEngine {
     }
 
     fn notify(&self, f: impl FnOnce(&dyn MutationObserver)) {
-        if let Ok(guard) = self.observer.lock() {
-            if let Some(ref obs) = *guard {
-                f(obs.as_ref());
-            }
+        if let Ok(guard) = self.observer.lock()
+            && let Some(ref obs) = *guard
+        {
+            f(obs.as_ref());
         }
     }
 
@@ -351,13 +350,10 @@ impl SQLEngine {
             for (j, expr) in value_row.iter().enumerate() {
                 let col_idx = col_indices[j];
                 let col_info = &schema.columns[col_idx];
-                match expr {
-                    Expr::Column(name) => {
-                        if schema.find_column(name).is_none() {
-                            return Err(SQLError::ColumnNotFound(name.clone()));
-                        }
-                    }
-                    _ => {}
+                if let Expr::Column(name) = expr
+                    && schema.find_column(name).is_none()
+                {
+                    return Err(SQLError::ColumnNotFound(name.clone()));
                 }
                 let empty_row = vec![None; schema.len()];
                 let val = evaluate_expr(expr, &empty_row, &schema)?;
@@ -367,10 +363,10 @@ impl SQLEngine {
 
             // Apply DEFAULT for missing columns
             for (col_idx, col_info) in schema.columns.iter().enumerate() {
-                if row_values[col_idx].is_none() {
-                    if let Some(ref default_val) = col_info.default {
-                        row_values[col_idx] = Some(default_val.clone());
-                    }
+                if row_values[col_idx].is_none()
+                    && let Some(ref default_val) = col_info.default
+                {
+                    row_values[col_idx] = Some(default_val.clone());
                 }
             }
 
@@ -379,7 +375,7 @@ impl SQLEngine {
                 let is_null = row_values[col_idx].is_none()
                     || row_values[col_idx]
                         .as_ref()
-                        .map_or(false, |v| *v == LiteralValue::Null);
+                        .is_some_and(|v| *v == LiteralValue::Null);
                 if !col_info.nullable && is_null {
                     return Err(SQLError::ConstraintViolation(format!(
                         "column '{}' cannot be null",
@@ -390,18 +386,18 @@ impl SQLEngine {
 
             // Enforce UNIQUE constraints (including PRIMARY KEY)
             for (col_idx, col_info) in schema.columns.iter().enumerate() {
-                if col_info.unique || col_info.is_primary_key {
-                    if let Some(ref val) = row_values[col_idx] {
-                        let existing = self.tables.scan_rows(&stmt.table.name)?;
-                        for row in &existing {
-                            if let Some(Some(existing_val)) = row.values.get(col_idx) {
-                                if existing_val == val {
-                                    return Err(SQLError::ConstraintViolation(format!(
-                                        "duplicate value for unique column '{}'",
-                                        col_info.name
-                                    )));
-                                }
-                            }
+                if (col_info.unique || col_info.is_primary_key)
+                    && let Some(ref val) = row_values[col_idx]
+                {
+                    let existing = self.tables.scan_rows(&stmt.table.name)?;
+                    for row in &existing {
+                        if let Some(Some(existing_val)) = row.values.get(col_idx)
+                            && existing_val == val
+                        {
+                            return Err(SQLError::ConstraintViolation(format!(
+                                "duplicate value for unique column '{}'",
+                                col_info.name
+                            )));
                         }
                     }
                 }
@@ -630,16 +626,16 @@ fn rows_to_record_batch_with_names(rows: &[Row], column_names: Option<&[String]>
     let mut col_types: Vec<Option<SQLType>> = vec![None; num_cols];
     for row in rows {
         for (i, val) in row.values.iter().enumerate() {
-            if col_types[i].is_none() {
-                if let Some(v) = val {
-                    col_types[i] = Some(match v {
-                        LiteralValue::Null => continue,
-                        LiteralValue::Boolean(_) => SQLType::Boolean,
-                        LiteralValue::Integer(_) => SQLType::Integer,
-                        LiteralValue::Float(_) => SQLType::Float,
-                        LiteralValue::String(_) => SQLType::Text,
-                    });
-                }
+            if col_types[i].is_none()
+                && let Some(v) = val
+            {
+                col_types[i] = Some(match v {
+                    LiteralValue::Null => continue,
+                    LiteralValue::Boolean(_) => SQLType::Boolean,
+                    LiteralValue::Integer(_) => SQLType::Integer,
+                    LiteralValue::Float(_) => SQLType::Float,
+                    LiteralValue::String(_) => SQLType::Text,
+                });
             }
         }
     }
@@ -660,16 +656,13 @@ fn rows_to_record_batch_with_names(rows: &[Row], column_names: Option<&[String]>
             if i >= columns.len() {
                 continue;
             }
-            let opt_val = val
-                .clone()
-                .map(|v| {
-                    if matches!(v, LiteralValue::Null) {
-                        None
-                    } else {
-                        Some(v)
-                    }
-                })
-                .flatten();
+            let opt_val = val.clone().and_then(|v| {
+                if matches!(v, LiteralValue::Null) {
+                    None
+                } else {
+                    Some(v)
+                }
+            });
             push_value_to_column(&mut columns[i], opt_val);
         }
     }

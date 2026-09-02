@@ -26,6 +26,12 @@ pub struct SubscriptionTrie {
     root: Arc<TrieNode>,
 }
 
+impl Default for SubscriptionTrie {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubscriptionTrie {
     pub fn new() -> Self {
         SubscriptionTrie {
@@ -79,16 +85,16 @@ impl SubscriptionTrie {
             }
         }
 
-        if let Some(ref child) = *node.single_wildcard.read() {
-            if self.remove_recursive(child, sub_id) {
-                return true;
-            }
+        if let Some(ref child) = *node.single_wildcard.read()
+            && self.remove_recursive(child, sub_id)
+        {
+            return true;
         }
 
-        if let Some(ref child) = *node.multi_wildcard.read() {
-            if self.remove_recursive(child, sub_id) {
-                return true;
-            }
+        if let Some(ref child) = *node.multi_wildcard.read()
+            && self.remove_recursive(child, sub_id)
+        {
+            return true;
         }
 
         false
@@ -172,15 +178,15 @@ impl SubscriptionTrie {
                 return true;
             }
         }
-        if let Some(ref child) = *node.single_wildcard.read() {
-            if self.set_active_recursive(child, sub_id, active) {
-                return true;
-            }
+        if let Some(ref child) = *node.single_wildcard.read()
+            && self.set_active_recursive(child, sub_id, active)
+        {
+            return true;
         }
-        if let Some(ref child) = *node.multi_wildcard.read() {
-            if self.set_active_recursive(child, sub_id, active) {
-                return true;
-            }
+        if let Some(ref child) = *node.multi_wildcard.read()
+            && self.set_active_recursive(child, sub_id, active)
+        {
+            return true;
         }
         false
     }

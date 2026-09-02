@@ -199,6 +199,7 @@ impl RateLimiter {
         }
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn check(&self, ctx: &OperationContext, req: &OperationRequest) -> Result<(), ()> {
         if !self.global.try_consume(1.0) {
             self.hits.fetch_add(1, Ordering::Relaxed);
@@ -222,10 +223,8 @@ impl RateLimiter {
             self.hits.fetch_add(1, Ordering::Relaxed);
             return Err(());
         }
-        if req.options.priority == Priority::Critical {
-            if !self.critical.try_consume(1.0) {
-                self.waived.fetch_add(1, Ordering::Relaxed);
-            }
+        if req.options.priority == Priority::Critical && !self.critical.try_consume(1.0) {
+            self.waived.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -234,12 +233,13 @@ impl RateLimiter {
         &self,
         user_id: u128,
     ) -> dashmap::mapref::one::RefMut<'_, u128, TokenBucket> {
-        if !self.per_user.contains_key(&user_id) && self.per_user.len() >= self.max_tracked_users {
-            if let Some(entry) = self.per_user.iter().next() {
-                let key = *entry.key();
-                drop(entry);
-                self.per_user.remove(&key);
-            }
+        if !self.per_user.contains_key(&user_id)
+            && self.per_user.len() >= self.max_tracked_users
+            && let Some(entry) = self.per_user.iter().next()
+        {
+            let key = *entry.key();
+            drop(entry);
+            self.per_user.remove(&key);
         }
         self.per_user.entry(user_id).or_insert_with(|| {
             let cfg = self.config.read();
@@ -251,12 +251,13 @@ impl RateLimiter {
         &self,
         ip: IpAddr,
     ) -> dashmap::mapref::one::RefMut<'_, IpAddr, TokenBucket> {
-        if !self.per_ip.contains_key(&ip) && self.per_ip.len() >= self.max_tracked_ips {
-            if let Some(entry) = self.per_ip.iter().next() {
-                let key = *entry.key();
-                drop(entry);
-                self.per_ip.remove(&key);
-            }
+        if !self.per_ip.contains_key(&ip)
+            && self.per_ip.len() >= self.max_tracked_ips
+            && let Some(entry) = self.per_ip.iter().next()
+        {
+            let key = *entry.key();
+            drop(entry);
+            self.per_ip.remove(&key);
         }
         self.per_ip.entry(ip).or_insert_with(|| {
             let cfg = self.config.read();

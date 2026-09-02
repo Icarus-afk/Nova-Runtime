@@ -93,25 +93,13 @@ pub struct IndexField {
     pub order: SortOrder,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct IndexOptions {
     pub language: Option<String>,
     pub vector_dimensions: Option<u16>,
     pub vector_distance: Option<DistanceMetric>,
     pub expire_after_seconds: Option<u64>,
     pub partial_filter: Option<String>,
-}
-
-impl Default for IndexOptions {
-    fn default() -> Self {
-        IndexOptions {
-            language: None,
-            vector_dimensions: None,
-            vector_distance: None,
-            expire_after_seconds: None,
-            partial_filter: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

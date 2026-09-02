@@ -30,6 +30,12 @@ pub struct Join {
     pub on: Option<Expr>,
 }
 
+impl Default for SelectStatement {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelectStatement {
     pub fn new() -> Self {
         SelectStatement {

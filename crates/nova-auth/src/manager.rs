@@ -120,13 +120,18 @@ impl AuthManager {
         if result.success {
             self.brute_force_detector.record_success(identifier);
 
-            // Create session
+            // Create session with roles/permissions populated from the start.
+            // Previously roles were set on a clone after the original was already
+            // stored in DashMap, so the stored session always had empty roles —
+            // causing every RBAC check to fail with 403.
             let user_id = result.user_id.unwrap_or_else(Uuid::new_v4);
             let username = result.username.as_deref().unwrap_or("unknown");
-            let mut session = self.session_manager.create_session(user_id, username);
-
-            session.roles = result.roles.clone();
-            session.permissions = result.permissions.clone();
+            let mut session = self.session_manager.create_session_with_roles(
+                user_id,
+                username,
+                result.roles.clone(),
+                result.permissions.clone(),
+            );
 
             if result.mfa_required {
                 session.mfa_verified = false;
@@ -223,7 +228,7 @@ impl AuthManager {
         self.rbac_engine
             .write()
             .assign_role(user_id, role_name)
-            .map_err(|e| AuthError::InvalidArgument(e))
+            .map_err(AuthError::InvalidArgument)
     }
 
     /// Clean up expired sessions.

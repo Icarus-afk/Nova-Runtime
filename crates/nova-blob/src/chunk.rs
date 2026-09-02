@@ -43,7 +43,7 @@ impl ChunkManager {
         if size == 0 {
             return 1;
         }
-        ((size + self.chunk_size as u64 - 1) / self.chunk_size as u64) as u32
+        size.div_ceil(self.chunk_size as u64) as u32
     }
 }
 

@@ -29,9 +29,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
         None => {
             let _ = socket
                 .send(Message::Text(
-                    json!({"error": "event bus not available"})
-                        .to_string()
-                        .into(),
+                    json!({"error": "event bus not available"}).to_string(),
                 ))
                 .await;
             return;
@@ -76,7 +74,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
         tracing::warn!("ws subscription failed: {e}");
         let _ = socket
             .send(Message::Text(
-                json!({"error": "subscription failed"}).to_string().into(),
+                json!({"error": "subscription failed"}).to_string(),
             ))
             .await;
         return;
@@ -87,14 +85,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
     // Spawn a task to poll the crossbeam channel and forward to a tokio mpsc
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<nova_event::Event>();
     tokio::task::spawn_blocking(move || {
-        loop {
-            match rx.recv() {
-                Ok(event) => {
-                    if event_tx.send(event).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(event) = rx.recv() {
+            if event_tx.send(event).is_err() {
+                break;
             }
         }
     });
@@ -124,7 +117,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AdminState>, _topics: S
                             "timestamp": event.metadata.timestamp,
                             "event_id": event_id_hex,
                         });
-                        if socket.send(Message::Text(payload.to_string().into())).await.is_err() {
+                        if socket.send(Message::Text(payload.to_string())).await.is_err() {
                             break;
                         }
                     }

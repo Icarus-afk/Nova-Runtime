@@ -39,6 +39,12 @@ pub struct TransactionManager {
     active_txns: RwLock<HashMap<u64, Transaction>>,
 }
 
+impl Default for TransactionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransactionManager {
     pub fn new() -> Self {
         TransactionManager {

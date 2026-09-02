@@ -96,6 +96,7 @@ impl CacheManager {
         self.backend.keys().await
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn get_or_insert_with(
         &self,
         key: CacheKey,
@@ -193,10 +194,10 @@ impl CacheManager {
     }
 
     pub fn shutdown(&self) {
-        if let Ok(mut guard) = self.event_handle.lock() {
-            if let Some(handle) = guard.take() {
-                handle.abort();
-            }
+        if let Ok(mut guard) = self.event_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            handle.abort();
         }
     }
 }

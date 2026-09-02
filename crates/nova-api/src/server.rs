@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::{Router, middleware};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -52,6 +53,7 @@ pub async fn start_server(
         ))
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max request body
         .layer(TraceLayer::new_for_http());
 
     if let Some(gql) = graphql_router {

@@ -139,29 +139,19 @@ pub enum StageStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Consistency {
     Eventual,
+    #[default]
     Strong,
 }
 
-impl Default for Consistency {
-    fn default() -> Self {
-        Consistency::Strong
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Durability {
     Async,
+    #[default]
     Sync,
     Durable,
-}
-
-impl Default for Durability {
-    fn default() -> Self {
-        Durability::Sync
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

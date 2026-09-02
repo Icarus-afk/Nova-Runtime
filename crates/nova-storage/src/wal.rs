@@ -87,15 +87,13 @@ impl WalWriter {
                 let entry = entry?;
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if name.ends_with(".wal") {
-                    if let Some(stem) = name.strip_suffix(".wal") {
-                        if let Ok(num) = stem.parse::<u64>() {
-                            if num > max_seg {
-                                max_seg = num;
-                                max_lsn = Self::recover_lsn_from_segment(&entry.path())?;
-                            }
-                        }
-                    }
+                if name.ends_with(".wal")
+                    && let Some(stem) = name.strip_suffix(".wal")
+                    && let Ok(num) = stem.parse::<u64>()
+                    && num > max_seg
+                {
+                    max_seg = num;
+                    max_lsn = Self::recover_lsn_from_segment(&entry.path())?;
                 }
             }
         }
@@ -266,14 +264,12 @@ impl WalReader {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.ends_with(".wal") {
-                if let Some(stem) = name.strip_suffix(".wal") {
-                    if let Ok(num) = stem.parse::<u64>() {
-                        if num > max_seg {
-                            max_seg = num;
-                        }
-                    }
-                }
+            if name.ends_with(".wal")
+                && let Some(stem) = name.strip_suffix(".wal")
+                && let Ok(num) = stem.parse::<u64>()
+                && num > max_seg
+            {
+                max_seg = num;
             }
         }
         if max_seg == 0 {
@@ -375,11 +371,8 @@ impl WalReader {
     pub fn read_from(&mut self, lsn: Lsn) -> Result<Vec<WalRecord>> {
         self.seek(lsn)?;
         let mut records = Vec::new();
-        loop {
-            match self.read_next()? {
-                Some(record) => records.push(record),
-                None => break,
-            }
+        while let Some(record) = self.read_next()? {
+            records.push(record);
         }
         Ok(records)
     }

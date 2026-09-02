@@ -36,13 +36,11 @@ impl ValidationEngine {
         match &schema.mode {
             SchemaMode::Typed => {
                 for field in &schema.fields {
-                    if field.required {
-                        if !doc.data.contains_key(&field.name) {
-                            errors.push(ValidationError::MissingRequired(field.name.clone()));
-                        }
+                    if field.required && !doc.data.contains_key(&field.name) {
+                        errors.push(ValidationError::MissingRequired(field.name.clone()));
                     }
                 }
-                for (key, _) in &doc.data {
+                for key in doc.data.keys() {
                     if !schema.fields.iter().any(|f| f.name == *key)
                         && !schema.computed_fields.iter().any(|f| f.name == *key)
                     {
@@ -114,10 +112,10 @@ impl ValidationEngine {
             .as_secs();
 
         for field in &schema.fields {
-            if !doc.data.contains_key(&field.name) {
-                if let Some(ref default) = field.default {
-                    doc.data.insert(field.name.clone(), default.clone());
-                }
+            if !doc.data.contains_key(&field.name)
+                && let Some(ref default) = field.default
+            {
+                doc.data.insert(field.name.clone(), default.clone());
             }
         }
 
@@ -156,21 +154,21 @@ impl ValidationEngine {
                 }
                 ValidationRule::Range { field, min, max } => {
                     if let Some(value) = doc.data.get(field) {
-                        if let Some(min_val) = min {
-                            if !value_compare(value, min_val, ComparisonOp::GreaterThanOrEqual) {
-                                errors.push(format!(
-                                    "Field '{}' value {:?} is less than minimum {:?}",
-                                    field, value, min_val
-                                ));
-                            }
+                        if let Some(min_val) = min
+                            && !value_compare(value, min_val, ComparisonOp::GreaterThanOrEqual)
+                        {
+                            errors.push(format!(
+                                "Field '{}' value {:?} is less than minimum {:?}",
+                                field, value, min_val
+                            ));
                         }
-                        if let Some(max_val) = max {
-                            if !value_compare(value, max_val, ComparisonOp::LessThanOrEqual) {
-                                errors.push(format!(
-                                    "Field '{}' value {:?} exceeds maximum {:?}",
-                                    field, value, max_val
-                                ));
-                            }
+                        if let Some(max_val) = max
+                            && !value_compare(value, max_val, ComparisonOp::LessThanOrEqual)
+                        {
+                            errors.push(format!(
+                                "Field '{}' value {:?} exceeds maximum {:?}",
+                                field, value, max_val
+                            ));
                         }
                     }
                 }
@@ -181,21 +179,21 @@ impl ValidationEngine {
                             Value::Binary(b) => b.len() as u32,
                             _ => 0,
                         };
-                        if let Some(min_len) = min {
-                            if len < *min_len {
-                                errors.push(format!(
-                                    "Field '{}' length {} is less than minimum {}",
-                                    field, len, min_len
-                                ));
-                            }
+                        if let Some(min_len) = min
+                            && len < *min_len
+                        {
+                            errors.push(format!(
+                                "Field '{}' length {} is less than minimum {}",
+                                field, len, min_len
+                            ));
                         }
-                        if let Some(max_len) = max {
-                            if len > *max_len {
-                                errors.push(format!(
-                                    "Field '{}' length {} exceeds maximum {}",
-                                    field, len, max_len
-                                ));
-                            }
+                        if let Some(max_len) = max
+                            && len > *max_len
+                        {
+                            errors.push(format!(
+                                "Field '{}' length {} exceeds maximum {}",
+                                field, len, max_len
+                            ));
                         }
                     }
                 }
@@ -205,21 +203,21 @@ impl ValidationEngine {
                             Value::Array(items) => items.len() as u32,
                             _ => 0,
                         };
-                        if let Some(min_count) = min {
-                            if count < *min_count {
-                                errors.push(format!(
-                                    "Field '{}' item count {} is less than minimum {}",
-                                    field, count, min_count
-                                ));
-                            }
+                        if let Some(min_count) = min
+                            && count < *min_count
+                        {
+                            errors.push(format!(
+                                "Field '{}' item count {} is less than minimum {}",
+                                field, count, min_count
+                            ));
                         }
-                        if let Some(max_count) = max {
-                            if count > *max_count {
-                                errors.push(format!(
-                                    "Field '{}' item count {} exceeds maximum {}",
-                                    field, count, max_count
-                                ));
-                            }
+                        if let Some(max_count) = max
+                            && count > *max_count
+                        {
+                            errors.push(format!(
+                                "Field '{}' item count {} exceeds maximum {}",
+                                field, count, max_count
+                            ));
                         }
                     }
                 }
@@ -230,17 +228,16 @@ impl ValidationEngine {
                 } => {
                     if let (Some(val_a), Some(val_b)) =
                         (doc.data.get(field_a), doc.data.get(field_b))
+                        && !value_compare(val_a, val_b, op.clone())
                     {
-                        if !value_compare(val_a, val_b, op.clone()) {
-                            errors.push(format!(
-                                "Compare rule failed: {:?} {:?} {:?}",
-                                val_a, op, val_b
-                            ));
-                        }
+                        errors.push(format!(
+                            "Compare rule failed: {:?} {:?} {:?}",
+                            val_a, op, val_b
+                        ));
                     }
                 }
                 ValidationRule::Unique { field, scope: _ } => {
-                    if let Some(_) = doc.data.get(field) {
+                    if doc.data.contains_key(field) {
                         // Uniqueness validation requires storage-level checks
                         // At the document level, we only record that a unique constraint exists
                     }

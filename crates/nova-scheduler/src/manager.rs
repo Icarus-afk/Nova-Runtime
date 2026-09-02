@@ -193,11 +193,9 @@ impl SchedulerManager {
     }
 
     async fn dispatch_job(&self, job: Job) {
-        if job.prevent_overlap {
-            if self.running_jobs.read().contains(&job.id) {
-                tracing::warn!("Overlap prevented for job {}", job.id);
-                return;
-            }
+        if job.prevent_overlap && self.running_jobs.read().contains(&job.id) {
+            tracing::warn!("Overlap prevented for job {}", job.id);
+            return;
         }
 
         // Check dependencies
@@ -251,16 +249,11 @@ impl SchedulerManager {
                             }
 
                             // Reschedule recurring jobs
-                            if job.is_recurring() {
-                                if let Some(next_run) = compute_next_run(&job) {
-                                    if let Err(e) = backend.reschedule(&job, next_run).await {
-                                        tracing::error!(
-                                            "Failed to reschedule job {}: {}",
-                                            job.id,
-                                            e
-                                        );
-                                    }
-                                }
+                            if job.is_recurring()
+                                && let Some(next_run) = compute_next_run(&job)
+                                && let Err(e) = backend.reschedule(&job, next_run).await
+                            {
+                                tracing::error!("Failed to reschedule job {}: {}", job.id, e);
                             }
                         }
                         Err(e) => {
@@ -428,10 +421,10 @@ fn compute_next_run(job: &Job) -> Option<i64> {
             Some(now_ms + interval)
         }
         ScheduleType::Cron => {
-            if let Some(ref expr) = job.cron_expression {
-                if let Ok(cron) = CronSchedule::parse(expr) {
-                    return cron.next_after(now_ms);
-                }
+            if let Some(ref expr) = job.cron_expression
+                && let Ok(cron) = CronSchedule::parse(expr)
+            {
+                return cron.next_after(now_ms);
             }
             None
         }

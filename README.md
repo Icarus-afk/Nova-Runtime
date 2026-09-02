@@ -231,6 +231,7 @@ Both are run with `npm run seed && npm run dev` once Nova is up; all state lives
 | [CLI](docs/cli.md) | `novactl` subcommand reference |
 | [SDK](docs/sdk.md) | TypeScript SDK + examples |
 | [Deployment](docs/deployment.md) | systemd, Docker, TLS via nginx |
+| [Roadmap](docs/roadmap.md) | Multi-database, migrations, backups/PITR, observability, hardening |
 | [Development](docs/development.md) | `make` targets, tests, adding a subsystem |
 
 ---

@@ -97,6 +97,7 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
     }
 }
 
+#[allow(clippy::explicit_counter_loop)]
 fn combine_schemas(left: &Schema, right: &Schema) -> Schema {
     let mut columns = left.columns.clone();
     let mut offset = columns.len();

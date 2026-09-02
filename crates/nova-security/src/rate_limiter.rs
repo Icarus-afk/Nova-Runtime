@@ -90,9 +90,7 @@ impl RateLimiter {
         {
             let mut global = self.global_bucket.lock();
             if let Some(ref mut bucket) = *global {
-                if let Err(retry) = bucket.try_consume(1.0, now_ms) {
-                    return Err(retry);
-                }
+                bucket.try_consume(1.0, now_ms)?;
             }
         }
 
@@ -121,7 +119,7 @@ impl RateLimiter {
             self.cleanup_stale(now_ms);
         }
 
-        result.map_err(|retry| retry)
+        result
     }
 
     pub fn cleanup_stale(&self, now_ms: u64) {

@@ -84,14 +84,14 @@ impl NamespaceManager {
         // Fallback: scan via known directories
         let mut namespaces = Vec::new();
         let ns_dir = std::path::Path::new("/tmp/nova/blobs/namespaces");
-        if ns_dir.exists() {
-            if let Ok(mut entries) = tokio::fs::read_dir(ns_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                        if let Some(name) = entry.file_name().to_str() {
-                            namespaces.push(name.to_string());
-                        }
-                    }
+        if ns_dir.exists()
+            && let Ok(mut entries) = tokio::fs::read_dir(ns_dir).await
+        {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false)
+                    && let Some(name) = entry.file_name().to_str()
+                {
+                    namespaces.push(name.to_string());
                 }
             }
         }

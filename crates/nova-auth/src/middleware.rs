@@ -28,27 +28,27 @@ impl AuthMiddleware {
     /// Extract a bearer token from the request params.
     fn extract_token(req: &OperationRequest) -> Option<String> {
         // Check Authorization header-style param
-        if let Some(auth) = req.params.get("authorization") {
-            if let Some(val) = auth.as_str() {
-                if let Some(token) = val.strip_prefix("Bearer ") {
-                    return Some(token.to_string());
-                }
-                return Some(val.to_string());
+        if let Some(auth) = req.params.get("authorization")
+            && let Some(val) = auth.as_str()
+        {
+            if let Some(token) = val.strip_prefix("Bearer ") {
+                return Some(token.to_string());
             }
+            return Some(val.to_string());
         }
 
         // Check token param directly
-        if let Some(token) = req.params.get("token") {
-            if let Some(val) = token.as_str() {
-                return Some(val.to_string());
-            }
+        if let Some(token) = req.params.get("token")
+            && let Some(val) = token.as_str()
+        {
+            return Some(val.to_string());
         }
 
         // Check session_id param
-        if let Some(sid) = req.params.get("session_id") {
-            if let Some(val) = sid.as_str() {
-                return Some(val.to_string());
-            }
+        if let Some(sid) = req.params.get("session_id")
+            && let Some(val) = sid.as_str()
+        {
+            return Some(val.to_string());
         }
 
         None

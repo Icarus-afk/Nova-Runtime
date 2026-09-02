@@ -4,6 +4,12 @@ use crate::schema::Schema;
 
 pub struct TypeChecker;
 
+impl Default for TypeChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeChecker {
     pub fn new() -> Self {
         TypeChecker

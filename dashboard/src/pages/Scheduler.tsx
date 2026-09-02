@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useApi, useApiLazy } from '../hooks/useApi';
+import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
-import type { JobInfo, JobExecution } from '../types';
+import type { JobInfo } from '../types';
 import MetricCard from '../components/MetricCard';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -18,22 +18,37 @@ const statusMap: Record<string, 'healthy' | 'degraded' | 'critical'> = {
 
 export default function SchedulerPage() {
   const [selectedJob, setSelectedJob] = useState<string | null>(null);
-  const [execPage, setExecPage] = useState(1);
+  const [jobDetail, setJobDetail] = useState<JobInfo | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [editingJob, setEditingJob] = useState<JobInfo | null>(null);
-  const [createForm, setCreateForm] = useState({ name: '', type: 'cron', schedule: '*/5 * * * *', handler: 'echo hello', payload: '{}', max_retries: 3 });
+  const [createForm, setCreateForm] = useState({ name: '', type: 'cron', schedule: '*/5 * * * *', payload: '{}', max_retries: 3 });
   const [formError, setFormError] = useState<string | null>(null);
   const [triggerStatus, setTriggerStatus] = useState<string | null>(null);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
 
   const { data: jobs, loading: jobsLoading, refetch: refetchJobs } = useApi<JobInfo[]>(() => api.getJobs(), []);
-  const { data: execData, loading: execLoading, refetch: refetchExec } = useApi(
-    () => selectedJob ? api.getJobExecutions(selectedJob, execPage) : Promise.resolve(null),
-    [selectedJob, execPage]
-  );
-
-  const { execute: execCreate, loading: createLoading } = useApiLazy<JobInfo>();
+  const { data: stats } = useApi<any>(() => api.getSchedulerStats().catch(() => null), []);
   const selectedInfo = jobs?.find(j => j.id === selectedJob);
+
+  const openJob = async (id: string) => {
+    setSelectedJob(id);
+    setTriggerStatus(null);
+    setJobDetail(null);
+    setDetailLoading(true);
+    try {
+      const detail = await api.getJob(id);
+      setJobDetail(detail);
+    } catch {
+      setJobDetail(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeJob = () => {
+    setSelectedJob(null);
+    setJobDetail(null);
+  };
 
   const handleTrigger = async () => {
     if (!selectedJob) return;
@@ -41,7 +56,8 @@ export default function SchedulerPage() {
     try {
       await api.triggerJob(selectedJob);
       setTriggerStatus('Job triggered successfully');
-      refetchExec();
+      const detail = await api.getJob(selectedJob);
+      setJobDetail(detail);
     } catch (err: unknown) {
       setTriggerStatus(err instanceof Error ? err.message : 'Trigger failed');
     }
@@ -55,6 +71,8 @@ export default function SchedulerPage() {
         await api.pauseJob(job.id);
       }
       refetchJobs();
+      const detail = await api.getJob(job.id);
+      setJobDetail(detail);
     } catch (err: unknown) {
       setTriggerStatus(err instanceof Error ? err.message : 'Failed');
     }
@@ -64,7 +82,7 @@ export default function SchedulerPage() {
     if (!deleteJobId) return;
     try {
       await api.deleteJob(deleteJobId);
-      if (selectedJob === deleteJobId) setSelectedJob(null);
+      if (selectedJob === deleteJobId) closeJob();
       setDeleteJobId(null);
       refetchJobs();
     } catch (err: unknown) {
@@ -72,81 +90,48 @@ export default function SchedulerPage() {
     }
   };
 
-  const handleCreateOrUpdate = async () => {
+  const handleCreate = async () => {
     if (!createForm.name.trim()) {
       setFormError('Name required');
       return;
     }
     setFormError(null);
-    try {
-      let payload: Record<string, unknown> = {};
+    let payload: Record<string, unknown> = {};
+    if (createForm.payload.trim()) {
       try {
-        payload = JSON.parse(createForm.payload || '{}');
+        payload = JSON.parse(createForm.payload);
       } catch {
         setFormError('Payload must be valid JSON');
         return;
       }
-      if (editingJob) {
-        await api.updateJob(editingJob.id, { name: createForm.name, schedule: createForm.schedule, enabled: true } as any);
-      } else {
-        await execCreate(() => api.createJob({ ...createForm, payload }));
-      }
+    }
+    try {
+      await api.createJob({ name: createForm.name.trim(), type: createForm.type, schedule: createForm.schedule, payload, max_retries: createForm.max_retries });
       setShowCreate(false);
-      setEditingJob(null);
-      setCreateForm({ name: '', type: 'cron', schedule: '*/5 * * * *', handler: 'echo hello', payload: '{}', max_retries: 3 });
+      setCreateForm({ name: '', type: 'cron', schedule: '*/5 * * * *', payload: '{}', max_retries: 3 });
       refetchJobs();
     } catch (err: unknown) {
-      setFormError(err instanceof Error ? err.message : 'Save failed');
+      setFormError(err instanceof Error ? err.message : 'Create failed');
     }
-  };
-
-  const openEdit = (job: JobInfo) => {
-    setEditingJob(job);
-    setCreateForm({ name: job.name, type: job.type, schedule: job.schedule || '*/5 * * * *', handler: job.handler, payload: JSON.stringify(job.payload || {}, null, 2), max_retries: job.max_retries });
-    setShowCreate(true);
-    setFormError(null);
-  };
-
-  const openCreate = () => {
-    setEditingJob(null);
-    setCreateForm({ name: '', type: 'cron', schedule: '*/5 * * * *', handler: 'echo hello', payload: '{}', max_retries: 3 });
-    setFormError(null);
-    setShowCreate(true);
   };
 
   const jobColumns: any[] = [
     { key: 'name', header: 'Job Name' },
     { key: 'type', header: 'Type', width: '80px' },
-    { key: 'schedule', header: 'Schedule', width: '120px', render: (v: unknown) => (v as string) || '-' },
     { key: 'status', header: 'Status', width: '90px', render: (v: unknown) => <StatusBadge status={statusMap[v as string] || 'degraded'} label={v as string} /> },
     { key: 'next_run_at', header: 'Next Run', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
+    { key: 'last_run_at', header: 'Last Run', width: '140px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
     {
       key: 'actions',
       header: '',
-      width: '160px',
+      width: '130px',
       render: (_: unknown, row: any) => (
         <div className="actions" onClick={e => e.stopPropagation()}>
-          <button className="btn btn-sm" onClick={() => openEdit(row as JobInfo)}>Edit</button>
           <button className="btn btn-sm" onClick={() => handlePauseResume(row as JobInfo)}>{row.status === 'paused' ? 'Resume' : 'Pause'}</button>
           <button className="btn btn-sm btn-danger" onClick={() => setDeleteJobId(row.id as string)}>Delete</button>
         </div>
       ),
     },
-  ];
-
-  const execColumns: any[] = [
-    { key: 'id', header: 'Run ID', width: '140px', render: (v: unknown) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>{String(v).slice(0, 8)}...</span> },
-    { key: 'status', header: 'Status', width: '90px', render: (v: unknown) => {
-      const s = v as string;
-      return <StatusBadge status={s === 'success' ? 'healthy' : s === 'failed' || s === 'timeout' ? 'critical' : 'degraded'} label={s} />;
-    }},
-    { key: 'started_at', header: 'Started', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
-    { key: 'duration_ms', header: 'Duration', width: '70px', render: (v: unknown) => v ? `${(v as number).toFixed(0)}ms` : '-' },
-    { key: 'trigger', header: 'Trigger', width: '70px' },
-    { key: 'result', header: 'Result', render: (v: unknown) => {
-      const s = String(v ?? '');
-      return s.length > 40 ? s.slice(0, 40) + '...' : s || '-';
-    }},
   ];
 
   const activeCount = jobs?.filter(j => j.status === 'active').length ?? 0;
@@ -160,15 +145,15 @@ export default function SchedulerPage() {
             <h1>Scheduler</h1>
             <p>Cron and interval jobs with retries and concurrency control</p>
           </div>
-          <button className="btn btn-primary" onClick={openCreate}>+ Create Job</button>
+          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Create Job</button>
         </div>
       </div>
 
       <div className="grid grid-cols-4 mb-4">
         <MetricCard title="Jobs" value={jobs?.length ?? '-'} color="accent" loading={jobsLoading} />
-        <MetricCard title="Active" value={activeCount} color="success" loading={jobsLoading} />
-        <MetricCard title="Paused" value={pausedCount} color={pausedCount > 0 ? 'warning' : 'success'} loading={jobsLoading} />
-        <MetricCard title="Executions" value={execData?.pagination?.total?.toLocaleString() ?? '-'} color="info" loading={execLoading && !!selectedJob} />
+        <MetricCard title="Pending" value={stats?.jobs_pending ?? '-'} color="info" loading={jobsLoading} />
+        <MetricCard title="Running" value={stats?.jobs_running ?? '-'} color="success" loading={jobsLoading} />
+        <MetricCard title="Failed" value={stats?.jobs_failed ?? '-'} color={stats?.jobs_failed > 0 ? 'danger' : 'success'} loading={jobsLoading} />
       </div>
 
       <div className="card mb-4">
@@ -180,7 +165,7 @@ export default function SchedulerPage() {
           columns={jobColumns}
           data={(jobs || []) as unknown as Record<string, unknown>[]}
           loading={jobsLoading}
-          onRowClick={(row) => { setSelectedJob(row.id as string); setExecPage(1); }}
+          onRowClick={(row) => openJob(row.id as string)}
           emptyMessage="No jobs — create one to get started"
         />
       </div>
@@ -189,39 +174,41 @@ export default function SchedulerPage() {
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <div className="card-title" style={{ margin: 0 }}>History: {selectedInfo?.name || selectedJob}</div>
-              {selectedInfo && (
+              <div className="card-title" style={{ margin: 0 }}>Job: {selectedInfo?.name || selectedJob}</div>
+              {detailLoading && <div className="text-sm text-muted mt-2">Loading details...</div>}
+              {jobDetail && (
                 <div className="text-sm text-muted mt-2">
-                  Handler: <span style={{ fontFamily: 'var(--font-mono)' }}>{selectedInfo.handler || '—'}</span> · Max retries: {selectedInfo.max_retries} · Timeout: {selectedInfo.timeout_seconds}s · Tags: {selectedInfo.tags.join(', ') || 'none'}
+                  Type: <span style={{ fontFamily: 'var(--font-mono)' }}>{jobDetail.type}</span> · State: {jobDetail.status} · Max retries: {jobDetail.max_retries} · Retries used: {jobDetail.max_retries > 0 ? '? ' : '0'}
                 </div>
               )}
             </div>
             <div className="flex gap-2">
               <button className="btn btn-sm btn-primary" onClick={handleTrigger}>Trigger Now</button>
-              {selectedInfo && <button className="btn btn-sm" onClick={() => handlePauseResume(selectedInfo)}>{selectedInfo.status === 'paused' ? 'Resume' : 'Pause'}</button>}
+              {jobDetail && <button className="btn btn-sm" onClick={() => handlePauseResume(jobDetail)}>{jobDetail.status === 'paused' ? 'Resume' : 'Pause'}</button>}
               <button className="btn btn-sm btn-danger" onClick={() => setDeleteJobId(selectedJob)}>Delete Job</button>
-              <button className="btn btn-sm" onClick={() => setSelectedJob(null)}>Close</button>
+              <button className="btn btn-sm" onClick={closeJob}>Close</button>
             </div>
           </div>
 
           {triggerStatus && <div className={`callout ${triggerStatus.includes('failed') ? 'error' : 'info'}`}>{triggerStatus}</div>}
 
-          <DataTable
-            columns={execColumns}
-            data={(execData?.data || []) as unknown as Record<string, unknown>[]}
-            loading={execLoading}
-            pagination={execData?.pagination}
-            onPageChange={setExecPage}
-            emptyMessage="No executions yet — trigger the job"
-          />
+          {jobDetail && (
+            <div style={{ marginTop: 8 }}>
+              <div className="detail-row"><span className="detail-label">Schedule Type</span><span className="detail-value">{jobDetail.type}</span></div>
+              <div className="detail-row"><span className="detail-label">State</span><span className="detail-value">{jobDetail.status}</span></div>
+              <div className="detail-row"><span className="detail-label">Next Run</span><span className="detail-value">{jobDetail.next_run_at ? new Date(jobDetail.next_run_at).toLocaleString() : '-'}</span></div>
+              <div className="detail-row"><span className="detail-label">Last Run</span><span className="detail-value">{jobDetail.last_run_at ? new Date(jobDetail.last_run_at).toLocaleString() : '-'}</span></div>
+              <div className="detail-row"><span className="detail-label">Max Retries</span><span className="detail-value">{jobDetail.max_retries}</span></div>
+            </div>
+          )}
         </div>
       )}
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title={editingJob ? 'Edit Job' : 'Create Job'} size="lg"
+      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Create Job" size="lg"
         footer={
           <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={() => setShowCreate(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleCreateOrUpdate} disabled={createLoading}>{createLoading ? 'Saving...' : editingJob ? 'Update' : 'Create'}</button>
+            <button className="btn btn-primary" onClick={handleCreate}>Create</button>
           </div>
         }>
         <div className="grid grid-cols-2 gap-3">
@@ -237,22 +224,21 @@ export default function SchedulerPage() {
               <option value="interval">Interval</option>
             </select>
           </div>
-          <div className="form-group">
-            <label>Schedule {createForm.type === 'cron' && '(cron)'}</label>
-            <input className="form-input" value={createForm.schedule} onChange={e => setCreateForm({ ...createForm, schedule: e.target.value })} placeholder="0 * * * * (every hour)" />
-            <div className="form-hint">Examples: */5 * * * * (5m), 0 0 * * * (daily), @hourly</div>
-          </div>
-          <div className="form-group">
-            <label>Handler</label>
-            <input className="form-input" value={createForm.handler} onChange={e => setCreateForm({ ...createForm, handler: e.target.value })} placeholder="echo hello or https://hook" />
-          </div>
+          {createForm.type === 'cron' && (
+            <div className="form-group">
+              <label>Schedule (cron)</label>
+              <input className="form-input" value={createForm.schedule} onChange={e => setCreateForm({ ...createForm, schedule: e.target.value })} placeholder="0 * * * * (every hour)" />
+              <div className="form-hint">Examples: */5 * * * * (5m), 0 0 * * * (daily), @hourly</div>
+            </div>
+          )}
           <div className="form-group">
             <label>Max Retries</label>
             <input className="form-input" type="number" value={createForm.max_retries} onChange={e => setCreateForm({ ...createForm, max_retries: parseInt(e.target.value, 10) || 0 })} />
           </div>
-          <div className="form-group">
-            <label>Payload (JSON)</label>
+          <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+            <label>Payload (JSON, optional)</label>
             <textarea className="form-input json-editor" value={createForm.payload} onChange={e => setCreateForm({ ...createForm, payload: e.target.value })} rows={3} placeholder='{"key": "value"}' />
+            <div className="form-hint">Sent to the job runner as the action payload</div>
           </div>
         </div>
         {formError && <div className="callout error" style={{ marginTop: 12 }}>{formError}</div>}

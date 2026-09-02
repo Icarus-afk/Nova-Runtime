@@ -19,7 +19,7 @@ export type {
   TermAggregation, TermBucket, RangeAggregation, RangeBucket, DateHistogramBucket,
   SearchStats, Suggestion, CreateIndexInput, IndexFieldInput, IndexFieldType,
   SearchResponse,
-  AuthResult, User, Role, ApiKey, ApiKeyFull, RegisterInput, ConnectionInfo,
+  AuthResult, User, ApiKey, ApiKeyFull, RegisterInput, ConnectionInfo,
   CreateTableInput, CreateColumnInput, Page,
 } from './types';
 

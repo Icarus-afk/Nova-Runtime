@@ -20,6 +20,12 @@ pub struct KeyRouter {
     pub rules: Vec<RoutingRule>,
 }
 
+impl Default for KeyRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyRouter {
     pub fn new() -> Self {
         KeyRouter { rules: Vec::new() }
@@ -53,7 +59,7 @@ impl KeyRouter {
         best.map(|r| r.target).unwrap_or(EngineType::BTree)
     }
 
-    pub fn default() -> Self {
+    pub fn with_defaults() -> Self {
         let mut router = KeyRouter::new();
         let btree_prefixes = ["meta:", "schema:", "auth:", "sql:", "index:", "blob:"];
         let lsm_prefixes = [
@@ -93,14 +99,14 @@ mod tests {
 
     #[test]
     fn test_key_router_default_has_rules() {
-        let router = KeyRouter::default();
+        let router = KeyRouter::with_defaults();
         assert!(!router.rules.is_empty());
         assert_eq!(router.rules.len(), 13);
     }
 
     #[test]
     fn test_route_btree_prefix() {
-        let router = KeyRouter::default();
+        let router = KeyRouter::with_defaults();
         assert_eq!(router.route(&Key::from("meta:user:123")), EngineType::BTree);
         assert_eq!(router.route(&Key::from("schema:tables")), EngineType::BTree);
         assert_eq!(router.route(&Key::from("auth:token")), EngineType::BTree);
@@ -111,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_route_lsm_prefix() {
-        let router = KeyRouter::default();
+        let router = KeyRouter::with_defaults();
         assert_eq!(router.route(&Key::from("queue:task")), EngineType::LSM);
         assert_eq!(router.route(&Key::from("event:click")), EngineType::LSM);
         assert_eq!(router.route(&Key::from("log:error")), EngineType::LSM);
@@ -123,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_route_fallback_to_btree() {
-        let router = KeyRouter::default();
+        let router = KeyRouter::with_defaults();
         assert_eq!(
             router.route(&Key::from("unknown:prefix")),
             EngineType::BTree

@@ -125,10 +125,10 @@ impl PorterStemmer {
         }
 
         let ing = word.strip_suffix("ing");
-        if let Some(stem) = ing {
-            if Self::contains_vowel(stem) {
-                return Self::step_1b_helper(stem);
-            }
+        if let Some(stem) = ing
+            && Self::contains_vowel(stem)
+        {
+            return Self::step_1b_helper(stem);
         }
 
         word
@@ -247,20 +247,19 @@ impl PorterStemmer {
             }
         }
 
-        if let Some(stem) = word.strip_suffix("ion") {
-            if stem.len() >= 1 && (stem.ends_with('s') || stem.ends_with('t')) {
-                if Self::measure(stem) > 1 {
-                    return stem.to_string();
-                }
-            }
+        if let Some(stem) = word.strip_suffix("ion")
+            && !stem.is_empty()
+            && (stem.ends_with('s') || stem.ends_with('t'))
+            && Self::measure(stem) > 1
+        {
+            return stem.to_string();
         }
 
         word.to_string()
     }
 
     fn step_5a(word: &str) -> String {
-        if word.ends_with('e') {
-            let stem = &word[..word.len() - 1];
+        if let Some(stem) = word.strip_suffix('e') {
             let m = Self::measure(stem);
             if m > 1 {
                 return stem.to_string();

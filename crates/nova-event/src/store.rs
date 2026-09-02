@@ -73,6 +73,10 @@ impl EventStore {
         self.events.read().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.events.read().is_empty()
+    }
+
     pub fn latest_offset(&self) -> u64 {
         self.next_offset.load(Ordering::Relaxed).saturating_sub(1)
     }

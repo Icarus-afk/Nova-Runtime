@@ -25,6 +25,12 @@ struct MemTableEntry {
     flags: u8,
 }
 
+impl Default for MemTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemTable {
     pub fn new() -> Self {
         MemTable {
@@ -133,7 +139,7 @@ impl BloomFilter {
             raw_bits.next_power_of_two()
         };
         let num_hashes = ((num_bits as f64 / num_keys as f64) * 0.69) as u32;
-        let num_hashes = num_hashes.max(1).min(30);
+        let num_hashes = num_hashes.clamp(1, 30);
         let bit_len = (num_bits / 64).max(1) as usize;
         BloomFilter {
             bits: vec![0u64; bit_len],
@@ -269,6 +275,7 @@ impl SSTable {
         let path = dir.join(&filename);
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .read(true)
             .open(&path)?;
@@ -660,7 +667,7 @@ impl SSTable {
 
 pub fn compression_for_level(level: u8) -> CompressionCodec {
     match level {
-        0 | 1 | 2 => CompressionCodec::Snappy,
+        0..=2 => CompressionCodec::Snappy,
         3 => CompressionCodec::Zstd { level: 3 },
         4 => CompressionCodec::Zstd { level: 5 },
         5 => CompressionCodec::Zstd { level: 10 },

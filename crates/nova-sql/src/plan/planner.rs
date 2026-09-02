@@ -4,6 +4,12 @@ use crate::plan::logical::LogicalNode;
 
 pub struct LogicalPlanner;
 
+impl Default for LogicalPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogicalPlanner {
     pub fn new() -> Self {
         LogicalPlanner

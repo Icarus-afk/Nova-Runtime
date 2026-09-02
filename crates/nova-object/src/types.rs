@@ -387,12 +387,11 @@ impl Value {
                     match geom_type {
                         "Point" => {
                             if let Some(coords) = map.get("coordinates").and_then(|v| v.as_array())
+                                && coords.len() >= 2
                             {
-                                if coords.len() >= 2 {
-                                    let lon = coords[0].as_f64().unwrap_or(0.0);
-                                    let lat = coords[1].as_f64().unwrap_or(0.0);
-                                    return Ok(Value::GeoPoint { lat, lon });
-                                }
+                                let lon = coords[0].as_f64().unwrap_or(0.0);
+                                let lat = coords[1].as_f64().unwrap_or(0.0);
+                                return Ok(Value::GeoPoint { lat, lon });
                             }
                             Err("Invalid GeoPoint coordinates".to_string())
                         }
@@ -468,10 +467,10 @@ impl Value {
                 max_items,
             } => match self {
                 Value::Array(items) => {
-                    if let Some(max) = max_items {
-                        if items.len() > *max as usize {
-                            return false;
-                        }
+                    if let Some(max) = max_items
+                        && items.len() > *max as usize
+                    {
+                        return false;
                     }
                     items.iter().all(|item| item.validate_type(element_type))
                 }
@@ -483,15 +482,13 @@ impl Value {
             } => match self {
                 Value::Object(map) => {
                     for field in fields {
-                        if field.required {
-                            if !map.contains_key(&field.name) {
-                                return false;
-                            }
+                        if field.required && !map.contains_key(&field.name) {
+                            return false;
                         }
-                        if let Some(val) = map.get(&field.name) {
-                            if !val.validate_type(&field.field_type) {
-                                return false;
-                            }
+                        if let Some(val) = map.get(&field.name)
+                            && !val.validate_type(&field.field_type)
+                        {
+                            return false;
                         }
                     }
                     if !additional_fields {

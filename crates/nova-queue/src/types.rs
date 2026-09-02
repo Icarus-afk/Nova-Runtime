@@ -3,18 +3,15 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// Message priority levels for priority queues.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum MessagePriority {
     Critical = 0,
     High = 1,
+    #[default]
     Normal = 2,
     Low = 3,
-}
-
-impl Default for MessagePriority {
-    fn default() -> Self {
-        MessagePriority::Normal
-    }
 }
 
 impl MessagePriority {
@@ -29,9 +26,10 @@ impl MessagePriority {
 }
 
 /// Queue type determines ordering and behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum QueueType {
     /// Strict FIFO ordering.
+    #[default]
     Fifo,
     /// Ordered by priority, then FIFO within same priority.
     Priority,
@@ -39,12 +37,6 @@ pub enum QueueType {
     Delayed,
     /// Dead-letter queue — holds messages that exceeded max receives.
     DeadLetter,
-}
-
-impl Default for QueueType {
-    fn default() -> Self {
-        QueueType::Fifo
-    }
 }
 
 /// A message stored in a queue.
@@ -84,7 +76,7 @@ impl QueueMessage {
             attempt_count: 0,
             max_receives: 3,
             ttl_secs: Some(86400),
-            expires_at: Some(now + 86400_000),
+            expires_at: Some(now + 86_400_000),
             deduplication_id: None,
             group_id: None,
             attributes: std::collections::HashMap::new(),

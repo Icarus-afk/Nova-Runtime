@@ -236,13 +236,13 @@ impl QueueBackend for StorageQueueBackend {
 
         // Index by visibility
         let now_ms = chrono::Utc::now().timestamp_millis();
-        if let Some(delay_until) = message.delay_until {
-            if delay_until > now_ms {
-                let delayed_key = Self::queue_delayed_key(&message.queue_name, &message.id);
-                self.store
-                    .set(&delayed_key, nova_core::Value::new(vec![]))?;
-                return Ok(());
-            }
+        if let Some(delay_until) = message.delay_until
+            && delay_until > now_ms
+        {
+            let delayed_key = Self::queue_delayed_key(&message.queue_name, &message.id);
+            self.store
+                .set(&delayed_key, nova_core::Value::new(vec![]))?;
+            return Ok(());
         }
 
         let avail_key = Self::queue_available_key(&message.queue_name, &message.id);
@@ -289,24 +289,24 @@ impl QueueBackend for StorageQueueBackend {
             };
 
             let msg_key = Self::queue_msg_key(queue_name, &msg_id);
-            if let Some(msg_data) = self.store.get(&msg_key)? {
-                if let Ok(mut msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes()) {
-                    if msg.is_visible(now_ms) && !msg.has_expired(now_ms) {
-                        msg.mark_received(now_ms);
-                        // Update message data
-                        let updated = serde_json::to_vec(&msg)
-                            .map_err(|e| crate::error::QueueError::Internal(e.to_string()))?;
-                        self.store.set(&msg_key, nova_core::Value::new(updated))?;
+            if let Some(msg_data) = self.store.get(&msg_key)?
+                && let Ok(mut msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes())
+                && msg.is_visible(now_ms)
+                && !msg.has_expired(now_ms)
+            {
+                msg.mark_received(now_ms);
+                // Update message data
+                let updated = serde_json::to_vec(&msg)
+                    .map_err(|e| crate::error::QueueError::Internal(e.to_string()))?;
+                self.store.set(&msg_key, nova_core::Value::new(updated))?;
 
-                        // Move from available to in-flight
-                        self.store.delete(&key.clone())?;
-                        let inflight_key = Self::queue_inflight_key(queue_name, &msg_id);
-                        self.store
-                            .set(&inflight_key, nova_core::Value::new(vec![]))?;
+                // Move from available to in-flight
+                self.store.delete(&key.clone())?;
+                let inflight_key = Self::queue_inflight_key(queue_name, &msg_id);
+                self.store
+                    .set(&inflight_key, nova_core::Value::new(vec![]))?;
 
-                        messages.push(msg);
-                    }
-                }
+                messages.push(msg);
             }
         }
 
@@ -522,16 +522,16 @@ impl QueueBackend for StorageQueueBackend {
             };
 
             let msg_key = Self::queue_msg_key(queue_name, &msg_id);
-            if let Some(msg_data) = self.store.get(&msg_key)? {
-                if let Ok(msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes()) {
-                    if msg.visible_at <= now_ms && !msg.has_expired(now_ms) {
-                        // Move back to available
-                        self.store.delete(&key.clone())?;
-                        let avail_key = Self::queue_available_key(queue_name, &msg_id);
-                        self.store.set(&avail_key, nova_core::Value::new(vec![]))?;
-                        released += 1;
-                    }
-                }
+            if let Some(msg_data) = self.store.get(&msg_key)?
+                && let Ok(msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes())
+                && msg.visible_at <= now_ms
+                && !msg.has_expired(now_ms)
+            {
+                // Move back to available
+                self.store.delete(&key.clone())?;
+                let avail_key = Self::queue_available_key(queue_name, &msg_id);
+                self.store.set(&avail_key, nova_core::Value::new(vec![]))?;
+                released += 1;
             }
         }
 
@@ -567,31 +567,31 @@ impl QueueBackend for StorageQueueBackend {
             };
 
             let msg_key = Self::queue_msg_key(queue_name, &msg_id);
-            if let Some(msg_data) = self.store.get(&msg_key)? {
-                if let Ok(mut msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes()) {
-                    if msg.attempt_count >= msg.max_receives && msg.visible_at <= now_ms {
-                        // Move to DLQ
-                        msg.queue_name = dlq_name.clone();
-                        msg.receipt_handle = None;
-                        msg.attempt_count = 0;
-                        msg.enqueued_at = now_ms;
-                        msg.visible_at = now_ms;
+            if let Some(msg_data) = self.store.get(&msg_key)?
+                && let Ok(mut msg) = serde_json::from_slice::<QueueMessage>(msg_data.as_bytes())
+                && msg.attempt_count >= msg.max_receives
+                && msg.visible_at <= now_ms
+            {
+                // Move to DLQ
+                msg.queue_name = dlq_name.clone();
+                msg.receipt_handle = None;
+                msg.attempt_count = 0;
+                msg.enqueued_at = now_ms;
+                msg.visible_at = now_ms;
 
-                        let dlq_key = Self::queue_dlq_key(&dlq_name, &msg_id);
-                        let dlq_msg_key = Self::queue_msg_key(&dlq_name, &msg_id);
-                        let dlq_data = serde_json::to_vec(&msg)
-                            .map_err(|e| crate::error::QueueError::Internal(e.to_string()))?;
+                let dlq_key = Self::queue_dlq_key(&dlq_name, &msg_id);
+                let dlq_msg_key = Self::queue_msg_key(&dlq_name, &msg_id);
+                let dlq_data = serde_json::to_vec(&msg)
+                    .map_err(|e| crate::error::QueueError::Internal(e.to_string()))?;
 
-                        self.store
-                            .set(&dlq_msg_key, nova_core::Value::new(dlq_data))?;
-                        self.store.set(&dlq_key, nova_core::Value::new(vec![]))?;
+                self.store
+                    .set(&dlq_msg_key, nova_core::Value::new(dlq_data))?;
+                self.store.set(&dlq_key, nova_core::Value::new(vec![]))?;
 
-                        // Remove from source
-                        self.store.delete(&msg_key)?;
-                        self.store.delete(&key.clone())?;
-                        moved += 1;
-                    }
-                }
+                // Remove from source
+                self.store.delete(&msg_key)?;
+                self.store.delete(&key.clone())?;
+                moved += 1;
             }
         }
 
@@ -610,25 +610,24 @@ impl QueueBackend for StorageQueueBackend {
         let mut ops = Vec::new();
 
         for (key, value) in &entries {
-            if let Ok(msg) = serde_json::from_slice::<QueueMessage>(value.as_bytes()) {
-                if msg.has_expired(now_ms) {
-                    ops.push(nova_core::WriteOperation::Delete { key: key.clone() });
+            if let Ok(msg) = serde_json::from_slice::<QueueMessage>(value.as_bytes())
+                && msg.has_expired(now_ms)
+            {
+                ops.push(nova_core::WriteOperation::Delete { key: key.clone() });
 
-                    // Also remove from any index
-                    let id = msg.id;
-                    let prefixes = [
-                        format!("queue:available:{}:", queue_name),
-                        format!("queue:inflight:{}:", queue_name),
-                        format!("queue:delayed:{}:", queue_name),
-                        format!("queue:dlq:{}:", queue_name),
-                    ];
-                    for prefix in &prefixes {
-                        let idx_key =
-                            nova_core::Key::from(format!("{}{}", prefix, id).into_bytes());
-                        ops.push(nova_core::WriteOperation::Delete { key: idx_key });
-                    }
-                    purged += 1;
+                // Also remove from any index
+                let id = msg.id;
+                let prefixes = [
+                    format!("queue:available:{}:", queue_name),
+                    format!("queue:inflight:{}:", queue_name),
+                    format!("queue:delayed:{}:", queue_name),
+                    format!("queue:dlq:{}:", queue_name),
+                ];
+                for prefix in &prefixes {
+                    let idx_key = nova_core::Key::from(format!("{}{}", prefix, id).into_bytes());
+                    ops.push(nova_core::WriteOperation::Delete { key: idx_key });
                 }
+                purged += 1;
             }
         }
 

@@ -21,6 +21,7 @@ fn login_attempts() -> &'static parking_lot::RwLock<HashMap<String, Vec<Instant>
     LOGIN_ATTEMPTS.get_or_init(|| parking_lot::RwLock::new(HashMap::new()))
 }
 
+#[allow(clippy::result_large_err)]
 fn check_login_rate_limit(ip: &str) -> Result<(), ApiError> {
     const WINDOW: Duration = Duration::from_secs(60);
     const MAX_ATTEMPTS: usize = 5;

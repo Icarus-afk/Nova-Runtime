@@ -12,6 +12,12 @@ pub struct DeduplicationEngine {
     chunks: Arc<RwLock<HashMap<String, ChunkRecord>>>,
 }
 
+impl Default for DeduplicationEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeduplicationEngine {
     pub fn new() -> Self {
         Self {

@@ -115,7 +115,7 @@ impl SchedulerBackend for StorageSchedulerBackend {
         self.store.delete(&key)?;
 
         // Clean up pending index
-        let start = nova_core::Key::from(format!("sched:pending:").into_bytes());
+        let start = nova_core::Key::from("sched:pending:".to_string().into_bytes());
         let end = {
             let mut b = start.as_bytes().to_vec();
             b.push(0xFFu8);
@@ -144,10 +144,10 @@ impl SchedulerBackend for StorageSchedulerBackend {
 
         for (_, value) in &entries {
             if let Ok(job) = serde_json::from_slice::<Job>(value.as_bytes()) {
-                if let Some(ref filter_state) = state {
-                    if &job.state != filter_state {
-                        continue;
-                    }
+                if let Some(ref filter_state) = state
+                    && &job.state != filter_state
+                {
+                    continue;
                 }
                 summaries.push(JobSummary {
                     id: job.id,
@@ -182,10 +182,11 @@ impl SchedulerBackend for StorageSchedulerBackend {
                 Err(_) => continue,
             };
 
-            if let Ok(job) = self.get_job(&id).await {
-                if job.state == JobState::Pending && job.next_run_at <= now_ms {
-                    jobs.push(job);
-                }
+            if let Ok(job) = self.get_job(&id).await
+                && job.state == JobState::Pending
+                && job.next_run_at <= now_ms
+            {
+                jobs.push(job);
             }
         }
 
@@ -240,10 +241,10 @@ impl SchedulerBackend for StorageSchedulerBackend {
         let mut recovered = ready;
 
         for summary in &all_jobs {
-            if summary.state == JobState::Running {
-                if let Ok(job) = self.get_job(&summary.id).await {
-                    recovered.push(job);
-                }
+            if summary.state == JobState::Running
+                && let Ok(job) = self.get_job(&summary.id).await
+            {
+                recovered.push(job);
             }
         }
 

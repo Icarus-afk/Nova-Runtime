@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { api } from '../api/client';
+import { api, getToken } from '../api/client';
 import type { LogEntry as LogEntryType } from '../types';
 
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
@@ -31,13 +31,22 @@ export default function LogsPage() {
   const handleWsMessage = useCallback((event: MessageEvent) => {
     try {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'log_entry' && msg.data) {
-        setStreamEntries((prev) => {
-          const next = [...prev, msg.data];
-          if (next.length > 500) return next.slice(-500);
-          return next;
-        });
-      }
+      const entry: LogEntryType = {
+        timestamp: msg.timestamp ?? Date.now(),
+        level: 'info',
+        subsystem: msg.event?.split('.')[0] ?? 'system',
+        message: msg.event ?? JSON.stringify(msg),
+        fields: { event_id: msg.event_id },
+        file: '',
+        line: 0,
+        trace_id: null,
+        span_id: null,
+      };
+      setStreamEntries((prev) => {
+        const next = [...prev, entry];
+        if (next.length > 500) return next.slice(-500);
+        return next;
+      });
     } catch {}
   }, []);
 
@@ -49,7 +58,9 @@ export default function LogsPage() {
     } else {
       setStreamEntries([]);
       const wsUrl = api.getWsUrl();
+      const token = getToken();
       const params = new URLSearchParams();
+      if (token) params.set('token', token);
       if (levelFilter) params.set('levels', levelFilter);
       if (subsystemFilter) params.set('subsystems', subsystemFilter);
       const url = `${wsUrl}?${params.toString()}`;

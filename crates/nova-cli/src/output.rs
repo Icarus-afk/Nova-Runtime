@@ -78,7 +78,7 @@ pub fn print_table_from_json(
             println!("{}", serde_json::to_string_pretty(&rows)?);
         }
         OutputFormat::Table => {
-            let string_rows: Vec<Vec<String>> = rows.iter().map(|r| extract(r)).collect();
+            let string_rows: Vec<Vec<String>> = rows.iter().map(extract).collect();
             print_table(headers, &string_rows);
         }
     }

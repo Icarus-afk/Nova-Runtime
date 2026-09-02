@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import type { QueueInfo, QueueMessage } from '../types';
@@ -15,6 +15,7 @@ export default function QueuePage() {
   const [publishDelay, setPublishDelay] = useState('');
   const [publishPriority, setPublishPriority] = useState('0');
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
+  const [queueStats, setQueueStats] = useState<any>(null);
 
   // Create queue
   const [showCreate, setShowCreate] = useState(false);
@@ -41,6 +42,11 @@ export default function QueuePage() {
     () => selectedQueue ? api.getQueueMessages(selectedQueue, messagePage) : Promise.resolve(null),
     [selectedQueue, messagePage]
   );
+
+  useEffect(() => {
+    if (!selectedQueue) { setQueueStats(null); return; }
+    api.getQueueStats(selectedQueue).then(setQueueStats).catch(() => setQueueStats(null));
+  }, [selectedQueue]);
 
   const selectedInfo = queues?.find(q => q.name === selectedQueue);
 
@@ -214,11 +220,20 @@ export default function QueuePage() {
             </div>
             <div className="flex gap-2">
               <button className="btn btn-sm btn-primary" onClick={() => setShowPublish(!showPublish)}>{showPublish ? 'Cancel' : '+ Publish'}</button>
-              <button className="btn btn-sm" onClick={() => refetchMessages()}>Refresh</button>
+              <button className="btn btn-sm" onClick={() => { refetchMessages(); api.getQueueStats(selectedQueue).then(setQueueStats).catch(() => {}); }}>Refresh</button>
               <button className="btn btn-sm btn-danger" onClick={() => setShowPurgeConfirm(true)}>Purge</button>
               <button className="btn btn-sm" onClick={() => setSelectedQueue(null)}>Close</button>
             </div>
           </div>
+
+          {queueStats && (
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              <MetricCard title="Ready" value={queueStats.available_messages ?? '-'} color="accent" />
+              <MetricCard title="In-Flight" value={queueStats.in_flight_messages ?? '-'} color="info" />
+              <MetricCard title="Delayed" value={queueStats.delayed_messages ?? '-'} color="warning" />
+              <MetricCard title="DLQ" value={queueStats.dlq_messages ?? '-'} color={queueStats.dlq_messages > 0 ? 'danger' : 'success'} />
+            </div>
+          )}
 
           {publishStatus && <div className={`callout ${publishStatus.includes('failed') ? 'error' : 'info'}`}>{publishStatus}</div>}
 

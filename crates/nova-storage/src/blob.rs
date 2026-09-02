@@ -65,7 +65,7 @@ impl BlobStore {
             )));
         }
 
-        let num_pages = ((size + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64) as u32;
+        let num_pages = size.div_ceil(PAGE_SIZE as u64) as u32;
         let first_page = self
             .region_end
             .fetch_add(num_pages as u64 + 1, Ordering::SeqCst) as u32;

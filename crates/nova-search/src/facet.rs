@@ -17,7 +17,7 @@ impl FacetCalculator {
         }
 
         let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         FacetResult {
             field: facet_field.to_string(),

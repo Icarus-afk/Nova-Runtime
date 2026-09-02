@@ -44,7 +44,7 @@ impl QueryParser {
                     }
                     let mut phrase = String::new();
                     phrase.push('"');
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == '"' {
                             phrase.push('"');
                             break;
@@ -264,7 +264,7 @@ impl QueryParser {
         if !inclusive && !closing.ends_with('}') {
             return Err(SearchError::InvalidQuery("expected } in range".into()));
         }
-        let upper_val = closing.trim_end_matches(|c| c == ']' || c == '}');
+        let upper_val = closing.trim_end_matches([']', '}']);
         if !upper.is_empty() {
             upper.push(' ');
         }

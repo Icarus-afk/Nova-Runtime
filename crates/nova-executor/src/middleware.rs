@@ -94,6 +94,7 @@ impl MiddlewareChain {
             return (stage_fn)(ctx, req);
         }
 
+        #[allow(clippy::type_complexity)]
         let mut composed: Box<
             dyn Fn(&mut OperationContext, &mut OperationRequest) -> PipelineResult,
         > = Box::new(move |ctx, req| (stage_fn)(ctx, req));

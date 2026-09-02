@@ -9,6 +9,33 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
+fn percent_decode(s: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push(h << 4 | l);
+            i += 3;
+            continue;
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub async fn request_logger(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -25,7 +52,7 @@ pub async fn request_logger(req: Request<Body>, next: Next) -> Response {
     } else if status.is_client_error() {
         info!("{} {} -> {} ({:.1}ms)", method, uri, status, elapsed_ms);
     } else {
-        info!("{} {} -> {} ({:.1}ms)", method, uri, status, elapsed_ms);
+        tracing::debug!("{} {} -> {} ({:.1}ms)", method, uri, status, elapsed_ms);
     }
 
     response
@@ -162,12 +189,28 @@ pub async fn auth_layer(
     };
 
     // Try Bearer token first
-    let bearer_token = req
+    let header_bearer = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string());
+
+    // Browsers cannot set the Authorization header when opening a WebSocket
+    // (new WebSocket(url)), so allow WS handshakes to authenticate via
+    // ?token= / ?access_token= query param.
+    let query_bearer = if path == "/api/v1/ws" {
+        req.uri().query().and_then(|q| {
+            q.split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == "token" || *k == "access_token")
+                .map(|(_, v)| percent_decode(v))
+                .filter(|s| !s.is_empty())
+        })
+    } else {
+        None
+    };
+    let bearer_token = header_bearer.or(query_bearer);
 
     // Try X-Api-Key header or Authorization: ApiKey
     let api_key = req
@@ -184,33 +227,39 @@ pub async fn auth_layer(
         });
 
     // Try Bearer
-    if let Some(ref t) = bearer_token {
-        if let Ok(session) = auth_mgr.validate_session(t) {
-            // RBAC check for mutating auth endpoints — require admin
-            if path.starts_with("/api/v1/auth/")
-                && matches!(
-                    method,
-                    axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
-                )
+    if let Some(ref t) = bearer_token
+        && let Ok(session) = auth_mgr.validate_session(t)
+    {
+        tracing::debug!(
+            path = %path,
+            user_id = %session.user_id,
+            roles = ?session.roles,
+            "nova_api middleware: bearer session"
+        );
+        // RBAC check for mutating auth endpoints — require admin
+        if path.starts_with("/api/v1/auth/")
+            && matches!(
+                method,
+                axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
+            )
+        {
+            // Allow login/refresh already handled as public, other auth mutating requires admin
+            if !auth_mgr.check_permission(&session.user_id, "admin:users:write")
+                && !session.roles.contains(&"admin".to_string())
             {
-                // Allow login/refresh already handled as public, other auth mutating requires admin
-                if !auth_mgr.check_permission(&session.user_id, "admin:users:write")
-                    && !session.roles.contains(&"admin".to_string())
+                // For non-admin, only allow self-service (e.g., change own password) — handled in handler
+                // For now, require admin for /users and /api-keys creation
+                if path == "/api/v1/auth/users"
+                    || path == "/api/v1/auth/api-keys"
+                    || path.contains("/roles")
+                    || path.contains("/api-keys/")
                 {
-                    // For non-admin, only allow self-service (e.g., change own password) — handled in handler
-                    // For now, require admin for /users and /api-keys creation
-                    if path == "/api/v1/auth/users"
-                        || path == "/api/v1/auth/api-keys"
-                        || path.contains("/roles")
-                        || path.contains("/api-keys/")
-                    {
-                        return crate::error::ApiError::forbidden("Admin role required")
-                            .into_response();
-                    }
+                    return crate::error::ApiError::forbidden("Admin role required")
+                        .into_response();
                 }
             }
-            return next.run(req).await;
         }
+        return next.run(req).await;
     }
 
     // Try API key
@@ -226,7 +275,31 @@ pub async fn auth_layer(
                     .map(|exp| exp > chrono::Utc::now().timestamp_millis())
                     .unwrap_or(true)
         });
-        if found.is_some() {
+        if let Some(api_key_record) = found {
+            // Enforce RBAC on API keys for mutating auth endpoints.
+            // Without this, any API key could perform admin operations.
+            if path.starts_with("/api/v1/auth/")
+                && matches!(
+                    method,
+                    axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
+                )
+            {
+                let has_permission = api_key_record
+                    .permissions
+                    .iter()
+                    .any(|p| p == "admin:users:write" || p == "*:*");
+                if !has_permission
+                    && (path == "/api/v1/auth/users"
+                        || path == "/api/v1/auth/api-keys"
+                        || path.contains("/roles")
+                        || path.contains("/api-keys/"))
+                {
+                    return crate::error::ApiError::forbidden(
+                        "API key lacks required permission: admin:users:write",
+                    )
+                    .into_response();
+                }
+            }
             return next.run(req).await;
         }
     }
@@ -256,20 +329,18 @@ fn client_key(req: &Request<Body>) -> String {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
+        && !v.is_empty()
     {
-        if !v.is_empty() {
-            return v;
-        }
+        return v;
     }
     if let Some(v) = req
         .headers()
         .get("x-real-ip")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
+        && !v.is_empty()
     {
-        if !v.is_empty() {
-            return v;
-        }
+        return v;
     }
     "local".to_string()
 }
@@ -337,10 +408,10 @@ pub async fn rate_limit_layer(
             .into_response()
     };
 
-    if !response.headers().contains_key("x-ratelimit-limit") {
-        if let Ok(v) = HeaderValue::from_str(&state.limit.to_string()) {
-            response.headers_mut().insert("x-ratelimit-limit", v);
-        }
+    if !response.headers().contains_key("x-ratelimit-limit")
+        && let Ok(v) = HeaderValue::from_str(&state.limit.to_string())
+    {
+        response.headers_mut().insert("x-ratelimit-limit", v);
     }
     if let Ok(v) = HeaderValue::from_str(&remaining.to_string()) {
         response.headers_mut().insert("x-ratelimit-remaining", v);
@@ -395,7 +466,7 @@ pub async fn idempotency_layer(
 ) -> Response {
     let m = req.method();
     let mutating =
-        m == &Method::POST || m == &Method::PUT || m == &Method::PATCH || m == &Method::DELETE;
+        m == Method::POST || m == Method::PUT || m == Method::PATCH || m == Method::DELETE;
     let key = req
         .headers()
         .get("idempotency-key")

@@ -75,13 +75,12 @@ impl Column {
 
     pub fn get(&self, index: usize) -> Option<LiteralValue> {
         match self {
-            Column::Integer(v) => v.get(index).map(|x| x.map(LiteralValue::Integer)).flatten(),
-            Column::Float(v) => v.get(index).map(|x| x.map(LiteralValue::Float)).flatten(),
-            Column::Boolean(v) => v.get(index).map(|x| x.map(LiteralValue::Boolean)).flatten(),
+            Column::Integer(v) => v.get(index).and_then(|x| x.map(LiteralValue::Integer)),
+            Column::Float(v) => v.get(index).and_then(|x| x.map(LiteralValue::Float)),
+            Column::Boolean(v) => v.get(index).and_then(|x| x.map(LiteralValue::Boolean)),
             Column::String(v) => v
                 .get(index)
-                .map(|x| x.clone().map(LiteralValue::String))
-                .flatten(),
+                .and_then(|x| x.clone().map(LiteralValue::String)),
             Column::Null(_) => Some(LiteralValue::Null),
         }
     }
