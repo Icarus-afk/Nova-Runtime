@@ -220,32 +220,28 @@ input, textarea, select, button {
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 28px 28px 40px;
+  padding: 20px 20px 28px;
   background: var(--bg-primary);
-  max-width: 1280px;
-  width: 100%;
-  margin: 0 auto;
 }
 
 .page-header {
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .page-header h1 {
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
 .page-header p {
-  color: var(--text-secondary);
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: 12px;
   line-height: 1.5;
-  max-width: 60ch;
 }
 
 .page-error {
@@ -260,7 +256,7 @@ input, textarea, select, button {
 
 .grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .grid-cols-2 {
@@ -279,7 +275,7 @@ input, textarea, select, button {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 14px;
   transition: all var(--transition);
 }
 
@@ -288,12 +284,12 @@ input, textarea, select, button {
 }
 
 .card-title {
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--text-muted);
-  margin-bottom: 10px;
-  font-weight: 500;
+  margin-bottom: 8px;
+  font-weight: 600;
 }
 
 .card-value {
@@ -1008,7 +1004,7 @@ textarea.form-input {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .filter-bar .form-input {
