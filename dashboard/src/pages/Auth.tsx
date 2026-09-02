@@ -4,10 +4,15 @@ import { api } from '../api/client';
 import type { DashboardUser, ApiKey } from '../types';
 import MetricCard from '../components/MetricCard';
 import DataTable from '../components/DataTable';
-import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { CheckIcon, XIcon } from '../components/Icons';
+
+function roleBadge(role: string) {
+  const cls =
+    role === 'admin' ? 'badge-danger' : role === 'operator' ? 'badge-warning' : 'badge';
+  return <span className={`badge ${cls}`}>{role}</span>;
+}
 
 export default function AuthPage() {
   const [activeTab, setActiveTab] = useState<'users' | 'apikeys'>('users');
@@ -17,6 +22,7 @@ export default function AuthPage() {
   const [userForm, setUserForm] = useState({ username: '', password: '', role: 'viewer' as const });
   const [userFormError, setUserFormError] = useState<string | null>(null);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+  const [viewUserId, setViewUserId] = useState<string | null>(null);
 
   // API Keys
   const [showCreateKey, setShowCreateKey] = useState(false);
@@ -110,16 +116,19 @@ export default function AuthPage() {
   };
 
   const userColumns: any[] = [
-    { key: 'username', header: 'Username' },
-    { key: 'role', header: 'Role', width: '90px', render: (v: unknown) => <StatusBadge status={v === 'admin' ? 'healthy' : v === 'operator' ? 'degraded' : 'critical'} label={v as string} /> },
-    { key: 'created_at', header: 'Created', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : '-' },
-    { key: 'enabled', header: 'Status', width: '80px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
+    { key: 'id', header: 'ID', width: '90px', render: (v: unknown) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{String(v).slice(0, 8)}</span> },
+    { key: 'username', header: 'Username', render: (v: unknown) => <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{String(v)}</span> },
+    { key: 'email', header: 'Email', render: (v: unknown) => <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{v ? String(v) : '—'}</span> },
+    { key: 'role', header: 'Role', width: '90px', render: (v: unknown) => roleBadge(String(v)) },
+    { key: 'created_at', header: 'Created', width: '130px', render: (v: unknown) => <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{v ? new Date(v as number).toLocaleDateString() : '-'}</span> },
+    { key: 'enabled', header: 'Status', width: '70px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
     {
       key: 'actions',
       header: '',
-      width: '90px',
+      width: '140px',
       render: (_: unknown, row: any) => (
         <div className="actions" onClick={e => e.stopPropagation()}>
+          <button className="btn btn-sm" onClick={() => setViewUserId(row.id as string)}>View</button>
           <button className="btn btn-sm btn-danger" onClick={() => setDeleteUserId(row.id as string)}>Delete</button>
         </div>
       ),
@@ -127,38 +136,42 @@ export default function AuthPage() {
   ];
 
   const keyColumns: any[] = [
-    { key: 'name', header: 'Name' },
-    { key: 'key_prefix', header: 'Prefix', width: '110px', render: (v: unknown) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{String(v)}...</span> },
-    { key: 'role', header: 'Role', width: '80px' },
+    { key: 'id', header: 'ID', width: '80px', render: (v: unknown) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{String(v).slice(0, 8)}</span> },
+    { key: 'name', header: 'Name', render: (v: unknown) => <span style={{ fontWeight: 500 }}>{String(v)}</span> },
+    { key: 'key_prefix', header: 'Prefix', width: '110px', render: (v: unknown) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>{String(v ?? '').slice(0, 10)}…</span> },
+    { key: 'role', header: 'Role', width: '90px', render: (v: unknown) => roleBadge(String(v)) },
+    { key: 'permissions', header: 'Permissions', width: '140px', render: (v: unknown) => Array.isArray(v) && v.length ? <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{(v as string[]).join(', ')}</span> : <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span> },
     { key: 'enabled', header: 'Enabled', width: '70px', render: (v: unknown) => v ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <XIcon size={14} style={{ color: 'var(--danger)' }} /> },
-    { key: 'last_used_at', header: 'Last Used', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
-    { key: 'expires_at', header: 'Expires', width: '130px', render: (v: unknown) => v ? new Date(v as number).toLocaleString() : 'Never' },
+    { key: 'expires_at', header: 'Expires', width: '110px', render: (v: unknown) => <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{v ? new Date(v as number).toLocaleDateString() : 'Never'}</span> },
     {
       key: 'actions',
       header: '',
-      width: '100px',
+      width: '140px',
       render: (_: unknown, row: any) => (
-        <button className="btn btn-sm btn-danger" onClick={() => setDeleteKeyId(row.id as string)}>Revoke</button>
+        <div className="actions" onClick={e => e.stopPropagation()}>
+          <button className="btn btn-sm" onClick={() => showToast(`${row.name}: ${row.permissions?.join(', ') || row.role}`)}>View</button>
+          <button className="btn btn-sm btn-danger" onClick={() => setDeleteKeyId(row.id as string)}>Revoke</button>
+        </div>
       ),
     },
   ];
 
   const activeUsers = users?.filter(u => u.enabled).length ?? 0;
+  const viewUser = viewUserId ? users?.find(u => u.id === viewUserId) : null;
+  const isUsersEmpty = !usersLoading && (!users || users.length === 0);
+  const isKeysEmpty = !apiKeysLoading && (!apiKeys || apiKeys.length === 0);
 
   return (
     <div>
       <div className="page-header">
         <div className="flex justify-between items-center">
           <div>
-            <h1>Users & API Keys</h1>
-            <p>Manage access with roles, MFA, and scoped API keys</p>
+            <h1>Users &amp; Keys</h1>
+            <p>Manage users, roles, and scoped API keys</p>
           </div>
           <div className="flex gap-2">
-            {activeTab === 'users' ? (
-              <button className="btn btn-primary" onClick={openCreateUser}>+ Create User</button>
-            ) : (
-              <button className="btn btn-primary" onClick={() => { setShowCreateKey(!showCreateKey); setNewKeyDisplay(null); }}>{showCreateKey ? 'Cancel' : '+ Create Key'}</button>
-            )}
+            <button className={`btn ${activeTab === 'users' ? 'btn-primary' : ''}`} onClick={openCreateUser}>+ Create User</button>
+            <button className={`btn ${activeTab === 'apikeys' ? 'btn-primary' : ''}`} onClick={() => { setShowCreateKey(!showCreateKey); setNewKeyDisplay(null); if (activeTab !== 'apikeys') setActiveTab('apikeys'); }}>{showCreateKey ? 'Cancel' : '+ Create API Key'}</button>
           </div>
         </div>
       </div>
@@ -188,22 +201,27 @@ export default function AuthPage() {
             loading={usersLoading}
             emptyMessage="No users — create one"
           />
+          {isUsersEmpty && (
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <button className="btn btn-primary btn-sm" onClick={openCreateUser}>Create your first user</button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <div className="card-title" style={{ margin: 0 }}>API Keys</div>
-            <div className="text-sm text-muted">Click Revoke to immediately invalidate</div>
+            <div className="text-sm text-muted">Revoke invalidates immediately</div>
           </div>
 
           {showCreateKey && (
             <div className="card" style={{ marginBottom: 16, background: 'var(--bg-primary)' }}>
               <div className="grid grid-cols-2 gap-3">
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Name *</label>
                   <input className="form-input" value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="My service key" />
                 </div>
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Role</label>
                   <select className="form-select" value={keyRole} onChange={(e) => setKeyRole(e.target.value as typeof keyRole)}>
                     <option value="viewer">Viewer (read)</option>
@@ -211,26 +229,28 @@ export default function AuthPage() {
                     <option value="admin">Admin (all)</option>
                   </select>
                 </div>
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Expiry (optional)</label>
-                  <input className="form-input" value={keyExpiry} onChange={e => setKeyExpiry(e.target.value)} placeholder="2025-12-31 or leave empty" type="date" />
+                  <input className="form-input" value={keyExpiry} onChange={e => setKeyExpiry(e.target.value)} placeholder="Leave empty for never-expires" type="date" />
                   <div className="form-hint">Leave empty for never-expires</div>
                 </div>
               </div>
-              <button className="btn btn-primary" onClick={handleCreateKey} disabled={createKeyLoading || !keyName.trim()}>
-                {createKeyLoading ? 'Creating...' : 'Create Key'}
-              </button>
+              <div style={{ marginTop: 12 }}>
+                <button className="btn btn-primary" onClick={handleCreateKey} disabled={createKeyLoading || !keyName.trim()}>
+                  {createKeyLoading ? 'Creating...' : 'Create Key'}
+                </button>
+              </div>
             </div>
           )}
 
           {newKeyDisplay && (
             <div className="callout warning" style={{ marginBottom: 16 }}>
-              <strong>Save now — won't be shown again!</strong>
+              <strong>Copy now — this key won’t be shown again</strong>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, marginTop: 8, padding: 8, background: 'var(--bg-primary)', borderRadius: 6, wordBreak: 'break-all', border: '1px solid var(--border)' }}>
                 {newKeyDisplay}
               </div>
               <div className="flex gap-2" style={{ marginTop: 8 }}>
-                <button className="btn btn-sm btn-primary" onClick={() => navigator.clipboard.writeText(newKeyDisplay)}>Copy</button>
+                <button className="btn btn-sm btn-primary" onClick={() => { navigator.clipboard.writeText(newKeyDisplay); showToast('Copied to clipboard'); }}>Copy</button>
                 <button className="btn btn-sm" onClick={() => setNewKeyDisplay(null)}>Dismiss</button>
               </div>
             </div>
@@ -242,6 +262,11 @@ export default function AuthPage() {
             loading={apiKeysLoading}
             emptyMessage="No API keys — create one for programmatic access"
           />
+          {isKeysEmpty && !showCreateKey && (
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <button className="btn btn-primary btn-sm" onClick={() => setShowCreateKey(true)}>Create API key</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -254,13 +279,13 @@ export default function AuthPage() {
         }>
         <div className="form-group">
           <label>Username *</label>
-          <input className="form-input" value={userForm.username} onChange={e => setUserForm({ ...userForm, username: e.target.value })} placeholder="alice" />
+          <input className="form-input" value={userForm.username} onChange={e => setUserForm({ ...userForm, username: e.target.value })} placeholder="alice" autoFocus />
         </div>
         <div className="form-group">
           <label>Password *</label>
           <input className="form-input" type="password" value={userForm.password} onChange={e => setUserForm({ ...userForm, password: e.target.value })} placeholder="•••••••• (min 8 chars)" />
         </div>
-        <div className="form-group">
+        <div className="form-group" style={{ marginBottom: 0 }}>
           <label>Role</label>
           <select className="form-select" value={userForm.role} onChange={e => setUserForm({ ...userForm, role: e.target.value as any })}>
             <option value="viewer">Viewer</option>
@@ -268,7 +293,21 @@ export default function AuthPage() {
             <option value="admin">Admin</option>
           </select>
         </div>
-        {userFormError && <div className="callout error">{userFormError}</div>}
+        {userFormError && <div className="callout error" style={{ marginTop: 12 }}>{userFormError}</div>}
+      </Modal>
+
+      <Modal isOpen={!!viewUser} onClose={() => setViewUserId(null)} title={viewUser?.username ?? 'User'} size="md"
+        footer={<button className="btn" onClick={() => setViewUserId(null)}>Close</button>}>
+        {viewUser && (
+          <div>
+            <div className="detail-row"><span className="detail-label">ID</span><span className="detail-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{viewUser.id}</span></div>
+            <div className="detail-row"><span className="detail-label">Username</span><span className="detail-value">{viewUser.username}</span></div>
+            <div className="detail-row"><span className="detail-label">Email</span><span className="detail-value">{viewUser.email || '—'}</span></div>
+            <div className="detail-row"><span className="detail-label">Role</span><span className="detail-value">{roleBadge(viewUser.role)}</span></div>
+            <div className="detail-row"><span className="detail-label">Status</span><span className="detail-value">{viewUser.enabled ? 'Active' : 'Disabled'}</span></div>
+            <div className="detail-row"><span className="detail-label">Created</span><span className="detail-value">{viewUser.created_at ? new Date(viewUser.created_at).toLocaleString() : '—'}</span></div>
+          </div>
+        )}
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteUserId} onClose={() => setDeleteUserId(null)} onConfirm={handleDeleteUser} title="Delete User" message={`Delete user ${users?.find(u => u.id === deleteUserId)?.username}?`} confirmText="Delete" variant="danger" />

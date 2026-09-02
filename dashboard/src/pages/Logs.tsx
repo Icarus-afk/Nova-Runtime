@@ -94,12 +94,26 @@ export default function LogsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Logs</h1>
-        <p>View and stream runtime logs</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1>Logs</h1>
+            <p>View and stream runtime logs — filter by level, subsystem, or search</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {streaming && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--success)', fontWeight: 600, background: 'rgba(16,185,129,0.12)', padding: '4px 8px', borderRadius: 999 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)', animation: 'pulse 1s infinite' }} /> LIVE
+              </span>
+            )}
+            <span className="text-sm text-muted" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+              {streaming ? `${streamEntries.length} buffered` : `${historyData?.total_count ?? 0} entries`}
+            </span>
+          </div>
+        </div>
       </div>
 
-      <div className="filter-bar">
-        <select className="form-select" value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)}>
+      <div className="filter-bar" style={{ flexWrap: 'nowrap', gap: 8 }}>
+        <select className="form-select" value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} style={{ width: 130, minWidth: 130 }}>
           <option value="">All Levels</option>
           {LEVELS.map((l) => (
             <option key={l} value={l}>{l.toUpperCase()}</option>
@@ -108,75 +122,77 @@ export default function LogsPage() {
 
         <input
           className="form-input"
-          style={{ minWidth: 140 }}
-          placeholder="Subsystem..."
+          style={{ width: 160, minWidth: 140 }}
+          placeholder="Subsystem…"
           value={subsystemFilter}
           onChange={(e) => setSubsystemFilter(e.target.value)}
         />
 
         <input
           className="form-input"
-          style={{ flex: 1, minWidth: 200 }}
-          placeholder="Search logs..."
+          style={{ flex: 1, minWidth: 160 }}
+          placeholder="Search messages…"
           value={searchFilter}
           onChange={(e) => setSearchFilter(e.target.value)}
         />
 
+        {searchFilter && <button className="btn btn-sm" onClick={() => setSearchFilter('')}>Clear</button>}
+
         <button
           className={`btn btn-sm ${streaming ? 'btn-danger' : 'btn-primary'}`}
           onClick={toggleStream}
+          style={{ flexShrink: 0 }}
         >
           {streaming ? 'Stop Streaming' : 'Live Stream'}
         </button>
 
         {streaming && (
-          <button className="btn btn-sm" onClick={() => setAutoScroll(!autoScroll)}>
+          <button className="btn btn-sm" style={{ flexShrink: 0 }} onClick={() => setAutoScroll(!autoScroll)}>
             Auto-scroll: {autoScroll ? 'ON' : 'OFF'}
           </button>
-        )}
-
-        {!streaming && (
-          <span className="text-sm text-muted">
-            {historyData?.total_count ?? 0} entries
-          </span>
-        )}
-
-        {streaming && (
-          <span className="text-sm text-muted">
-            {streamEntries.length} entries
-          </span>
         )}
       </div>
 
       <div className="log-viewer">
         <div className="log-viewer-header">
-          <span style={{ width: 36, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)' }}>LEVEL</span>
-          <span style={{ width: 80, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)' }}>SUBSYSTEM</span>
-          <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)' }}>MESSAGE</span>
-          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)' }}>TIME</span>
+          <span style={{ width: 48, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>LEVEL</span>
+          <span style={{ width: 90, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>SUBSYSTEM</span>
+          <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>MESSAGE</span>
+          <span style={{ width: 72, textAlign: 'right', fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>TIME</span>
         </div>
 
-        <div className="log-viewer-body" ref={logBodyRef}>
+        <div className="log-viewer-body" ref={logBodyRef} style={{ height: 500 }}>
           {historyLoading && !streaming ? (
             <div className="loading-spinner">Loading logs</div>
           ) : displayEntries.length === 0 ? (
-            <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-              {streaming ? 'Waiting for log entries...' : 'No log history — click "Live Stream" to stream events from /ws'}
+            <div style={{ textAlign: 'center', padding: 48 }}>
+              {streaming ? (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Waiting for log entries…</div>
+                  <div className="text-sm text-muted">Streaming from <code style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3 }}>/ws</code> — logs will appear here in real time.</div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>No log history</div>
+                  <div className="text-sm text-muted" style={{ marginBottom: 14 }}>No entries match the current filters. Try clearing filters or start a live stream.</div>
+                  <button className="btn btn-primary btn-sm" onClick={toggleStream}>Live Stream</button>
+                </div>
+              )}
             </div>
           ) : (
             displayEntries.map((entry: LogEntryType, i: number) => (
               <div key={streaming ? i : `${entry.timestamp}-${i}`} className="log-entry">
-                <span className={`log-level ${entry.level}`}>{entry.level}</span>
-                <span className="log-subsystem">{entry.subsystem}</span>
+                <span className={`log-level ${entry.level}`} style={{ width: 48 }}>{entry.level}</span>
+                <span className="log-subsystem" style={{ width: 90, fontFamily: 'var(--font-mono)', fontSize: 11 }}>{entry.subsystem}</span>
                 <span className="log-message">
                   {entry.message}
                   {entry.trace_id && (
-                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 10 }}>
+                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 10, fontFamily: 'var(--font-mono)' }}>
                       [{entry.trace_id.slice(0, 8)}]
                     </span>
                   )}
                 </span>
-                <span className="log-timestamp">{formatTime(entry.timestamp)}</span>
+                <span className="log-timestamp" style={{ width: 72, textAlign: 'right' }}>{formatTime(entry.timestamp)}</span>
               </div>
             ))
           )}
@@ -192,12 +208,14 @@ export default function LogsPage() {
       )}
 
       {streaming && (
-        <div className="flex items-center justify-between mt-2">
-          <div className="callout info" style={{ margin: 0, padding: '6px 12px' }}>
+        <div className="flex items-center justify-between mt-2" style={{ gap: 12 }}>
+          <div className="callout info" style={{ margin: 0, padding: '6px 12px', fontSize: 11, flex: 1 }}>
             Streaming live logs{levelFilter && ` · Level: ${levelFilter}`}
             {subsystemFilter && ` · Subsystem: ${subsystemFilter}`}
+            {searchFilter && ` · Search: ${searchFilter}`}
+            <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>via WebSocket /ws</span>
           </div>
-          <button className="btn btn-sm" onClick={() => setStreamEntries([])}>Clear Buffer</button>
+          <button className="btn btn-sm" onClick={() => setStreamEntries([])} style={{ flexShrink: 0 }}>Clear Buffer</button>
         </div>
       )}
     </div>

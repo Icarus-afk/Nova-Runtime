@@ -36,6 +36,7 @@ export default function ConfigPage() {
   const [editValue, setEditValue] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -81,7 +82,6 @@ export default function ConfigPage() {
     setSaving(true);
     try {
       const parsed = parseValue(editValue, editingEntry.type);
-      // Build nested patch object from dotted key
       const patch: Record<string, unknown> = {};
       const parts = editingEntry.key.split('.');
       let cur: any = patch;
@@ -102,6 +102,8 @@ export default function ConfigPage() {
     }
   };
 
+  const toggleSection = (s: string) => setCollapsed(prev => ({ ...prev, [s]: !prev[s] }));
+
   return (
     <div>
       <div className="page-header">
@@ -116,9 +118,9 @@ export default function ConfigPage() {
 
       {toast && <div className={`callout ${toast.type === 'error' ? 'error' : 'info'}`} style={{ marginBottom: 12 }}>{toast.message}</div>}
 
-      <div className="callout info mb-4" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Edits hit <code>PUT /admin/config</code> and hot-reload where supported. Non-mutable keys need restart via <code>SIGHUP</code> or container restart.</span>
-        <button className="btn btn-sm" onClick={() => { navigator.clipboard.writeText(JSON.stringify(Object.fromEntries((entries || []).map(e => [e.key, e.value])), null, 2)); showToast('Copied config JSON'); }}>Copy JSON</button>
+      <div className="callout info mb-4" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 12, lineHeight: 1.5 }}>Edits hit <code style={{ background: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: 3 }}>PUT /admin/config</code> and hot-reload where supported. Non-mutable keys need <code style={{ background: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: 3 }}>SIGHUP</code> or container restart.</span>
+        <button className="btn btn-sm" style={{ flexShrink: 0 }} onClick={() => { navigator.clipboard.writeText(JSON.stringify(Object.fromEntries((entries || []).map(e => [e.key, e.value])), null, 2)); showToast('Copied config JSON'); }}>Copy JSON</button>
       </div>
 
       <div className="flex gap-4">
@@ -127,11 +129,12 @@ export default function ConfigPage() {
             <input
               className="form-input"
               style={{ width: 300 }}
-              placeholder="Search keys or description..."
+              placeholder="Search keys or description…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <span className="text-sm text-muted">{filteredEntries?.length ?? 0} / {entries?.length ?? 0} entries</span>
+            <span className="text-sm text-muted" style={{ whiteSpace: 'nowrap' }}>{filteredEntries?.length ?? 0} / {entries?.length ?? 0} entries</span>
+            {search && <button className="btn btn-sm" onClick={() => setSearch('')}>Clear</button>}
           </div>
 
           {loading ? (
@@ -139,56 +142,27 @@ export default function ConfigPage() {
           ) : error ? (
             <div className="card">
               <div className="callout error" style={{ marginBottom: 12 }}>Failed to load config: {error}</div>
-              <div className="text-muted" style={{ textAlign: 'center', padding: 12 }}>Check that <code>novad</code> is running and you are logged in.</div>
+              <div style={{ textAlign: 'center', padding: 16 }}>
+                <div className="text-sm text-muted" style={{ marginBottom: 12 }}>Check that <code>novad</code> is running and you are logged in.</div>
+                <button className="btn btn-primary btn-sm" onClick={() => refetch()}>Retry</button>
+              </div>
             </div>
           ) : !entries || entries.length === 0 ? (
-            <div className="card">
-              <div className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No configuration entries</div>
+            <div className="card" style={{ textAlign: 'center', padding: 32 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>No configuration entries</div>
+              <div className="text-sm text-muted" style={{ marginBottom: 14 }}>The server returned an empty config. This may be a permissions or connectivity issue.</div>
+              <button className="btn btn-primary btn-sm" onClick={() => refetch()}>Retry</button>
             </div>
           ) : (
             <div>
               {search.trim() ? (
-                <div className="card">
-                  <div className="data-table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Key</th>
-                          <th>Value</th>
-                          <th>Type</th>
-                          <th>Mutable</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(filteredEntries || []).map((entry) => (
-                          <tr key={entry.key} onClick={() => setSelectedKey(entry.key)} style={{ cursor: 'pointer' }}>
-                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{entry.key}</td>
-                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxWidth: 300 }} className="truncate">
-                              {formatValue(entry.value)}
-                            </td>
-                            <td><span className="badge">{entry.type}</span></td>
-                            <td>{entry.mutable ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : '-'}</td>
-                            <td>
-                              {entry.mutable ? (
-                                <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openEdit(entry); }}>Edit</button>
-                              ) : (
-                                <span className="text-muted" style={{ fontSize: 11 }}>restart</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                filteredEntries && filteredEntries.length === 0 ? (
+                  <div className="card" style={{ textAlign: 'center', padding: 32 }}>
+                    <div className="callout info" style={{ marginBottom: 12 }}>No results for “{search}”</div>
+                    <button className="btn btn-sm" onClick={() => setSearch('')}>Clear search</button>
                   </div>
-                </div>
-              ) : (
-                Object.entries(sections).map(([section, sectionEntries]) => (
-                  <div key={section} className="card mb-4">
-                    <div className="flex justify-between items-center mb-2">
-                      <div className="card-title" style={{ margin: 0 }}>{section} <span className="count">({sectionEntries.length})</span></div>
-                      <span className="text-sm text-muted">{sectionEntries.filter(e => e.mutable).length} mutable</span>
-                    </div>
+                ) : (
+                  <div className="card">
                     <div className="data-table-wrapper">
                       <table className="data-table">
                         <thead>
@@ -197,27 +171,23 @@ export default function ConfigPage() {
                             <th>Value</th>
                             <th>Type</th>
                             <th>Mutable</th>
-                            <th>Restart</th>
                             <th></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {sectionEntries.map((entry) => (
+                          {(filteredEntries || []).map((entry) => (
                             <tr key={entry.key} onClick={() => setSelectedKey(entry.key)} style={{ cursor: 'pointer' }}>
-                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                                {entry.key.replace(section + '.', '')}
-                              </td>
-                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxWidth: 280 }} className="truncate">
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{entry.key}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxWidth: 300 }} className="truncate">
                                 {formatValue(entry.value)}
                               </td>
                               <td><span className="badge">{entry.type}</span></td>
-                              <td>{entry.mutable ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : '-'}</td>
-                              <td>{entry.requires_restart ? <AlertIcon size={14} style={{ color: 'var(--warning)' }} /> : '-'}</td>
+                              <td>{entry.mutable ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <span title="Requires restart"><AlertIcon size={14} style={{ color: 'var(--warning)' }} /></span>}</td>
                               <td>
                                 {entry.mutable ? (
                                   <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openEdit(entry); }}>Edit</button>
                                 ) : (
-                                  <span className="text-muted" style={{ fontSize: 11 }}>—</span>
+                                  <span className="text-muted" style={{ fontSize: 11 }}>restart</span>
                                 )}
                               </td>
                             </tr>
@@ -226,7 +196,67 @@ export default function ConfigPage() {
                       </table>
                     </div>
                   </div>
-                ))
+                )
+              ) : (
+                Object.entries(sections).map(([section, sectionEntries]) => {
+                  const isCollapsed = !!collapsed[section];
+                  const mutableCount = sectionEntries.filter(e => e.mutable).length;
+                  return (
+                    <div key={section} className="card mb-4">
+                      <button
+                        onClick={() => toggleSection(section)}
+                        style={{ all: 'unset', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: isCollapsed ? 0 : 10 }}
+                      >
+                        <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.12s', display: 'inline-block' }}>▼</span>
+                          {section} <span className="count" style={{ fontWeight: 400, color: 'var(--text-muted)' }}>({sectionEntries.length})</span>
+                        </div>
+                        <span className="text-sm text-muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <CheckIcon size={12} style={{ color: 'var(--success)' }} /> {mutableCount} mutable
+                          {sectionEntries.some(e => e.requires_restart) && <><AlertIcon size={12} style={{ color: 'var(--warning)' }} /> restart required</>}
+                        </span>
+                      </button>
+                      {!isCollapsed && (
+                        <div className="data-table-wrapper">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Key</th>
+                                <th>Value</th>
+                                <th>Type</th>
+                                <th style={{ textAlign: 'center' }} title="Mutable — hot reload"><CheckIcon size={12} /></th>
+                                <th style={{ textAlign: 'center' }} title="Restart required"><AlertIcon size={12} /></th>
+                                <th></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sectionEntries.map((entry) => (
+                                <tr key={entry.key} onClick={() => setSelectedKey(entry.key)} style={{ cursor: 'pointer', background: selectedKey === entry.key ? 'var(--bg-hover)' : undefined }}>
+                                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                                    {entry.key.replace(section + '.', '')}
+                                  </td>
+                                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxWidth: 280 }} className="truncate">
+                                    {formatValue(entry.value)}
+                                  </td>
+                                  <td><span className="badge">{entry.type}</span></td>
+                                  <td style={{ textAlign: 'center' }}>{entry.mutable ? <CheckIcon size={14} style={{ color: 'var(--success)' }} /> : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}</td>
+                                  <td style={{ textAlign: 'center' }}>{entry.requires_restart ? <AlertIcon size={14} style={{ color: 'var(--warning)' }} /> : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}</td>
+                                  <td>
+                                    {entry.mutable ? (
+                                      <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openEdit(entry); }}>Edit</button>
+                                    ) : (
+                                      <span className="text-muted" style={{ fontSize: 11 }}>—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           )}
@@ -255,24 +285,34 @@ export default function ConfigPage() {
             </div>
             <div className="detail-row">
               <span className="detail-label">Mutable</span>
-              <span className="detail-value">{selectedEntry.mutable ? 'Yes — hot reload' : 'No — restart required'}</span>
+              <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                {selectedEntry.mutable ? <CheckIcon size={12} style={{ color: 'var(--success)' }} /> : <AlertIcon size={12} style={{ color: 'var(--warning)' }} />}
+                {selectedEntry.mutable ? 'Yes — hot reload' : 'No — restart required'}
+              </span>
             </div>
             <div className="detail-row">
               <span className="detail-label">Requires Restart</span>
-              <span className="detail-value">{selectedEntry.requires_restart ? 'Yes' : 'No'}</span>
+              <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                {selectedEntry.requires_restart ? <AlertIcon size={12} style={{ color: 'var(--warning)' }} /> : <CheckIcon size={12} style={{ color: 'var(--text-muted)' }} />}
+                {selectedEntry.requires_restart ? 'Yes' : 'No'}
+              </span>
             </div>
             <div className="detail-row">
               <span className="detail-label">Default</span>
               <span className="detail-value">{formatValue(selectedEntry.default_value)}</span>
             </div>
             {selectedEntry.description && (
-              <div style={{ marginTop: 12, padding: 10, background: 'var(--bg-primary)', borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              <div style={{ marginTop: 12, padding: 10, background: 'var(--bg-primary)', borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, border: '1px solid var(--border)' }}>
                 {selectedEntry.description}
               </div>
             )}
-            {selectedEntry.mutable && (
-              <div className="callout info" style={{ marginTop: 12, fontSize: 11 }}>
-                Click Edit to change. Non-mutable keys need `kill -SIGHUP` or restart.
+            {selectedEntry.mutable ? (
+              <div className="callout info" style={{ marginTop: 12, fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <CheckIcon size={12} /> Editable — changes hot-reload.
+              </div>
+            ) : (
+              <div className="callout warning" style={{ marginTop: 12, fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <AlertIcon size={12} /> Restart required to apply.
               </div>
             )}
           </div>
