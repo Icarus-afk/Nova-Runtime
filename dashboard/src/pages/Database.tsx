@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import type { CollectionInfo, Document, QueryResult } from '../types';
@@ -22,6 +22,16 @@ const SQL_TYPES = [
   'BLOB', 'BINARY', 'VARBINARY', 'NULL',
 ];
 
+type HistoryEntry = { sql: string; time: number; rows: number; ms: number; kind: 'select' | 'write' };
+
+const TEMPLATES: Array<{ label: string; hint: string; sql: string; params: string }> = [
+  { label: 'Browse', hint: 'SELECT * LIMIT 10', sql: 'SELECT * FROM users LIMIT 10', params: '' },
+  { label: 'Filter', hint: 'WHERE $1', sql: 'SELECT * FROM users WHERE age > $1 LIMIT 10', params: '[21]' },
+  { label: 'Insert', hint: 'VALUES ($1,$2)', sql: 'INSERT INTO users (name, age) VALUES ($1, $2)', params: '["alice", 30]' },
+  { label: 'Update', hint: 'SET $1 WHERE $2', sql: 'UPDATE users SET name = $1 WHERE id = $2', params: '["alice", 1]' },
+  { label: 'Create Table', hint: 'DDL', sql: 'CREATE TABLE demo (id INTEGER PRIMARY KEY, name TEXT)', params: '' },
+];
+
 export default function DatabasePage() {
   const [activeTab, setActiveTab] = useState<'browse' | 'query'>('browse');
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
@@ -32,6 +42,9 @@ export default function DatabasePage() {
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [docPage, setDocPage] = useState(1);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [helpCollapsed, setHelpCollapsed] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Create table
   const [showCreateTable, setShowCreateTable] = useState(false);
@@ -79,7 +92,21 @@ export default function DatabasePage() {
     [selectedCollection]
   ) as any;
 
+  const paramsValidation = useMemo(() => {
+    const t = queryParams.trim();
+    if (!t) return null;
+    try {
+      const parsed = JSON.parse(t);
+      if (!Array.isArray(parsed)) return { ok: true, hint: 'Will be sent as single-element array — prefer ["a", 30] for $1,$2.' };
+      return { ok: true, hint: `${parsed.length} param${parsed.length === 1 ? '' : 's'} → $1…$${parsed.length} · strings need quotes: ["alice", 30]` };
+    } catch {
+      return { ok: false, hint: 'Invalid JSON — must be an array like [21] or ["alice", 30]' };
+    }
+  }, [queryParams]);
+
   const handleRunQuery = async () => {
+    if (!queryInput.trim()) { setQueryError('SQL is empty'); return; }
+    if (paramsValidation && !paramsValidation.ok) { setQueryError(paramsValidation.hint); return; }
     setQueryLoading(true);
     setQueryError(null);
     try {
@@ -88,7 +115,6 @@ export default function DatabasePage() {
         const parsed = JSON.parse(queryParams.trim());
         params = Array.isArray(parsed) ? parsed : [parsed];
       }
-      // Route by statement: SELECT -> /sql/query, others -> /sql/execute (more than enough).
       const head = queryInput.trim().toLowerCase();
       const isSelect = head.startsWith('select') || head.startsWith('with');
       if (isSelect) {
@@ -99,12 +125,14 @@ export default function DatabasePage() {
           params,
         });
         setQueryResult(result);
+        setHistory(prev => [{ sql: queryInput.trim(), time: Date.now(), rows: result.documents.length, ms: result.execution_time_ms, kind: 'select' as const }, ...prev].slice(0, 3));
       } else {
         const res = await api.executeSql(queryInput, params);
         const affected = (res as any).affected_rows ?? (res as any).row_count ?? 0;
-        setQueryResult({ documents: [], total_count: affected, execution_time_ms: (res as any).execution_time_ms ?? 0, warning: null } as any);
-        // Surface non-SELECT result inline so the user sees affected_rows, not just toast.
-        if (res) setQueryError(null);
+        const ms = (res as any).execution_time_ms ?? 0;
+        setQueryResult({ documents: [], total_count: affected, execution_time_ms: ms, warning: null } as any);
+        setHistory(prev => [{ sql: queryInput.trim(), time: Date.now(), rows: affected, ms, kind: 'write' as const }, ...prev].slice(0, 3));
+        setQueryError(null);
         refetchCollections();
         if (selectedCollection) refetchDocs();
       }
@@ -171,9 +199,7 @@ export default function DatabasePage() {
     try {
       const next = JSON.parse(editJson) as Record<string, unknown>;
       const prev = editingDoc.data as Record<string, unknown>;
-      // Diff only changed keys — single-field edit stays single-field.
       const changed = Object.entries(next).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(prev[k]));
-      // Include newly added keys too.
       for (const [k, v] of Object.entries(next)) if (!(k in prev)) if (!changed.find(([ck]) => ck === k)) changed.push([k, v]);
       if (changed.length === 0) {
         setEditError('No changes to save');
@@ -182,7 +208,6 @@ export default function DatabasePage() {
       const setClause = changed.map(([k], i) => `${k} = $${i + 1}`).join(', ');
       const whereIdx = changed.length + 1;
       const params: unknown[] = changed.map(([, v]) => v);
-      // WHERE on the storage id — handle numeric PKs vs text without quoting bugs.
       const idVal: unknown = (editingDoc as any).id;
       const where = `id = $${whereIdx}`;
       params.push(idVal);
@@ -213,6 +238,8 @@ export default function DatabasePage() {
     setEditError(null);
   };
 
+  const lineCount = queryInput.split('\n').length;
+
   const docColumns: any[] = [
     { key: 'id', header: 'ID', width: '160px' },
     { key: 'collection', header: 'Collection', width: '120px' },
@@ -239,9 +266,19 @@ export default function DatabasePage() {
     },
   ];
 
+  const isSelectResult = !!queryResult && queryResult.documents.length > 0;
+  const isWriteResult = !!queryResult && queryResult.documents.length === 0 && !queryError;
+  const resultCols: string[] = isSelectResult ? Object.keys(queryResult!.documents[0].data) : [];
+
+  const copyResults = async () => {
+    if (!queryResult) return;
+    const payload = JSON.stringify(queryResult.documents.map(d => d.data), null, 2);
+    try { await navigator.clipboard.writeText(payload); setCopied(true); setTimeout(() => setCopied(false), 1200); showToast('Copied results JSON'); } catch { showToast('Copy failed', 'error'); }
+  };
+
   return (
     <div>
-      <div className="page-header">
+      <div className="page-header" style={{ marginBottom: 12 }}>
         <div className="flex justify-between items-center">
           <div>
             <h1>Database</h1>
@@ -253,7 +290,7 @@ export default function DatabasePage() {
 
       {toast && <div className={`callout ${toast.type === 'error' ? 'error' : 'info'}`} style={{ marginBottom: 12 }}>{toast.message}</div>}
 
-      <div className="tabs">
+      <div className="tabs" style={{ marginBottom: 12 }}>
         <button className={`tab ${activeTab === 'browse' ? 'active' : ''}`} onClick={() => setActiveTab('browse')}>Browse</button>
         <button className={`tab ${activeTab === 'query' ? 'active' : ''}`} onClick={() => setActiveTab('query')}>Query</button>
       </div>
@@ -319,9 +356,9 @@ export default function DatabasePage() {
             <div>
               {selectedCollection ? (
                 <div>
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-4" style={{ marginBottom: 12 }}>
                     <div>
-                      <div className="section-title">{selectedCollection}</div>
+                      <div className="section-title" style={{ marginBottom: 2 }}>{selectedCollection}</div>
                       {collections?.find(c => c.name === selectedCollection) && (
                         <div className="text-sm text-muted">
                           {formatBytes(collections!.find(c => c.name === selectedCollection)!.total_size_bytes)} total · {collections!.find(c => c.name === selectedCollection)!.index_count} indexes
@@ -351,90 +388,284 @@ export default function DatabasePage() {
               )}
             </div>
           ) : (
-            <div>
-              <div className="card" style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
-                    <label>SQL — SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE</label>
-                  </div>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>novad SQL</span>
+            /* ===================== QUERY TAB REDESIGN ===================== */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Templates */}
+              <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Quick templates</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' }}>novad SQL · $1 params</span>
                 </div>
-                <textarea
-                  className="query-editor"
-                  value={queryInput}
-                  onChange={(e) => setQueryInput(e.target.value)}
-                  rows={6}
-                  placeholder={"SELECT * FROM users WHERE age > $1 LIMIT 10\n-- UPDATE users SET name = $1 WHERE id = $2\n-- INSERT INTO users (name, age) VALUES ($1, $2)"}
-                />
-                <div className="grid grid-cols-2 gap-3" style={{ margin: '12px 0' }}>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Params — JSON array for $1, $2 …</label>
-                    <input className="form-input" value={queryParams} onChange={(e) => setQueryParams(e.target.value)} placeholder='[21] or ["alice", 30]' style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Max rows</label>
-                    <input className="form-input" value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} placeholder="100" type="number" min={1} max={1000} />
-                  </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {TEMPLATES.map(t => (
+                    <button
+                      key={t.label}
+                      className="btn btn-sm"
+                      style={{ fontSize: 11, padding: '5px 8px', borderColor: queryInput.trim() === t.sql ? 'var(--text-primary)' : undefined }}
+                      onClick={() => { setQueryInput(t.sql); setQueryParams(t.params); setQueryError(null); }}
+                      title={t.sql}
+                    >
+                      <span style={{ fontWeight: 600 }}>{t.label}</span>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· {t.hint}</span>
+                    </button>
+                  ))}
+                  {selectedCollection && (
+                    <button className="btn btn-sm" style={{ fontSize: 11 }} onClick={() => { setQueryInput(`SELECT * FROM ${selectedCollection} LIMIT 20`); setQueryParams(''); }}>
+                      This table: {selectedCollection}
+                    </button>
+                  )}
                 </div>
-                <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
-                  <button className="btn btn-primary" onClick={handleRunQuery} disabled={queryLoading}>
-                    {queryLoading ? 'Running…' : 'Run (⌘↵)'}
-                  </button>
-                  <button className="btn" onClick={() => setQueryResult(null)}>Clear</button>
-                  <button className="btn" onClick={() => setQueryInput('SELECT * FROM users LIMIT 10')}>SELECT example</button>
-                  <button className="btn" onClick={() => setQueryInput("UPDATE users SET name = $1 WHERE id = $2")}>UPDATE example</button>
-                  <button className="btn" onClick={() => { if (selectedCollection) setQueryInput(`SELECT * FROM ${selectedCollection} LIMIT 20`); }}>This table</button>
-                </div>
-                <div className="text-sm text-muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-                  Types: <code>INTEGER/TEXT/FLOAT/BOOLEAN</code> · Ops: <code>JOIN/GROUP BY/HAVING/ORDER BY/LIKE/IN/BETWEEN</code> · Params <code>$1</code> are server-interpolated (safe). Single-field edits use <code>UPDATE t SET field=$1 WHERE id=$2</code>.
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  Single-field <code style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 10 }}>UPDATE users SET name=$1 WHERE id=$2</code> is the param-safe pattern — avoids string quoting bugs.
                 </div>
               </div>
 
-              {queryError && <div className="page-error">{queryError}</div>}
-
-              {queryResult && (
-                <div className="card">
-                  <div className="flex justify-between mb-2">
-                    <span className="card-title">Results</span>
-                    <span className="text-sm text-muted">
-                      {queryResult.execution_time_ms.toFixed(1)}ms · {queryResult.documents.length} rows {queryResult.warning && `· ${queryResult.warning}`}
-                    </span>
-                  </div>
-                  {queryResult.documents.length > 0 ? (
-                    <div className="data-table-wrapper">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>#</th>
-                            <th>ID</th>
-                            {Object.keys(queryResult.documents[0].data).map((k) => (
-                              <th key={k}>{k}</th>
-                            ))}
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {queryResult.documents.map((doc, i) => (
-                            <tr key={doc.id}>
-                              <td>{i + 1}</td>
-                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{doc.id}</td>
-                              {Object.keys(queryResult!.documents[0].data).map((k) => (
-                                <td key={k}>{String(doc.data[k] ?? '')}</td>
-                              ))}
-                              <td>
-                                <div className="actions">
-                                  <button className="btn btn-sm" onClick={() => openEdit(doc)}>Edit</button>
-                                  <button className="btn btn-sm btn-danger" onClick={() => setDeleteDoc(doc)}>Delete</button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+              {/* Editor + Help (two-column) */}
+              <div style={{ display: 'grid', gridTemplateColumns: helpCollapsed ? '1fr 36px' : '1fr 300px', gap: 12, alignItems: 'start' }}>
+                {/* Editor card */}
+                <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div className="flex items-center justify-between">
+                    <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>SQL Editor</label>
+                    <div className="flex gap-2 items-center">
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{lineCount} line{lineCount > 1 ? 's' : ''} · ⌘+Enter to run</span>
                     </div>
-                  ) : (
-                    <div className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No results</div>
+                  </div>
+
+                  {/* Monospace editor with line-numbers gutter */}
+                  <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: 'var(--bg-primary)' }}>
+                    <div
+                      aria-hidden
+                      style={{
+                        width: 36, flexShrink: 0, background: 'var(--bg-tertiary)', borderRight: '1px solid var(--border)',
+                        color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: '1.6',
+                        padding: '10px 6px', textAlign: 'right', userSelect: 'none', whiteSpace: 'pre'
+                      }}
+                    >
+                      {Array.from({ length: Math.max(lineCount, 6) }, (_, i) => i + 1).join('\n')}
+                    </div>
+                    <textarea
+                      value={queryInput}
+                      onChange={e => setQueryInput(e.target.value)}
+                      onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleRunQuery(); } }}
+                      placeholder={"SELECT * FROM users WHERE age > $1 LIMIT 10\n-- JOIN / GROUP BY / HAVING / ORDER BY / LIKE / IN / BETWEEN supported"}
+                      style={{
+                        flex: 1, minHeight: 140, border: 'none', outline: 'none', resize: 'vertical',
+                        fontFamily: 'var(--font-mono)', fontSize: 12.5, lineHeight: '1.6', padding: '10px 10px',
+                        background: 'transparent', color: 'var(--text-primary)'
+                      }}
+                      rows={6}
+                      spellCheck={false}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 10 }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Params for $1, $2… — JSON array</span>
+                        <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--text-muted)', fontSize: 10 }}>safe, server-interpolated</span>
+                      </label>
+                      <input
+                        className="form-input"
+                        value={queryParams}
+                        onChange={e => setQueryParams(e.target.value)}
+                        placeholder='[21]  or  ["alice", 30]'
+                        style={{
+                          fontFamily: 'var(--font-mono)', fontSize: 12,
+                          borderColor: paramsValidation && !paramsValidation.ok ? 'var(--danger)' : undefined
+                        }}
+                      />
+                      <div style={{ minHeight: 14, marginTop: 4, fontSize: 11, lineHeight: 1.3, color: paramsValidation && !paramsValidation.ok ? 'var(--danger)' : 'var(--text-muted)' }}>
+                        {paramsValidation ? paramsValidation.hint : 'Empty = no params · strings need quotes inside array: ["alice", 30]'}
+                      </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label style={{ fontSize: 11 }}>Max rows</label>
+                      <input className="form-input" value={queryLimit} onChange={e => setQueryLimit(e.target.value)} placeholder="100" type="number" min={1} max={1000} style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                      <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>For SELECT limit · 1–1000</div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button className="btn btn-primary" onClick={handleRunQuery} disabled={queryLoading} style={{ minWidth: 118 }}>
+                      {queryLoading ? (
+                        <span className="flex items-center gap-2"><span className="loading-spinner" style={{ padding: 0, width: 14, height: 14 } as any} />Running…</span>
+                      ) : 'Run  ⌘↵'}
+                    </button>
+                    <button className="btn" onClick={() => { setQueryResult(null); setQueryError(null); }} disabled={queryLoading}>Clear results</button>
+                    <button className="btn" onClick={() => { setQueryInput('SELECT * FROM users LIMIT 10'); setQueryParams(''); setQueryError(null); }}>Reset</button>
+                    {queryResult && (
+                      <button className="btn" onClick={copyResults}>{copied ? 'Copied!' : 'Copy results JSON'}</button>
+                    )}
+                    {queryResult && (
+                      <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                        {queryResult.execution_time_ms.toFixed(1)} ms
+                        {queryResult.warning ? ` · ${queryResult.warning}` : ''}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* History pills */}
+                  {history.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-muted)', textTransform: 'uppercase' }}>History</span>
+                      {history.map((h, i) => (
+                        <button
+                          key={i}
+                          className="btn btn-sm"
+                          title={`${h.sql}\n${h.rows} rows · ${h.ms.toFixed(1)}ms — click to restore`}
+                          onClick={() => { setQueryInput(h.sql); setQueryError(null); }}
+                          style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '3px 7px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: h.kind === 'select' ? 'var(--info)' : 'var(--success)', display: 'inline-block' }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{h.sql.length > 34 ? h.sql.slice(0, 34) + '…' : h.sql}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{h.rows}·{h.ms.toFixed(0)}ms</span>
+                        </button>
+                      ))}
+                      <button className="btn btn-sm" style={{ fontSize: 10, padding: '3px 6px' }} onClick={() => setHistory([])} title="Clear history">×</button>
+                    </div>
                   )}
+                </div>
+
+                {/* Help side card */}
+                <div className="card" style={{ padding: helpCollapsed ? 8 : 14, display: 'flex', flexDirection: 'column', gap: 10, position: 'sticky', top: 0 }}>
+                  <div className="flex items-center justify-between">
+                    {!helpCollapsed && <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Help</span>}
+                    <button className="btn btn-sm" onClick={() => setHelpCollapsed(v => !v)} title={helpCollapsed ? 'Expand help' : 'Collapse help'} style={{ marginLeft: helpCollapsed ? 0 : 'auto', padding: '3px 7px', fontSize: 11 }}>
+                      {helpCollapsed ? '›' : '‹'}
+                    </button>
+                  </div>
+                  {!helpCollapsed && (
+                    <>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>Supported SQL</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, lineHeight: 1.5 }}>
+                          {[
+                            { k: 'SELECT', ex: 'SELECT * FROM users WHERE age > $1 LIMIT 10' },
+                            { k: 'INSERT', ex: 'INSERT INTO users (name, age) VALUES ($1, $2)' },
+                            { k: 'UPDATE', ex: 'UPDATE users SET name=$1 WHERE id=$2' },
+                            { k: 'DELETE', ex: 'DELETE FROM users WHERE id = $1' },
+                            { k: 'CREATE', ex: 'CREATE TABLE demo (id INTEGER PRIMARY KEY, name TEXT)' },
+                            { k: 'DROP', ex: 'DROP TABLE demo' },
+                          ].map(r => (
+                            <div key={r.k} style={{ display: 'flex', flexDirection: 'column', gap: 1, padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                              <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-primary)' }}>{r.k}</span>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{r.ex}</span>
+                            </div>
+                          ))}
+                          <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>Also: <code>JOIN</code> · <code>GROUP BY</code> · <code>HAVING</code> · <code>ORDER BY</code> · <code>LIMIT/OFFSET</code> · <code>LIKE</code> · <code>IN</code> · <code>BETWEEN</code></div>
+                        </div>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>Types</div>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                          {['INTEGER', 'TEXT', 'FLOAT', 'BOOLEAN'].map(t => (
+                            <span key={t} style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 6px', borderRadius: 999, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>{t}</span>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6 }}>Also <code>VARCHAR</code>/<code>TIMESTAMP</code>/<code>BLOB</code> etc.</div>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>Params $1, $2…</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                          Placeholders <code style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3 }}>$1</code> are replaced <em>server-side</em> (safe, no string concat). Fill <strong>Params</strong> with a JSON array — position matches <code>$1, $2…</code>.
+                          <div style={{ marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 10, background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', color: 'var(--text-secondary)' }}>
+                            <div><span style={{ color: 'var(--text-muted)' }}>-- SQL</span> WHERE age {'>'} $1</div>
+                            <div><span style={{ color: 'var(--text-muted)' }}>-- Params</span> [21]</div>
+                            <div style={{ marginTop: 4 }}><span style={{ color: 'var(--text-muted)' }}>-- Strings need quotes in array</span></div>
+                            <div>["alice", 30]</div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {helpCollapsed && (
+                    <div style={{ writingMode: 'vertical-rl' as any, fontSize: 10, letterSpacing: 0.6, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>HELP</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Error callout */}
+              {queryError && (
+                <div className="callout error" style={{ marginBottom: 0, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  <span style={{ fontWeight: 700, flexShrink: 0 }}>Query error</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{queryError}</span>
+                  <button className="btn btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => setQueryError(null)}>Dismiss</button>
+                </div>
+              )}
+
+              {/* Results */}
+              {queryResult && !queryError && isWriteResult && (
+                <div className="callout info" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--success)', display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>Success</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Affected: {queryResult.total_count ?? 0} row{(queryResult.total_count ?? 0) === 1 ? '' : 's'} · {queryResult.execution_time_ms.toFixed(1)} ms
+                  </span>
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                    <button className="btn btn-sm" onClick={() => setQueryResult(null)}>Clear</button>
+                  </span>
+                </div>
+              )}
+
+              {queryResult && isSelectResult && (
+                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                  <div className="flex items-center justify-between" style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Results</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 999, border: '1px solid var(--border)' }}>
+                        {queryResult!.documents.length} row{queryResult!.documents.length === 1 ? '' : 's'} · {queryResult!.execution_time_ms.toFixed(1)} ms
+                      </span>
+                      {queryResult!.warning && <span style={{ fontSize: 11, color: 'var(--warning)' }}>{queryResult!.warning}</span>}
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm" onClick={copyResults}>{copied ? 'Copied!' : 'Copy JSON'}</button>
+                      <button className="btn btn-sm" onClick={() => setQueryResult(null)}>Clear</button>
+                    </div>
+                  </div>
+                  <div className="data-table-wrapper" style={{ border: 'none', borderRadius: 0 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 36 }}>#</th>
+                          <th style={{ width: 140 }}>ID</th>
+                          {resultCols.map(k => <th key={k}>{k}</th>)}
+                          <th style={{ width: 96 }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queryResult!.documents.map((doc, i) => (
+                          <tr key={doc.id}>
+                            <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{i + 1}</td>
+                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={doc.id}>{doc.id}</td>
+                            {resultCols.map(k => {
+                              const raw = doc.data[k];
+                              const s = raw === null || raw === undefined ? '' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+                              const short = s.length > 64 ? s.slice(0, 64) + '…' : s;
+                              return <td key={k} title={s} style={{ fontSize: 12, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</td>;
+                            })}
+                            <td>
+                              <div className="actions">
+                                <button className="btn btn-sm" title="Copy row JSON" onClick={() => { navigator.clipboard.writeText(JSON.stringify(doc.data, null, 2)).then(() => showToast('Row copied')); }}>Copy</button>
+                                <button className="btn btn-sm" onClick={() => openEdit(doc)}>Edit</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: '8px 14px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                    <span>{queryResult!.documents.length} rows in this page{queryResult!.total_count != null ? ` · total ${queryResult!.total_count}` : ''}</span>
+                    <span>{queryResult!.execution_time_ms.toFixed(1)} ms</span>
+                  </div>
+                </div>
+              )}
+
+              {queryResult && !isSelectResult && !isWriteResult && !queryError && (
+                <div className="card" style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)', fontSize: 12 }}>
+                  No rows returned — try a SELECT, or check the success callout above for write ops.
                 </div>
               )}
             </div>
