@@ -353,35 +353,40 @@ export default function DatabasePage() {
           ) : (
             <div>
               <div className="card" style={{ marginBottom: 16 }}>
-                <div className="form-group">
-                  <label>SQL Query</label>
-                  <textarea
-                    className="query-editor"
-                    value={queryInput}
-                    onChange={(e) => setQueryInput(e.target.value)}
-                    rows={6}
-                    placeholder="SELECT * FROM users WHERE age > $1 LIMIT 10"
-                  />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                    <label>SQL — SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE</label>
+                  </div>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>novad SQL</span>
                 </div>
-                <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 12 }}>
+                <textarea
+                  className="query-editor"
+                  value={queryInput}
+                  onChange={(e) => setQueryInput(e.target.value)}
+                  rows={6}
+                  placeholder={"SELECT * FROM users WHERE age > $1 LIMIT 10\n-- UPDATE users SET name = $1 WHERE id = $2\n-- INSERT INTO users (name, age) VALUES ($1, $2)"}
+                />
+                <div className="grid grid-cols-2 gap-3" style={{ margin: '12px 0' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Params (JSON array for $1, $2, ...)</label>
-                    <input className="form-input" value={queryParams} onChange={(e) => setQueryParams(e.target.value)} placeholder='[21]' style={{ fontFamily: 'var(--font-mono)' }} />
+                    <label>Params — JSON array for $1, $2 …</label>
+                    <input className="form-input" value={queryParams} onChange={(e) => setQueryParams(e.target.value)} placeholder='[21] or ["alice", 30]' style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>Max rows (optional)</label>
+                    <label>Max rows</label>
                     <input className="form-input" value={queryLimit} onChange={(e) => setQueryLimit(e.target.value)} placeholder="100" type="number" min={1} max={1000} />
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
                   <button className="btn btn-primary" onClick={handleRunQuery} disabled={queryLoading}>
-                    {queryLoading ? 'Running...' : 'Run Query'}
+                    {queryLoading ? 'Running…' : 'Run (⌘↵)'}
                   </button>
                   <button className="btn" onClick={() => setQueryResult(null)}>Clear</button>
-                  <button className="btn" onClick={() => setQueryInput('SELECT * FROM users LIMIT 10')}>Example</button>
+                  <button className="btn" onClick={() => setQueryInput('SELECT * FROM users LIMIT 10')}>SELECT example</button>
+                  <button className="btn" onClick={() => setQueryInput("UPDATE users SET name = $1 WHERE id = $2")}>UPDATE example</button>
+                  <button className="btn" onClick={() => { if (selectedCollection) setQueryInput(`SELECT * FROM ${selectedCollection} LIMIT 20`); }}>This table</button>
                 </div>
-                <div className="text-sm text-muted" style={{ marginTop: 8 }}>
-                  Supports: SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE. Parameter placeholders ($1, $2...) are interpolated by the server.
+                <div className="text-sm text-muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                  Types: <code>INTEGER/TEXT/FLOAT/BOOLEAN</code> · Ops: <code>JOIN/GROUP BY/HAVING/ORDER BY/LIKE/IN/BETWEEN</code> · Params <code>$1</code> are server-interpolated (safe). Single-field edits use <code>UPDATE t SET field=$1 WHERE id=$2</code>.
                 </div>
               </div>
 

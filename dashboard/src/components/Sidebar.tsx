@@ -4,31 +4,31 @@ import { OverviewIcon, DatabaseIcon, CacheIcon, QueueIcon, SchedulerIcon, Search
 
 const navGroups: { title: string; items: NavItem[] }[] = [
   {
-    title: 'Platform',
+    title: 'Overview',
     items: [{ id: 'dashboard', label: 'Overview', path: '/', icon: <OverviewIcon /> }],
   },
   {
-    title: 'Data',
+    title: 'Storage',
     items: [
       { id: 'database', label: 'Database', path: '/database', icon: <DatabaseIcon /> },
       { id: 'cache', label: 'Cache', path: '/cache', icon: <CacheIcon /> },
-      { id: 'blob', label: 'Blob Storage', path: '/blob', icon: <BlobIcon /> },
+      { id: 'blob', label: 'Objects', path: '/blob', icon: <BlobIcon /> },
       { id: 'search', label: 'Search', path: '/search', icon: <SearchIcon /> },
     ],
   },
   {
-    title: 'Work',
+    title: 'Compute',
     items: [
-      { id: 'queue', label: 'Queue', path: '/queue', icon: <QueueIcon /> },
+      { id: 'queue', label: 'Queues', path: '/queue', icon: <QueueIcon /> },
       { id: 'scheduler', label: 'Scheduler', path: '/scheduler', icon: <SchedulerIcon /> },
     ],
   },
   {
-    title: 'Access',
+    title: 'Manage',
     items: [
-      { id: 'auth', label: 'Auth', path: '/auth', icon: <AuthIcon /> },
+      { id: 'auth', label: 'Users & Keys', path: '/auth', icon: <AuthIcon /> },
       { id: 'config', label: 'Config', path: '/config', icon: <ConfigIcon /> },
-      { id: 'logs', label: 'Logs', path: '/logs', icon: <LogsIcon /> },
+      { id: 'logs', label: 'Live Logs', path: '/logs', icon: <LogsIcon /> },
     ],
   },
 ];
@@ -38,9 +38,10 @@ export default function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="logo">◈</div>
-        <span style={{ letterSpacing: '-0.02em' }}>Nova</span>
-        <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 2, fontSize: 11 }}>Runtime</span>
-        <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text-muted)', border: '1px solid var(--border)', padding: '1px 4px', borderRadius: 4, fontFamily: 'var(--font-mono)' }}>v0.1</span>
+        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+          <span style={{ letterSpacing: '-0.02em', fontSize: 13 }}>Nova <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>Runtime</span></span>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>localhost:8642 · v0.1</span>
+        </div>
       </div>
       <nav className="sidebar-nav">
         {navGroups.map((group) => (
@@ -63,11 +64,11 @@ export default function Sidebar() {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+        <a href="/graphql" target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)', textDecoration: 'none' }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--success)' }} />
-          <span>All systems operational</span>
-        </div>
-        <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>Novad • 8642 • GraphQL /graphql</div>
+          GraphQL Playground →
+        </a>
+        <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-muted)' }}>Docs: <a href="https://github.com/Icarus-afk/Nova-Runtime" target="_blank" rel="noreferrer" style={{ color: 'var(--text-muted)' }}>README</a> · <code style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: 3 }}>make dev</code></div>
       </div>
     </aside>
   );
