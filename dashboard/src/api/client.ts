@@ -622,40 +622,50 @@ export const api = {
     request<void>('DELETE', `/auth/api-keys/${id}`),
 
   getConfig: async () => {
-    try {
-      // Use authenticated request — /admin/config is protected, /runtime/config also protected
-      // We need to bypass baseUrl (/api/v1) for admin routes, so use raw fetch with token
-      const token = getToken() || localStorage.getItem('nova_token') || '';
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      // Try /admin/config first (full config with validation), fallback to /runtime/config
-      let res = await fetch('/admin/config', { headers, signal: AbortSignal.timeout(3000) });
+    const token = getToken() || localStorage.getItem('nova_token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const tryFetch = async (path: string) => {
+      const res = await fetch(path, { headers, signal: AbortSignal.timeout(4000) });
+      const text = await res.text();
       if (!res.ok) {
-        res = await fetch('/runtime/config', { headers, signal: AbortSignal.timeout(3000) });
+        // Try to surface problem+json detail, fall back to status
+        let detail = text;
+        try { const j = JSON.parse(text); detail = j.detail || j.title || j.message || text; } catch {}
+        throw new Error(`${res.status} ${res.statusText}: ${detail}`.slice(0, 400));
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const r = await res.json() as Record<string, unknown>;
-      const entries: import('../types').ConfigEntry[] = [];
-      const flatten = (obj: Record<string, unknown>, prefix = '') => {
-        for (const [k, v] of Object.entries(obj)) {
-          const key = prefix ? `${prefix}.${k}` : k;
-          if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-            flatten(v as Record<string, unknown>, key);
-          } else {
-            // Infer mutable/requires_restart based on key
-            const isMutable = !['general.data_dir', 'networking.tls_cert_path', 'networking.tls_key_path'].includes(key) && !key.includes('data_dir');
-            entries.push({ key, value: v, type: typeof v as import('../types').ConfigValueType, description: `Current value for ${key}`, mutable: isMutable, requires_restart: !isMutable, default_value: null });
-          }
-        }
-      };
-      flatten(r);
-      return entries;
+      try {
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw new Error(`Bad JSON from ${path}: ${text.slice(0, 120)}`);
+      }
+    };
+    // /admin/config (full) is canonical, /runtime/config is alias — both proxied via vite.
+    let r: Record<string, unknown>;
+    try {
+      r = await tryFetch('/admin/config');
     } catch (e) {
-      console.warn('getConfig: backend unavailable', e);
-      throw e instanceof Error ? e : new Error(String(e));
+      // Fallback only on network/parse; don't hide 401/403 auth errors behind retry
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith('401') || msg.startsWith('403')) throw e;
+      r = await tryFetch('/runtime/config');
     }
+    const entries: import('../types').ConfigEntry[] = [];
+    const flatten = (obj: Record<string, unknown>, prefix = '') => {
+      for (const [k, v] of Object.entries(obj)) {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (k === 'version' || k === 'status') continue;
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+          flatten(v as Record<string, unknown>, key);
+        } else {
+          const isMutable = !['general.data_dir', 'networking.tls_cert_path', 'networking.tls_key_path'].includes(key) && !key.includes('data_dir');
+          entries.push({ key, value: v, type: typeof v as import('../types').ConfigValueType, description: `Current value for ${key}`, mutable: isMutable, requires_restart: !isMutable, default_value: null });
+        }
+      }
+    };
+    flatten(r);
+    if (entries.length === 0) throw new Error('Config empty — backend returned {}');
+    return entries;
   },
 
   getLogs: async (_params: { levels?: string; subsystems?: string; search?: string; limit?: number; offset?: number; order?: string }) => {
@@ -801,10 +811,27 @@ export const api = {
   changePassword: (id: string, current_password: string, new_password: string) =>
     request('PUT', `/auth/users/${encodeURIComponent(id)}/password`, { current_password, new_password }),
 
-  // === Config ===
-  updateConfig: (patch: Record<string, unknown>) =>
-    request('PUT', '/admin/config', patch),
+  // === Config === (admin routes live at /admin, not /api/v1 — bypass baseUrl)
+  updateConfig: async (patch: Record<string, unknown>) => {
+    const token = getToken() || localStorage.getItem('nova_token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch('/admin/config', { method: 'PUT', headers, body: JSON.stringify(patch) });
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
+      try { const j = JSON.parse(text); detail = j.detail || j.title || text; } catch {}
+      throw new ApiError(detail.slice(0, 500), res.status);
+    }
+    try { return JSON.parse(text); } catch { return text as unknown as Record<string, unknown>; }
+  },
 
-  getAdminConfig: () =>
-    request<Record<string, unknown>>('GET', '/admin/config'),
+  getAdminConfig: async () => {
+    const token = getToken() || localStorage.getItem('nova_token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch('/admin/config', { headers });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return res.json() as Promise<Record<string, unknown>>;
+  },
 };

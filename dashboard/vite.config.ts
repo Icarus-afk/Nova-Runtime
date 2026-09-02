@@ -15,7 +15,15 @@ export default defineConfig({
         target: 'http://127.0.0.1:8642',
         changeOrigin: true,
       },
+      '/admin': {
+        target: 'http://127.0.0.1:8642',
+        changeOrigin: true,
+      },
       '/runtime': {
+        target: 'http://127.0.0.1:8642',
+        changeOrigin: true,
+      },
+      '/openapi.json': {
         target: 'http://127.0.0.1:8642',
         changeOrigin: true,
       },

@@ -88,13 +88,26 @@ export default function DatabasePage() {
         const parsed = JSON.parse(queryParams.trim());
         params = Array.isArray(parsed) ? parsed : [parsed];
       }
-      const result = await api.queryDatabase({
-        collection: queryInput,
-        filter: {},
-        limit: queryLimit ? parseInt(queryLimit, 10) : undefined,
-        params,
-      });
-      setQueryResult(result);
+      // Route by statement: SELECT -> /sql/query, others -> /sql/execute (more than enough).
+      const head = queryInput.trim().toLowerCase();
+      const isSelect = head.startsWith('select') || head.startsWith('with');
+      if (isSelect) {
+        const result = await api.queryDatabase({
+          collection: queryInput,
+          filter: {},
+          limit: queryLimit ? parseInt(queryLimit, 10) : undefined,
+          params,
+        });
+        setQueryResult(result);
+      } else {
+        const res = await api.executeSql(queryInput, params);
+        const affected = (res as any).affected_rows ?? (res as any).row_count ?? 0;
+        setQueryResult({ documents: [], total_count: affected, execution_time_ms: (res as any).execution_time_ms ?? 0, warning: null } as any);
+        // Surface non-SELECT result inline so the user sees affected_rows, not just toast.
+        if (res) setQueryError(null);
+        refetchCollections();
+        if (selectedCollection) refetchDocs();
+      }
     } catch (err: unknown) {
       setQueryError(err instanceof Error ? err.message : 'Query failed');
     } finally {
@@ -156,12 +169,25 @@ export default function DatabasePage() {
     if (!editingDoc || !selectedCollection) return;
     setEditError(null);
     try {
-      const data = JSON.parse(editJson);
-      // Use UPDATE where id = original id (assume first column is id or use data.id)
-      const where = `id = '${editingDoc.id}'`;
-      const setClause = Object.entries(data).map(([k, v]) => `${k} = ${typeof v === 'string' ? `'${String(v).replace(/'/g, "''")}'` : String(v)}`).join(', ');
-      await api.executeSql(`UPDATE ${selectedCollection} SET ${setClause} WHERE ${where}`);
-      showToast('Document updated', 'success');
+      const next = JSON.parse(editJson) as Record<string, unknown>;
+      const prev = editingDoc.data as Record<string, unknown>;
+      // Diff only changed keys — single-field edit stays single-field.
+      const changed = Object.entries(next).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(prev[k]));
+      // Include newly added keys too.
+      for (const [k, v] of Object.entries(next)) if (!(k in prev)) if (!changed.find(([ck]) => ck === k)) changed.push([k, v]);
+      if (changed.length === 0) {
+        setEditError('No changes to save');
+        return;
+      }
+      const setClause = changed.map(([k], i) => `${k} = $${i + 1}`).join(', ');
+      const whereIdx = changed.length + 1;
+      const params: unknown[] = changed.map(([, v]) => v);
+      // WHERE on the storage id — handle numeric PKs vs text without quoting bugs.
+      const idVal: unknown = (editingDoc as any).id;
+      const where = `id = $${whereIdx}`;
+      params.push(idVal);
+      await api.executeSql(`UPDATE ${selectedCollection} SET ${setClause} WHERE ${where}`, params);
+      showToast(`Updated ${changed.map(([k]) => k).join(', ')}`, 'success');
       setEditingDoc(null);
       refetchDocs();
     } catch (err: unknown) {
