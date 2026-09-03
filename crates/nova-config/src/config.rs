@@ -10,7 +10,7 @@ shutdown_timeout_ms = 5000
 startup_timeout_ms = 30000
 
 [storage]
-wal_dir = ""
+wal_dir = "/var/lib/novad/wal"
 wal_segment_size = 67108864
 fsync_policy = { every_n_ms = 100 }
 block_cache_size = 268435456

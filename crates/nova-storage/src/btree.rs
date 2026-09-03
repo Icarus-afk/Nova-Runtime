@@ -84,12 +84,13 @@ fn read_value_from_data(data: &[u8], off: usize, len: usize) -> Value {
     Value::new(data[off..off + len].to_vec())
 }
 
-fn get_int_child_index(data: &[u8], hash: u64) -> usize {
+fn get_int_child_index(data: &[u8], key: &Key) -> usize {
     let count = read_u16(data, COUNT_OFF) as usize;
     let mut idx = 0usize;
     for i in 0..count {
         let entry = read_int_entry(data, i);
-        if entry.key_hash <= hash {
+        let stored_key = read_key_from_data(data, entry.key_off as usize, entry.key_len as usize);
+        if stored_key.as_bytes() <= key.as_bytes() {
             idx = i + 1;
         } else {
             break;
@@ -175,8 +176,7 @@ impl BTree {
             }
             Ok(None)
         } else {
-            let hash = key_hash(key);
-            let idx = get_int_child_index(data, hash);
+            let idx = get_int_child_index(data, key);
             let entry = read_int_entry(data, idx);
             let child_id = PageId::new(entry.child_id);
             let child_page = cache
@@ -217,7 +217,7 @@ impl BTree {
             let new_root_id = PageId::new(self.allocate_page_id());
             let mut new_root = Page::new(new_root_id);
             write_u16(&mut new_root.data, NODE_TYPE_OFF, INTERNAL_NODE);
-            write_u16(&mut new_root.data, COUNT_OFF, 1);
+            write_u16(&mut new_root.data, COUNT_OFF, 2);
             write_u64(&mut new_root.data, PARENT_OFF, PageId::INVALID.value());
             let hash = key_hash(&sep_key);
             push_int_entry(&mut new_root.data, 0, hash, old_root_id.value(), &sep_key);
@@ -257,8 +257,7 @@ impl BTree {
         if is_leaf {
             self.insert_into_leaf(cache, page, key, value)
         } else {
-            let hash = key_hash(&key);
-            let idx = get_int_child_index(&page.data, hash);
+            let idx = get_int_child_index(&page.data, &key);
             let entry = read_int_entry(&page.data, idx);
             let child_id = PageId::new(entry.child_id);
             let result = self.insert_into(cache, child_id, key, value)?;
@@ -284,12 +283,8 @@ impl BTree {
         let order = self.order;
 
         // Check for existing key to overwrite (handles updates and delete->reinsert)
-        let hash = key_hash(&key);
         for i in 0..count {
             let entry = read_leaf_entry(&page.data, i);
-            if entry.key_hash != hash {
-                continue;
-            }
             let stored_key = read_key_from_data(
                 &page.data,
                 entry.val_off as usize - entry.key_len as usize,
@@ -319,13 +314,44 @@ impl BTree {
         }
 
         if count < order * 2 {
-            // re-read count after possible tombstone marking (still same count)
-            let c = read_u16(&page.data, COUNT_OFF) as usize;
-            // if we marked tombstone, we have a tombstone to reuse: just append
-            insert_leaf_entry(&mut page.data, c, &key, &value)?;
-            write_u16(&mut page.data, COUNT_OFF, (c + 1) as u16);
-            page.mark_dirty();
-            cache.insert(page)?;
+            // Keep leaves sorted lexically: rebuild leaf with sorted entries
+            let mut entries: Vec<(Key, Value, u8)> = Vec::new();
+            for i in 0..count {
+                let entry = read_leaf_entry(&page.data, i);
+                let k = read_key_from_data(
+                    &page.data,
+                    entry.val_off as usize - entry.key_len as usize,
+                    entry.key_len as usize,
+                );
+                let v = read_value_from_data(
+                    &page.data,
+                    entry.val_off as usize,
+                    entry.val_len as usize,
+                );
+                entries.push((k, v, entry.flags));
+            }
+            entries.push((key.clone(), value.clone(), 0));
+            entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+            let parent = read_u64(&page.data, PARENT_OFF);
+            let next = read_u64(&page.data, NEXT_LEAF_OFF);
+            let prev = read_u64(&page.data, PREV_LEAF_OFF);
+            let page_id = page.id;
+            let mut new_leaf = Page::new(page_id);
+            write_u16(&mut new_leaf.data, NODE_TYPE_OFF, LEAF_NODE);
+            write_u16(&mut new_leaf.data, COUNT_OFF, 0);
+            write_u64(&mut new_leaf.data, PARENT_OFF, parent);
+            write_u64(&mut new_leaf.data, NEXT_LEAF_OFF, next);
+            write_u64(&mut new_leaf.data, PREV_LEAF_OFF, prev);
+            for (idx, (k, v, flags)) in entries.iter().enumerate() {
+                insert_leaf_entry(&mut new_leaf.data, idx, k, v)?;
+                write_u16(&mut new_leaf.data, COUNT_OFF, (idx + 1) as u16);
+                if flags & 0x01 != 0 {
+                    let entry_off = LEAF_ENTRIES_OFF + idx * LEAF_ENTRY_SIZE;
+                    new_leaf.data[entry_off + 22] = 0x01;
+                }
+            }
+            new_leaf.mark_dirty();
+            cache.insert(new_leaf)?;
             return Ok(None);
         }
 
@@ -343,58 +369,63 @@ impl BTree {
             entries.push((k, v, entry.flags));
         }
 
-        let insert_hash = key_hash(&key);
+        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         let insert_pos = entries
             .iter()
-            .position(|(k, _, _)| key_hash(k) >= insert_hash)
+            .position(|(k, _, _)| k.as_bytes() >= key.as_bytes())
             .unwrap_or(entries.len());
         entries.insert(insert_pos, (key.clone(), value.clone(), 0));
 
         let split_key = entries[mid].0.clone();
         let new_page_id = PageId::new(self.allocate_page_id());
+        let old_next = read_u64(&page.data, NEXT_LEAF_OFF);
+        let parent = read_u64(&page.data, PARENT_OFF);
+        let page_id = page.id;
+        // Rebuild left leaf (original) with first mid entries
+        let mut left_leaf = Page::new(page_id);
+        write_u16(&mut left_leaf.data, NODE_TYPE_OFF, LEAF_NODE);
+        write_u16(&mut left_leaf.data, COUNT_OFF, 0);
+        write_u64(&mut left_leaf.data, PARENT_OFF, parent);
+        write_u64(&mut left_leaf.data, NEXT_LEAF_OFF, new_page_id.value());
+        write_u64(
+            &mut left_leaf.data,
+            PREV_LEAF_OFF,
+            read_u64(&page.data, PREV_LEAF_OFF),
+        );
+        for (idx, (k, v, flags)) in entries.iter().take(mid).enumerate() {
+            insert_leaf_entry(&mut left_leaf.data, idx, k, v)?;
+            write_u16(&mut left_leaf.data, COUNT_OFF, (idx + 1) as u16);
+            if flags & 0x01 != 0 {
+                let entry_off = LEAF_ENTRIES_OFF + idx * LEAF_ENTRY_SIZE;
+                left_leaf.data[entry_off + 22] = 0x01;
+            }
+        }
+
         let mut new_page = Page::new(new_page_id);
         write_u16(&mut new_page.data, NODE_TYPE_OFF, LEAF_NODE);
         write_u16(&mut new_page.data, COUNT_OFF, 0);
-        write_u64(
-            &mut new_page.data,
-            PARENT_OFF,
-            read_u64(&page.data, PARENT_OFF),
-        );
-        write_u64(
-            &mut new_page.data,
-            NEXT_LEAF_OFF,
-            read_u64(&page.data, NEXT_LEAF_OFF),
-        );
-        write_u64(&mut new_page.data, PREV_LEAF_OFF, page.id.value());
+        write_u64(&mut new_page.data, PARENT_OFF, parent);
+        write_u64(&mut new_page.data, NEXT_LEAF_OFF, old_next);
+        write_u64(&mut new_page.data, PREV_LEAF_OFF, page_id.value());
 
         let mut new_count = 0usize;
         for entry in entries.iter().skip(mid) {
             insert_leaf_entry(&mut new_page.data, new_count, &entry.0, &entry.1)?;
+            new_count += 1;
+            write_u16(&mut new_page.data, COUNT_OFF, new_count as u16);
             if entry.2 & 0x01 != 0 {
-                let entry_off = LEAF_ENTRIES_OFF + new_count * LEAF_ENTRY_SIZE;
+                let entry_off = LEAF_ENTRIES_OFF + (new_count - 1) * LEAF_ENTRY_SIZE;
                 new_page.data[entry_off + 22] = 0x01;
             }
-            new_count += 1;
-        }
-        write_u16(&mut new_page.data, COUNT_OFF, new_count as u16);
-
-        write_u64(&mut page.data, NEXT_LEAF_OFF, new_page_id.value());
-        write_u16(&mut page.data, COUNT_OFF, mid as u16);
-
-        let old_next = read_u64(&page.data, NEXT_LEAF_OFF);
-        if old_next == new_page_id.value() {
-            write_u64(&mut page.data, NEXT_LEAF_OFF, new_page_id.value());
         }
 
-        let new_next_leaf = read_u64(&new_page.data, NEXT_LEAF_OFF);
-
-        page.mark_dirty();
+        left_leaf.mark_dirty();
         new_page.mark_dirty();
-        cache.insert(page)?;
+        cache.insert(left_leaf)?;
         cache.insert(new_page)?;
 
-        if new_next_leaf != PageId::INVALID.value()
-            && let Ok(Some(mut next_page)) = cache.get(PageId::new(new_next_leaf))
+        if old_next != PageId::INVALID.value()
+            && let Ok(Some(mut next_page)) = cache.get(PageId::new(old_next))
             && next_page.id != PageId::INVALID
         {
             write_u64(&mut next_page.data, PREV_LEAF_OFF, new_page_id.value());
@@ -416,16 +447,27 @@ impl BTree {
         let order = self.order;
 
         if count < order * 2 {
-            push_int_entry(
-                &mut page.data,
-                count,
-                key_hash(&sep_key),
-                new_child_id.value(),
-                &sep_key,
-            );
-            write_u16(&mut page.data, COUNT_OFF, (count + 1) as u16);
-            page.mark_dirty();
-            cache.insert(page)?;
+            // Keep internal entries sorted lexically: rebuild page sorted
+            let mut entries: Vec<(u64, u64, Key)> = Vec::new();
+            for i in 0..count {
+                let entry = read_int_entry(&page.data, i);
+                let k = read_key_from_data(&page.data, entry.key_off as usize, entry.key_len as usize);
+                entries.push((entry.key_hash, entry.child_id, k));
+            }
+            entries.push((key_hash(&sep_key), new_child_id.value(), sep_key.clone()));
+            entries.sort_by(|a, b| a.2.as_bytes().cmp(b.2.as_bytes()));
+            let parent = read_u64(&page.data, PARENT_OFF);
+            let page_id = page.id;
+            let mut new_page = Page::new(page_id);
+            write_u16(&mut new_page.data, NODE_TYPE_OFF, INTERNAL_NODE);
+            write_u16(&mut new_page.data, COUNT_OFF, 0);
+            write_u64(&mut new_page.data, PARENT_OFF, parent);
+            for (idx, (h, cid, k)) in entries.iter().enumerate() {
+                push_int_entry(&mut new_page.data, idx, *h, *cid, k);
+            }
+            write_u16(&mut new_page.data, COUNT_OFF, entries.len() as u16);
+            new_page.mark_dirty();
+            cache.insert(new_page)?;
             return Ok(None);
         }
 
@@ -498,19 +540,18 @@ impl BTree {
             .ok_or_else(|| RuntimeError::Internal("BTree page not found".into()))?;
         let is_leaf = read_u16(&page.data, NODE_TYPE_OFF) == LEAF_NODE;
         if is_leaf {
-            let hash = key_hash(key);
             let count = read_u16(&page.data, COUNT_OFF) as usize;
             for i in 0..count {
                 let entry = read_leaf_entry(&page.data, i);
-                if entry.key_hash != hash {
-                    continue;
-                }
                 let stored_key = read_key_from_data(
                     &page.data,
                     entry.val_off as usize - entry.key_len as usize,
                     entry.key_len as usize,
                 );
                 if stored_key.as_bytes() == key.as_bytes() {
+                    if entry.flags & 0x01 != 0 {
+                        return Ok(false);
+                    }
                     let mut page = page;
                     let entry_off = LEAF_ENTRIES_OFF + i * LEAF_ENTRY_SIZE;
                     page.data[entry_off + 22] |= 0x01;
@@ -521,8 +562,7 @@ impl BTree {
             }
             Ok(false)
         } else {
-            let hash = key_hash(key);
-            let idx = get_int_child_index(&page.data, hash);
+            let idx = get_int_child_index(&page.data, key);
             let entry = read_int_entry(&page.data, idx);
             let child_id = PageId::new(entry.child_id);
             self.delete_from(cache, child_id, key)
@@ -593,8 +633,7 @@ impl BTree {
         if is_leaf {
             return Ok(Some(page_id));
         }
-        let hash = key_hash(key);
-        let idx = get_int_child_index(&page.data, hash);
+        let idx = get_int_child_index(&page.data, key);
         let entry = read_int_entry(&page.data, idx);
         self.find_start_leaf(cache, PageId::new(entry.child_id), key)
     }

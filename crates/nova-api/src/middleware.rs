@@ -36,6 +36,31 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+pub async fn request_timeout(req: Request<Body>, next: Next) -> Response {
+    // Enforce a 30s request timeout to mitigate slowloris / hung handlers.
+    // Returns 504 Gateway Timeout on expiry (mapped to ApiError for consistency).
+    match tokio::time::timeout(std::time::Duration::from_secs(30), next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => crate::error::ApiError::new(
+            axum::http::StatusCode::GATEWAY_TIMEOUT,
+            "Gateway Timeout",
+            "Request timed out",
+        )
+        .into_response(),
+    }
+}
+
+pub async fn payload_too_large_handler(req: Request<Body>, next: Next) -> Response {
+    let resp = next.run(req).await;
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return crate::error::ApiError::payload_too_large(
+            "Request body too large (limit 10MB)",
+        )
+        .into_response();
+    }
+    resp
+}
+
 pub async fn request_logger(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -236,27 +261,40 @@ pub async fn auth_layer(
             roles = ?session.roles,
             "nova_api middleware: bearer session"
         );
-        // RBAC check for mutating auth endpoints — require admin
-        if path.starts_with("/api/v1/auth/")
-            && matches!(
-                method,
-                axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
-            )
-        {
-            // Allow login/refresh already handled as public, other auth mutating requires admin
-            if !auth_mgr.check_permission(&session.user_id, "admin:users:write")
-                && !session.roles.contains(&"admin".to_string())
-            {
-                // For non-admin, only allow self-service (e.g., change own password) — handled in handler
-                // For now, require admin for /users and /api-keys creation
-                if path == "/api/v1/auth/users"
-                    || path == "/api/v1/auth/api-keys"
-                    || path.contains("/roles")
-                    || path.contains("/api-keys/")
-                {
-                    return crate::error::ApiError::forbidden("Admin role required")
-                        .into_response();
-                }
+        // RBAC: gate admin-sensitive endpoints.
+        // - PUT /admin/config and /runtime/config require admin:users:write or admin role
+        // - GET /api/v1/auth/users, /api-keys, /roles (user enumeration) require admin
+        // - POST/PUT/DELETE on /api/v1/auth/* for /users, /api-keys, /roles require admin
+        // Self-service password change (PUT .../password) is exempted from admin gate
+        // and is validated in the handler via current_password check.
+        let is_admin_config = path.starts_with("/admin/config") || path.starts_with("/runtime/config");
+        let is_auth_sensitive = path.starts_with("/api/v1/auth/")
+            && (path == "/api/v1/auth/users"
+                || path.starts_with("/api/v1/auth/users")
+                || path == "/api/v1/auth/api-keys"
+                || path.starts_with("/api/v1/auth/api-keys")
+                || path.contains("/roles")
+                || path.contains("/api-keys/"));
+        let is_password_self_service =
+            path.contains("/password") && method == axum::http::Method::PUT;
+        // /admin/config is always admin-gated; auth sensitive is admin-gated for any method (covers enumeration via GET)
+        let needs_admin = !is_password_self_service
+            && (is_admin_config
+                || (is_auth_sensitive
+                    && (method == axum::http::Method::GET
+                        || matches!(
+                            method,
+                            axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
+                        ))));
+        // Also gate generic PUT /admin/config explicitly for RBAC parity
+        let is_admin_config_mutating = is_admin_config && method == axum::http::Method::PUT;
+        if needs_admin || is_admin_config_mutating {
+            let has_admin = auth_mgr.check_permission(&session.user_id, "admin:users:write")
+                || auth_mgr.check_permission(&session.user_id, "admin:config:write")
+                || session.roles.contains(&"admin".to_string())
+                || session.permissions.iter().any(|p| p == "*:*" || p == "admin:users:write");
+            if !has_admin {
+                return crate::error::ApiError::forbidden("Admin role required").into_response();
             }
         }
         return next.run(req).await;
@@ -276,26 +314,59 @@ pub async fn auth_layer(
                     .unwrap_or(true)
         });
         if let Some(api_key_record) = found {
-            // Enforce RBAC on API keys for mutating auth endpoints.
-            // Without this, any API key could perform admin operations.
-            if path.starts_with("/api/v1/auth/")
-                && matches!(
-                    method,
-                    axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
-                )
-            {
+            // Enforce RBAC on API keys.
+            // - /admin/config (PUT) and /runtime/config require admin:users:write or *:*
+            // - GET /api/v1/auth/users, /api-keys, /roles (enumeration) require admin
+            // - Mutating auth endpoints require admin:users:write
+            // For all other authenticated routes, any valid enabled non-expired API key is sufficient,
+            // but callers should scope keys with least-privilege permissions; a key with no relevant
+            // permission will be denied on admin routes and allowed on data-plane routes only if it
+            // carries read:* / write:* / *:* as appropriate. Document least-privilege expectation.
+            let is_admin_config = path.starts_with("/admin/config") || path.starts_with("/runtime/config");
+            let is_auth_sensitive = path.starts_with("/api/v1/auth/")
+                && (path == "/api/v1/auth/users"
+                    || path.starts_with("/api/v1/auth/users")
+                    || path == "/api/v1/auth/api-keys"
+                    || path.starts_with("/api/v1/auth/api-keys")
+                    || path.contains("/roles")
+                    || path.contains("/api-keys/"));
+            let needs_admin = is_admin_config
+                || (is_auth_sensitive
+                    && (method == axum::http::Method::GET
+                        || matches!(
+                            method,
+                            axum::http::Method::POST | axum::http::Method::PUT | axum::http::Method::DELETE
+                        )));
+            if needs_admin {
                 let has_permission = api_key_record
                     .permissions
                     .iter()
-                    .any(|p| p == "admin:users:write" || p == "*:*");
-                if !has_permission
-                    && (path == "/api/v1/auth/users"
-                        || path == "/api/v1/auth/api-keys"
-                        || path.contains("/roles")
-                        || path.contains("/api-keys/"))
-                {
+                    .any(|p| p == "admin:users:write" || p == "admin:config:write" || p == "*:*");
+                if !has_permission {
                     return crate::error::ApiError::forbidden(
                         "API key lacks required permission: admin:users:write",
+                    )
+                    .into_response();
+                }
+            }
+            // Generic data-plane RBAC for API keys: enforce read/write scoping where permissions are restrictive.
+            // If key has scoped permissions (e.g., only admin:users:write), deny it for data-plane to enforce least privilege.
+            // Keys with *:* or read:*/write:* pass; keys with only admin:* are blocked from /sql, /cache etc.
+            if !needs_admin
+                && !path.starts_with("/api/v1/auth/")
+                && !api_key_record.permissions.is_empty()
+            {
+                let is_read = method == axum::http::Method::GET;
+                let has_data_perm = api_key_record.permissions.iter().any(|p| {
+                    p == "*:*" || p == "read:*" || p == "write:*" || (is_read && p.starts_with("read:")) || (!is_read && p.starts_with("write:"))
+                });
+                // If key is scoped only to admin permissions, deny data-plane access to avoid privilege confusion
+                let is_admin_only = api_key_record.permissions.iter().all(|p| p.starts_with("admin:"));
+                if is_admin_only && !has_data_perm {
+                    // admin-only keys should not be used for data-plane; deny with 403 to signal scoping issue
+                    // but allow *: * keys.
+                    return crate::error::ApiError::forbidden(
+                        "API key lacks data-plane permission (requires read:* / write:* or *:* )",
                     )
                     .into_response();
                 }
@@ -322,14 +393,33 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn is_valid_ip_like(s: &str) -> bool {
+    // Very cheap validation: must contain '.' or ':' and only allowed chars, length bound
+    if s.is_empty() || s.len() > 45 {
+        return false;
+    }
+    let has_dot = s.contains('.');
+    let has_colon = s.contains(':');
+    if !has_dot && !has_colon {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == ':' || c == '[' || c == ']')
+}
+
 fn client_key(req: &Request<Body>) -> String {
+    // SECURITY: X-Forwarded-For is spoofable unless behind a trusted proxy.
+    // This is only used for rate-limiting (not auth), so spoofing just shifts
+    // the bucket, not bypass. If deploying behind a proxy, ensure the proxy
+    // strips/forges XFF and set TRUSTED_PROXIES. For now we validate format
+    // and take the first entry; fallback to "local" if missing/invalid.
     if let Some(v) = req
         .headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
-        && !v.is_empty()
+        .filter(|s| !s.is_empty() && is_valid_ip_like(s))
     {
         return v;
     }
@@ -338,7 +428,7 @@ fn client_key(req: &Request<Body>) -> String {
         .get("x-real-ip")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
-        && !v.is_empty()
+        .filter(|s| !s.is_empty() && is_valid_ip_like(s))
     {
         return v;
     }
@@ -477,7 +567,31 @@ pub async fn idempotency_layer(
         return next.run(req).await;
     }
 
-    let store_key = format!("{}:{}", key.as_deref().unwrap_or(""), req.uri().path());
+    // Scope by method + idempotency-key + path + user identity to avoid cross-user/method collisions.
+    let user_scope = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let api_key_scope = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let identity = if !user_scope.is_empty() {
+        user_scope
+    } else {
+        api_key_scope
+    };
+    let store_key = format!(
+        "{}:{}:{}:{}",
+        m,
+        key.as_deref().unwrap_or(""),
+        req.uri().path(),
+        identity
+    );
     {
         let mut store = state.store.lock().unwrap();
         if store.len() > 10_000 {

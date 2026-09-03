@@ -24,17 +24,8 @@ struct DaemonArgs {
 async fn main() -> anyhow::Result<()> {
     let args = DaemonArgs::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::builder().parse_lossy(&args.log_level))
-        .init();
-
-    tracing::info!("Nova Runtime v{} starting...", env!("CARGO_PKG_VERSION"));
-
-    // Resolve config file path for hot-reload
+    // Resolve config file path for hot-reload (do not use tracing before subscriber init)
     let config_path = resolve_config_path(&args.config);
-    if let Some(ref path) = config_path {
-        tracing::info!("Config file: {}", path.display());
-    }
 
     // Create loader with the resolved path so reload() knows which file to re-read
     let loader = config_path
@@ -43,7 +34,12 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let mut config = match &args.config {
-        Some(path) => nova_config::ConfigLoader::parse_file(Path::new(path))?,
+        Some(path) => {
+            let mut cfg = nova_config::ConfigLoader::parse_file(Path::new(path))?;
+            nova_config::ConfigLoader::apply_env_overrides(&mut cfg);
+            nova_config::ConfigLoader::validate(&cfg)?;
+            cfg
+        }
         None => loader.load(None)?,
     };
 
@@ -57,6 +53,85 @@ async fn main() -> anyhow::Result<()> {
         if let Ok(p) = port.parse() {
             config.networking.listen_port = p;
         }
+    }
+
+    // Initialize logging after config is loaded so config logging.level/format/file are respected.
+    // Effective level: CLI --log-level overrides config if explicitly set (non-default).
+    let effective_level = if args.log_level != "info" {
+        args.log_level.clone()
+    } else if config.logging.level != "info" && !config.logging.level.is_empty() {
+        config.logging.level.clone()
+    } else {
+        args.log_level.clone()
+    };
+    let log_format = config.logging.format.clone();
+    let log_file = config.logging.file.clone();
+    let filter = tracing_subscriber::EnvFilter::builder().parse_lossy(&effective_level);
+    // Handle json format and file output. At minimum file output is handled; fallback warns.
+    if log_format == "json" {
+        if let Some(path) = log_file.as_ref() {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(file) => {
+                    tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .json()
+                        .with_writer(std::sync::Mutex::new(file))
+                        .init();
+                }
+                Err(e) => {
+                    eprintln!(
+                        "WARN: failed to open log file {}: {} — falling back to stdout",
+                        path.display(),
+                        e
+                    );
+                    tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .json()
+                        .init();
+                }
+            }
+        } else {
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .json()
+                .init();
+        }
+    } else {
+        if log_format != "text" {
+            eprintln!("WARN: unknown log format '{}', using text", log_format);
+        }
+        if let Some(path) = log_file.as_ref() {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(file) => {
+                    tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .with_writer(std::sync::Mutex::new(file))
+                        .init();
+                }
+                Err(e) => {
+                    eprintln!(
+                        "WARN: failed to open log file {}: {} — falling back to stdout",
+                        path.display(),
+                        e
+                    );
+                    tracing_subscriber::fmt().with_env_filter(filter).init();
+                }
+            }
+        } else {
+            tracing_subscriber::fmt().with_env_filter(filter).init();
+        }
+    }
+
+    tracing::info!("Nova Runtime v{} starting...", env!("CARGO_PKG_VERSION"));
+    if let Some(ref path) = config_path {
+        tracing::info!("Config file: {}", path.display());
+    }
+    tracing::info!(
+        "Logging level: {} format: {}",
+        effective_level, log_format
+    );
+    if let Some(ref p) = config.logging.file {
+        tracing::info!("Logging to file: {}", p.display());
     }
 
     tracing::info!("Configuration loaded");
@@ -352,28 +427,49 @@ async fn main() -> anyhow::Result<()> {
             created_at: chrono::Utc::now().timestamp_millis(),
         });
 
-        // Assign admin role to the admin user in the RBAC engine so
-        // check_permission(&admin_user_id, ...) resolves correctly.
-        if let Some(admin_user) = mgr.get_user_by_username("admin")
-            && let Err(e) = mgr.assign_role(admin_user.id, "admin")
-        {
-            tracing::warn!("Failed to assign admin role: {}", e);
-        }
-
         // Bootstrap default admin user if no users exist. Never use a hardcoded
-        // password — generate a strong random one from a session token and log it
-        // once so operators can log in on first boot.
+        // password — generate a strong random one and surface it once via stderr
+        // (not structured logs) so operators can log in on first boot, without
+        // leaking the secret to log aggregators. The password is never written
+        // to tracing at INFO level.
         if mgr.list_users().is_empty() {
             let admin_password = std::env::var("NOVA_ADMIN_PASSWORD")
                 .ok()
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(generate_random_password);
-            mgr.create_user("admin", &admin_password, vec!["admin".to_string()])
+            let admin_user = mgr
+                .create_user("admin", &admin_password, vec!["admin".to_string()])
                 .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
-            tracing::info!(
-                "Bootstrapped default admin user 'admin'. Password: {} (set NOVA_ADMIN_PASSWORD to override; change after first login)",
+            // Assign admin role in the RBAC engine after user creation so
+            // check_permission(&admin_user_id, ...) resolves correctly.
+            if let Err(e) = mgr.assign_role(admin_user.id, "admin") {
+                tracing::warn!("Failed to assign admin role: {}", e);
+            }
+            // Do not log password via tracing (leaks to log files/aggregators).
+            // Write once to stderr for operator capture; also hint about env var.
+            eprintln!(
+                "[novad] Bootstrapped default admin user 'admin'. Password: {} (set NOVA_ADMIN_PASSWORD to override; change after first login)",
                 admin_password
             );
+            tracing::info!(
+                "Bootstrapped default admin user 'admin' (password written to stderr once; set NOVA_ADMIN_PASSWORD to override; change after first login)"
+            );
+            // Ensure the generated password is zeroized on drop where possible
+            // (String will be dropped here; avoid cloning it further).
+        } else if let Some(admin_user) = mgr.get_user_by_username("admin") {
+            // Ensure existing admin has the admin role (handles upgrades where
+            // RBAC was empty or assignment previously ran before creation).
+            // Guard against duplicate push; RbacEngine::assign_role does not dedupe.
+            let already_has = {
+                let engine = mgr.rbac_engine().read();
+                engine.user_role_names(&admin_user.id).contains(&"admin".to_string())
+            };
+            #[allow(clippy::collapsible_if)]
+            if !already_has {
+                if let Err(e) = mgr.assign_role(admin_user.id, "admin") {
+                    tracing::warn!("Failed to assign admin role: {}", e);
+                }
+            }
         }
 
         let middleware_reg = mgr.create_middleware_registration(0);

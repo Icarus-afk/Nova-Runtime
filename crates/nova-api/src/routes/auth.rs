@@ -1,7 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
-use crate::routes::http::{Created, created};
-use axum::extract::{Path, State};
+use crate::routes::http::{Created, created, pagination_links};
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use axum::{
     Router,
@@ -68,18 +69,33 @@ struct LoginRequest {
     ttl_seconds: Option<u32>,
 }
 
+fn is_valid_ip_like(s: &str) -> bool {
+    if s.is_empty() || s.len() > 45 {
+        return false;
+    }
+    let has_dot = s.contains('.');
+    let has_colon = s.contains(':');
+    if !has_dot && !has_colon {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == ':' || c == '[' || c == ']')
+}
+
 async fn auth_login(
     State(state): State<Arc<AdminState>>,
     headers: axum::http::HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<Value>, ApiError> {
     // Per-IP rate limiting: 5/min
+    // SECURITY: XFF is spoofable unless behind trusted proxy; used only for rate-limit bucketing.
     let ip = headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && is_valid_ip_like(s))
         .unwrap_or_else(|| "unknown".to_string());
     check_login_rate_limit(&ip)?;
 
@@ -202,12 +218,21 @@ async fn create_api_key(
     ))
 }
 
-async fn list_api_keys(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct PaginationParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_api_keys(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<PaginationParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
-    let keys: Vec<Value> = mgr
+    let mut keys_all: Vec<Value> = mgr
         .list_api_keys()
         .into_iter()
         .map(|k| {
@@ -222,23 +247,44 @@ async fn list_api_keys(State(state): State<Arc<AdminState>>) -> Result<Json<Valu
             })
         })
         .collect();
-    Ok(Json(json!({
-        "data": keys,
-        "pagination": {"cursor": null, "limit": 50, "has_more": false}
-    })))
+    // Deterministic ordering
+    keys_all.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let total = keys_all.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = offset + limit < total;
+    let data: Vec<Value> = keys_all.into_iter().skip(offset).take(limit).collect();
+    let link = pagination_links(
+        "/api/v1/auth/api-keys",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
+    ))
 }
 
 async fn revoke_api_key(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
     let key_id = Uuid::parse_str(&id).map_err(|_| ApiError::bad_request("Invalid API key ID"))?;
     if mgr.revoke_api_key(&key_id) {
-        Ok(Json(json!({"status": "revoked", "id": id})))
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("API key not found"))
     }
@@ -264,7 +310,14 @@ async fn create_user(
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let user = mgr
         .create_user(&req.username, &req.password, req.roles.unwrap_or_default())
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("already exists") {
+                ApiError::conflict(msg)
+            } else {
+                ApiError::bad_request(msg)
+            }
+        })?;
     let user_id = user.id.to_string();
     Ok(created(
         &format!("/api/v1/auth/users/{user_id}"),
@@ -277,12 +330,15 @@ async fn create_user(
     ))
 }
 
-async fn list_users(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {
+async fn list_users(
+    State(state): State<Arc<AdminState>>,
+    Query(params): Query<PaginationParams>,
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
-    let users: Vec<Value> = mgr
+    let mut users_all: Vec<Value> = mgr
         .list_users()
         .into_iter()
         .map(|u| {
@@ -294,10 +350,30 @@ async fn list_users(State(state): State<Arc<AdminState>>) -> Result<Json<Value>,
             })
         })
         .collect();
-    Ok(Json(json!({
-        "data": users,
-        "pagination": {"cursor": null, "limit": 50, "has_more": false}
-    })))
+    users_all.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let total = users_all.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = offset + limit < total;
+    let data: Vec<Value> = users_all.into_iter().skip(offset).take(limit).collect();
+    let link = pagination_links(
+        "/api/v1/auth/users",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more}
+        })),
+    ))
 }
 
 async fn get_user(
@@ -323,14 +399,14 @@ async fn get_user(
 async fn delete_user(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let mgr = state
         .auth_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Auth not available"))?;
     let user_id = Uuid::parse_str(&id).map_err(|_| ApiError::bad_request("Invalid user ID"))?;
     if mgr.delete_user(&user_id) {
-        Ok(Json(json!({"status": "deleted", "id": id})))
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("User not found"))
     }

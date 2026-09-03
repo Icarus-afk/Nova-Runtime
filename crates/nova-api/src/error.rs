@@ -56,6 +56,14 @@ impl ApiError {
         Self::new(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests", detail)
     }
 
+    pub fn conflict(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, "Conflict", detail)
+    }
+
+    pub fn payload_too_large(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, "Payload Too Large", detail)
+    }
+
     pub fn with_instance(mut self, instance: &str) -> Self {
         self.instance = Some(instance.to_string());
         self

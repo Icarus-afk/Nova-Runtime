@@ -72,6 +72,7 @@ impl ConfigLoader {
     pub fn reload(&self, locked: &Arc<RwLock<Config>>) -> Result<()> {
         let path = self.path.as_ref().ok_or(ConfigError::NoPath)?;
         let config = Self::parse_file(path)?;
+        Self::validate(&config)?;
         *locked.write() = config;
         if let Some(tx) = &self.watcher_tx {
             let _ = tx.send(());
@@ -204,12 +205,12 @@ impl ConfigLoader {
             execution: merge_execution(base.execution, overlay.execution),
             auth: merge_auth(base.auth, overlay.auth),
             security: merge_security(base.security, overlay.security),
-            cache: overlay.cache,
-            blob: overlay.blob,
-            search: overlay.search,
-            sql: overlay.sql,
-            queue: overlay.queue,
-            scheduler: overlay.scheduler,
+            cache: merge_cache(base.cache, overlay.cache),
+            blob: merge_blob(base.blob, overlay.blob),
+            search: merge_search(base.search, overlay.search),
+            sql: merge_sql(base.sql, overlay.sql),
+            queue: merge_queue(base.queue, overlay.queue),
+            scheduler: merge_scheduler(base.scheduler, overlay.scheduler),
         }
     }
 
@@ -1011,125 +1012,253 @@ fn apply_env_scheduler(cfg: &mut SchedulerConfig, field: &str, _val: &toml::Valu
     }
 }
 
-fn merge_general(_base: GeneralConfig, overlay: GeneralConfig) -> GeneralConfig {
+fn merge_general(base: GeneralConfig, overlay: GeneralConfig) -> GeneralConfig {
+    let def = GeneralConfig::default();
     GeneralConfig {
-        data_dir: overlay.data_dir,
-        pid_file: overlay.pid_file,
-        max_connections: overlay.max_connections,
-        shutdown_timeout_ms: overlay.shutdown_timeout_ms,
-        startup_timeout_ms: overlay.startup_timeout_ms,
+        data_dir: if overlay.data_dir != def.data_dir { overlay.data_dir } else { base.data_dir },
+        pid_file: if overlay.pid_file != def.pid_file { overlay.pid_file } else { base.pid_file },
+        max_connections: if overlay.max_connections != def.max_connections { overlay.max_connections } else { base.max_connections },
+        shutdown_timeout_ms: if overlay.shutdown_timeout_ms != def.shutdown_timeout_ms { overlay.shutdown_timeout_ms } else { base.shutdown_timeout_ms },
+        startup_timeout_ms: if overlay.startup_timeout_ms != def.startup_timeout_ms { overlay.startup_timeout_ms } else { base.startup_timeout_ms },
     }
 }
 
-fn merge_storage(_base: StorageConfig, overlay: StorageConfig) -> StorageConfig {
+fn merge_storage(base: StorageConfig, overlay: StorageConfig) -> StorageConfig {
+    let def = StorageConfig::default();
     StorageConfig {
-        wal_dir: overlay.wal_dir,
-        wal_segment_size: overlay.wal_segment_size,
-        fsync_policy: overlay.fsync_policy,
-        block_cache_size: overlay.block_cache_size,
-        page_cache_size: overlay.page_cache_size,
-        memtable_size: overlay.memtable_size,
-        max_blob_size: overlay.max_blob_size,
-        compression: overlay.compression,
-        bloom_filter_bits_per_key: overlay.bloom_filter_bits_per_key,
-        page_size: overlay.page_size,
-        wal_page_size: overlay.wal_page_size,
-        btree_order: overlay.btree_order,
-        lsm_max_level: overlay.lsm_max_level,
-        bloom_false_positive_rate: overlay.bloom_false_positive_rate,
-        write_buffer_size: overlay.write_buffer_size,
-        compaction_threads: overlay.compaction_threads,
+        wal_dir: if overlay.wal_dir != def.wal_dir { overlay.wal_dir } else { base.wal_dir },
+        wal_segment_size: if overlay.wal_segment_size != def.wal_segment_size { overlay.wal_segment_size } else { base.wal_segment_size },
+        fsync_policy: if overlay.fsync_policy != def.fsync_policy { overlay.fsync_policy } else { base.fsync_policy },
+        block_cache_size: if overlay.block_cache_size != def.block_cache_size { overlay.block_cache_size } else { base.block_cache_size },
+        page_cache_size: if overlay.page_cache_size != def.page_cache_size { overlay.page_cache_size } else { base.page_cache_size },
+        memtable_size: if overlay.memtable_size != def.memtable_size { overlay.memtable_size } else { base.memtable_size },
+        max_blob_size: if overlay.max_blob_size != def.max_blob_size { overlay.max_blob_size } else { base.max_blob_size },
+        compression: if overlay.compression != def.compression { overlay.compression } else { base.compression },
+        bloom_filter_bits_per_key: if overlay.bloom_filter_bits_per_key != def.bloom_filter_bits_per_key { overlay.bloom_filter_bits_per_key } else { base.bloom_filter_bits_per_key },
+        page_size: if overlay.page_size != def.page_size { overlay.page_size } else { base.page_size },
+        wal_page_size: if overlay.wal_page_size != def.wal_page_size { overlay.wal_page_size } else { base.wal_page_size },
+        btree_order: if overlay.btree_order != def.btree_order { overlay.btree_order } else { base.btree_order },
+        lsm_max_level: if overlay.lsm_max_level != def.lsm_max_level { overlay.lsm_max_level } else { base.lsm_max_level },
+        bloom_false_positive_rate: if overlay.bloom_false_positive_rate != def.bloom_false_positive_rate { overlay.bloom_false_positive_rate } else { base.bloom_false_positive_rate },
+        write_buffer_size: if overlay.write_buffer_size != def.write_buffer_size { overlay.write_buffer_size } else { base.write_buffer_size },
+        compaction_threads: if overlay.compaction_threads != def.compaction_threads { overlay.compaction_threads } else { base.compaction_threads },
     }
 }
 
-fn merge_memory(_base: MemoryConfig, overlay: MemoryConfig) -> MemoryConfig {
+fn merge_memory(base: MemoryConfig, overlay: MemoryConfig) -> MemoryConfig {
+    let def = MemoryConfig::default();
     MemoryConfig {
-        max_memory: overlay.max_memory,
-        pressure_threshold_pct: overlay.pressure_threshold_pct,
-        critical_threshold_pct: overlay.critical_threshold_pct,
-        emergency_reserve: overlay.emergency_reserve,
-        gc_threshold_pct: overlay.gc_threshold_pct,
+        max_memory: if overlay.max_memory != def.max_memory { overlay.max_memory } else { base.max_memory },
+        pressure_threshold_pct: if overlay.pressure_threshold_pct != def.pressure_threshold_pct { overlay.pressure_threshold_pct } else { base.pressure_threshold_pct },
+        critical_threshold_pct: if overlay.critical_threshold_pct != def.critical_threshold_pct { overlay.critical_threshold_pct } else { base.critical_threshold_pct },
+        emergency_reserve: if overlay.emergency_reserve != def.emergency_reserve { overlay.emergency_reserve } else { base.emergency_reserve },
+        gc_threshold_pct: if overlay.gc_threshold_pct != def.gc_threshold_pct { overlay.gc_threshold_pct } else { base.gc_threshold_pct },
     }
 }
 
-fn merge_networking(_base: NetworkingConfig, overlay: NetworkingConfig) -> NetworkingConfig {
+fn merge_networking(base: NetworkingConfig, overlay: NetworkingConfig) -> NetworkingConfig {
+    let def = NetworkingConfig::default();
     NetworkingConfig {
-        listen_address: overlay.listen_address,
-        listen_port: overlay.listen_port,
-        tls_enabled: overlay.tls_enabled,
-        tls_cert_path: overlay.tls_cert_path,
-        tls_key_path: overlay.tls_key_path,
-        unix_socket_path: overlay.unix_socket_path,
-        tcp_nodelay: overlay.tcp_nodelay,
-        keepalive_secs: overlay.keepalive_secs,
-        listeners: overlay.listeners,
-        timeouts: overlay.timeouts,
-        rate_limiting: overlay.rate_limiting,
+        listen_address: if overlay.listen_address != def.listen_address { overlay.listen_address } else { base.listen_address },
+        listen_port: if overlay.listen_port != def.listen_port { overlay.listen_port } else { base.listen_port },
+        tls_enabled: if overlay.tls_enabled != def.tls_enabled { overlay.tls_enabled } else { base.tls_enabled },
+        tls_cert_path: if overlay.tls_cert_path != def.tls_cert_path { overlay.tls_cert_path } else { base.tls_cert_path },
+        tls_key_path: if overlay.tls_key_path != def.tls_key_path { overlay.tls_key_path } else { base.tls_key_path },
+        unix_socket_path: if overlay.unix_socket_path != def.unix_socket_path { overlay.unix_socket_path } else { base.unix_socket_path },
+        tcp_nodelay: if overlay.tcp_nodelay != def.tcp_nodelay { overlay.tcp_nodelay } else { base.tcp_nodelay },
+        keepalive_secs: if overlay.keepalive_secs != def.keepalive_secs { overlay.keepalive_secs } else { base.keepalive_secs },
+        listeners: if overlay.listeners != def.listeners { overlay.listeners } else { base.listeners },
+        timeouts: if overlay.timeouts != def.timeouts { overlay.timeouts } else { base.timeouts },
+        rate_limiting: if overlay.rate_limiting != def.rate_limiting { overlay.rate_limiting } else { base.rate_limiting },
     }
 }
 
-fn merge_logging(_base: LoggingConfig, overlay: LoggingConfig) -> LoggingConfig {
+fn merge_logging(base: LoggingConfig, overlay: LoggingConfig) -> LoggingConfig {
+    let def = LoggingConfig::default();
     LoggingConfig {
-        level: overlay.level,
-        format: overlay.format,
-        file: overlay.file,
+        level: if overlay.level != def.level { overlay.level } else { base.level },
+        format: if overlay.format != def.format { overlay.format } else { base.format },
+        file: if overlay.file != def.file { overlay.file } else { base.file },
     }
 }
 
-fn merge_subsystems(_base: SubsystemsConfig, overlay: SubsystemsConfig) -> SubsystemsConfig {
+fn merge_subsystems(base: SubsystemsConfig, overlay: SubsystemsConfig) -> SubsystemsConfig {
+    let def = SubsystemsConfig::default();
     SubsystemsConfig {
-        enable_sql: overlay.enable_sql,
-        enable_cache: overlay.enable_cache,
-        enable_queue: overlay.enable_queue,
-        enable_scheduler: overlay.enable_scheduler,
-        enable_search: overlay.enable_search,
-        enable_blob: overlay.enable_blob,
-        enable_auth: overlay.enable_auth,
-        enable_dashboard: overlay.enable_dashboard,
+        enable_sql: if overlay.enable_sql != def.enable_sql { overlay.enable_sql } else { base.enable_sql },
+        enable_cache: if overlay.enable_cache != def.enable_cache { overlay.enable_cache } else { base.enable_cache },
+        enable_queue: if overlay.enable_queue != def.enable_queue { overlay.enable_queue } else { base.enable_queue },
+        enable_scheduler: if overlay.enable_scheduler != def.enable_scheduler { overlay.enable_scheduler } else { base.enable_scheduler },
+        enable_search: if overlay.enable_search != def.enable_search { overlay.enable_search } else { base.enable_search },
+        enable_blob: if overlay.enable_blob != def.enable_blob { overlay.enable_blob } else { base.enable_blob },
+        enable_auth: if overlay.enable_auth != def.enable_auth { overlay.enable_auth } else { base.enable_auth },
+        enable_dashboard: if overlay.enable_dashboard != def.enable_dashboard { overlay.enable_dashboard } else { base.enable_dashboard },
     }
 }
 
-fn merge_event(_base: EventConfig, overlay: EventConfig) -> EventConfig {
-    overlay
+fn merge_event(base: EventConfig, overlay: EventConfig) -> EventConfig {
+    let def = EventConfig::default();
+    EventConfig {
+        ordering_shards: if overlay.ordering_shards != def.ordering_shards { overlay.ordering_shards } else { base.ordering_shards },
+        default_queue_capacity: if overlay.default_queue_capacity != def.default_queue_capacity { overlay.default_queue_capacity } else { base.default_queue_capacity },
+        default_max_retries: if overlay.default_max_retries != def.default_max_retries { overlay.default_max_retries } else { base.default_max_retries },
+        dlq_max_entries: if overlay.dlq_max_entries != def.dlq_max_entries { overlay.dlq_max_entries } else { base.dlq_max_entries },
+    }
 }
 
-fn merge_execution(_base: ExecutionConfig, overlay: ExecutionConfig) -> ExecutionConfig {
+fn merge_execution(base: ExecutionConfig, overlay: ExecutionConfig) -> ExecutionConfig {
+    let def = ExecutionConfig::default();
     ExecutionConfig {
-        max_concurrent: overlay.max_concurrent,
-        worker_threads: overlay.worker_threads,
-        execution_timeout_ms: overlay.execution_timeout_ms,
-        max_concurrent_ops: overlay.max_concurrent_ops,
-        pipeline_queue_depth: overlay.pipeline_queue_depth,
-        default_operation_timeout_ms: overlay.default_operation_timeout_ms,
-        max_operation_timeout_ms: overlay.max_operation_timeout_ms,
-        rate_limit_default_per_sec: overlay.rate_limit_default_per_sec,
-        rate_limit_global_per_sec: overlay.rate_limit_global_per_sec,
-        rate_limit_global_burst: overlay.rate_limit_global_burst,
-        rate_limit_user_per_sec: overlay.rate_limit_user_per_sec,
-        rate_limit_user_burst: overlay.rate_limit_user_burst,
-        rate_limit_ip_per_sec: overlay.rate_limit_ip_per_sec,
-        rate_limit_ip_burst: overlay.rate_limit_ip_burst,
-        circuit_breaker_threshold: overlay.circuit_breaker_threshold,
-        circuit_breaker_window_ms: overlay.circuit_breaker_window_ms,
-        circuit_breaker_half_open_timeout_ms: overlay.circuit_breaker_half_open_timeout_ms,
-        circuit_breaker_success_threshold: overlay.circuit_breaker_success_threshold,
-        audit_enabled: overlay.audit_enabled,
-        audit_include_payloads: overlay.audit_include_payloads,
-        audit_max_entry_size: overlay.audit_max_entry_size,
-        idempotency_key_ttl_secs: overlay.idempotency_key_ttl_secs,
-        max_idempotency_keys: overlay.max_idempotency_keys,
-        pipeline_max_retries: overlay.pipeline_max_retries,
-        retry_base_delay_ms: overlay.retry_base_delay_ms,
-        retry_max_delay_ms: overlay.retry_max_delay_ms,
+        max_concurrent: if overlay.max_concurrent != def.max_concurrent { overlay.max_concurrent } else { base.max_concurrent },
+        worker_threads: if overlay.worker_threads != def.worker_threads { overlay.worker_threads } else { base.worker_threads },
+        execution_timeout_ms: if overlay.execution_timeout_ms != def.execution_timeout_ms { overlay.execution_timeout_ms } else { base.execution_timeout_ms },
+        max_concurrent_ops: if overlay.max_concurrent_ops != def.max_concurrent_ops { overlay.max_concurrent_ops } else { base.max_concurrent_ops },
+        pipeline_queue_depth: if overlay.pipeline_queue_depth != def.pipeline_queue_depth { overlay.pipeline_queue_depth } else { base.pipeline_queue_depth },
+        default_operation_timeout_ms: if overlay.default_operation_timeout_ms != def.default_operation_timeout_ms { overlay.default_operation_timeout_ms } else { base.default_operation_timeout_ms },
+        max_operation_timeout_ms: if overlay.max_operation_timeout_ms != def.max_operation_timeout_ms { overlay.max_operation_timeout_ms } else { base.max_operation_timeout_ms },
+        rate_limit_default_per_sec: if overlay.rate_limit_default_per_sec != def.rate_limit_default_per_sec { overlay.rate_limit_default_per_sec } else { base.rate_limit_default_per_sec },
+        rate_limit_global_per_sec: if overlay.rate_limit_global_per_sec != def.rate_limit_global_per_sec { overlay.rate_limit_global_per_sec } else { base.rate_limit_global_per_sec },
+        rate_limit_global_burst: if overlay.rate_limit_global_burst != def.rate_limit_global_burst { overlay.rate_limit_global_burst } else { base.rate_limit_global_burst },
+        rate_limit_user_per_sec: if overlay.rate_limit_user_per_sec != def.rate_limit_user_per_sec { overlay.rate_limit_user_per_sec } else { base.rate_limit_user_per_sec },
+        rate_limit_user_burst: if overlay.rate_limit_user_burst != def.rate_limit_user_burst { overlay.rate_limit_user_burst } else { base.rate_limit_user_burst },
+        rate_limit_ip_per_sec: if overlay.rate_limit_ip_per_sec != def.rate_limit_ip_per_sec { overlay.rate_limit_ip_per_sec } else { base.rate_limit_ip_per_sec },
+        rate_limit_ip_burst: if overlay.rate_limit_ip_burst != def.rate_limit_ip_burst { overlay.rate_limit_ip_burst } else { base.rate_limit_ip_burst },
+        circuit_breaker_threshold: if overlay.circuit_breaker_threshold != def.circuit_breaker_threshold { overlay.circuit_breaker_threshold } else { base.circuit_breaker_threshold },
+        circuit_breaker_window_ms: if overlay.circuit_breaker_window_ms != def.circuit_breaker_window_ms { overlay.circuit_breaker_window_ms } else { base.circuit_breaker_window_ms },
+        circuit_breaker_half_open_timeout_ms: if overlay.circuit_breaker_half_open_timeout_ms != def.circuit_breaker_half_open_timeout_ms { overlay.circuit_breaker_half_open_timeout_ms } else { base.circuit_breaker_half_open_timeout_ms },
+        circuit_breaker_success_threshold: if overlay.circuit_breaker_success_threshold != def.circuit_breaker_success_threshold { overlay.circuit_breaker_success_threshold } else { base.circuit_breaker_success_threshold },
+        audit_enabled: if overlay.audit_enabled != def.audit_enabled { overlay.audit_enabled } else { base.audit_enabled },
+        audit_include_payloads: if overlay.audit_include_payloads != def.audit_include_payloads { overlay.audit_include_payloads } else { base.audit_include_payloads },
+        audit_max_entry_size: if overlay.audit_max_entry_size != def.audit_max_entry_size { overlay.audit_max_entry_size } else { base.audit_max_entry_size },
+        idempotency_key_ttl_secs: if overlay.idempotency_key_ttl_secs != def.idempotency_key_ttl_secs { overlay.idempotency_key_ttl_secs } else { base.idempotency_key_ttl_secs },
+        max_idempotency_keys: if overlay.max_idempotency_keys != def.max_idempotency_keys { overlay.max_idempotency_keys } else { base.max_idempotency_keys },
+        pipeline_max_retries: if overlay.pipeline_max_retries != def.pipeline_max_retries { overlay.pipeline_max_retries } else { base.pipeline_max_retries },
+        retry_base_delay_ms: if overlay.retry_base_delay_ms != def.retry_base_delay_ms { overlay.retry_base_delay_ms } else { base.retry_base_delay_ms },
+        retry_max_delay_ms: if overlay.retry_max_delay_ms != def.retry_max_delay_ms { overlay.retry_max_delay_ms } else { base.retry_max_delay_ms },
     }
 }
 
-fn merge_auth(_base: AuthConfig, overlay: AuthConfig) -> AuthConfig {
-    overlay
+fn merge_auth(base: AuthConfig, overlay: AuthConfig) -> AuthConfig {
+    let def = AuthConfig::default();
+    if overlay == def {
+        return base;
+    }
+    AuthConfig {
+        internal: merge_internal_auth(base.internal, overlay.internal),
+        session: merge_session(base.session, overlay.session),
+    }
 }
 
-fn merge_security(_base: SecurityConfig, overlay: SecurityConfig) -> SecurityConfig {
-    overlay
+fn merge_internal_auth(base: InternalAuthConfig, overlay: InternalAuthConfig) -> InternalAuthConfig {
+    let def = InternalAuthConfig::default();
+    InternalAuthConfig {
+        password_policy: if overlay.password_policy != def.password_policy { overlay.password_policy } else { base.password_policy },
+        lockout: if overlay.lockout != def.lockout { overlay.lockout } else { base.lockout },
+        bcrypt_cost: if overlay.bcrypt_cost != def.bcrypt_cost { overlay.bcrypt_cost } else { base.bcrypt_cost },
+        enable_brute_force_detection: if overlay.enable_brute_force_detection != def.enable_brute_force_detection { overlay.enable_brute_force_detection } else { base.enable_brute_force_detection },
+        mfa: if overlay.mfa != def.mfa { overlay.mfa } else { base.mfa },
+    }
+}
+
+fn merge_session(base: SessionConfig, overlay: SessionConfig) -> SessionConfig {
+    let def = SessionConfig::default();
+    SessionConfig {
+        ttl_seconds: if overlay.ttl_seconds != def.ttl_seconds { overlay.ttl_seconds } else { base.ttl_seconds },
+        max_active_sessions: if overlay.max_active_sessions != def.max_active_sessions { overlay.max_active_sessions } else { base.max_active_sessions },
+        token_length_bytes: if overlay.token_length_bytes != def.token_length_bytes { overlay.token_length_bytes } else { base.token_length_bytes },
+        cache_size: if overlay.cache_size != def.cache_size { overlay.cache_size } else { base.cache_size },
+    }
+}
+
+fn merge_security(base: SecurityConfig, overlay: SecurityConfig) -> SecurityConfig {
+    let def = SecurityConfig::default();
+    if overlay == def {
+        return base;
+    }
+    SecurityConfig {
+        encryption_at_rest: if overlay.encryption_at_rest != def.encryption_at_rest { overlay.encryption_at_rest } else { base.encryption_at_rest },
+    }
+}
+
+fn merge_cache(base: CacheConfig, overlay: CacheConfig) -> CacheConfig {
+    let def = CacheConfig::default();
+    CacheConfig {
+        max_size: if overlay.max_size != def.max_size { overlay.max_size } else { base.max_size },
+        default_ttl_secs: if overlay.default_ttl_secs != def.default_ttl_secs { overlay.default_ttl_secs } else { base.default_ttl_secs },
+        eviction_policy: if overlay.eviction_policy != def.eviction_policy { overlay.eviction_policy } else { base.eviction_policy },
+        backend_type: if overlay.backend_type != def.backend_type { overlay.backend_type } else { base.backend_type },
+        redis_url: if overlay.redis_url != def.redis_url { overlay.redis_url } else { base.redis_url },
+    }
+}
+
+fn merge_blob(base: BlobConfig, overlay: BlobConfig) -> BlobConfig {
+    let def = BlobConfig::default();
+    BlobConfig {
+        chunk_size: if overlay.chunk_size != def.chunk_size { overlay.chunk_size } else { base.chunk_size },
+        max_blob_size: if overlay.max_blob_size != def.max_blob_size { overlay.max_blob_size } else { base.max_blob_size },
+        gc_interval_secs: if overlay.gc_interval_secs != def.gc_interval_secs { overlay.gc_interval_secs } else { base.gc_interval_secs },
+        gc_grace_period_secs: if overlay.gc_grace_period_secs != def.gc_grace_period_secs { overlay.gc_grace_period_secs } else { base.gc_grace_period_secs },
+        data_dir: if overlay.data_dir != def.data_dir { overlay.data_dir } else { base.data_dir },
+        chunk_nesting_depth: if overlay.chunk_nesting_depth != def.chunk_nesting_depth { overlay.chunk_nesting_depth } else { base.chunk_nesting_depth },
+    }
+}
+
+fn merge_search(base: SearchConfig, overlay: SearchConfig) -> SearchConfig {
+    let def = SearchConfig::default();
+    SearchConfig {
+        default_limit: if overlay.default_limit != def.default_limit { overlay.default_limit } else { base.default_limit },
+        max_limit: if overlay.max_limit != def.max_limit { overlay.max_limit } else { base.max_limit },
+        bm25_k1: if overlay.bm25_k1 != def.bm25_k1 { overlay.bm25_k1 } else { base.bm25_k1 },
+        bm25_b: if overlay.bm25_b != def.bm25_b { overlay.bm25_b } else { base.bm25_b },
+        fuzzy_max_distance: if overlay.fuzzy_max_distance != def.fuzzy_max_distance { overlay.fuzzy_max_distance } else { base.fuzzy_max_distance },
+        highlight_snippet_len: if overlay.highlight_snippet_len != def.highlight_snippet_len { overlay.highlight_snippet_len } else { base.highlight_snippet_len },
+        highlight_max_snippets: if overlay.highlight_max_snippets != def.highlight_max_snippets { overlay.highlight_max_snippets } else { base.highlight_max_snippets },
+        refresh_interval_ms: if overlay.refresh_interval_ms != def.refresh_interval_ms { overlay.refresh_interval_ms } else { base.refresh_interval_ms },
+        merge_segment_threshold: if overlay.merge_segment_threshold != def.merge_segment_threshold { overlay.merge_segment_threshold } else { base.merge_segment_threshold },
+    }
+}
+
+fn merge_sql(base: SQLConfig, overlay: SQLConfig) -> SQLConfig {
+    let def = SQLConfig::default();
+    SQLConfig {
+        max_batch_size: if overlay.max_batch_size != def.max_batch_size { overlay.max_batch_size } else { base.max_batch_size },
+        max_columns: if overlay.max_columns != def.max_columns { overlay.max_columns } else { base.max_columns },
+        default_limit: if overlay.default_limit != def.default_limit { overlay.default_limit } else { base.default_limit },
+    }
+}
+
+fn merge_queue(base: QueueConfig, overlay: QueueConfig) -> QueueConfig {
+    let def = QueueConfig::default();
+    QueueConfig {
+        max_queues: if overlay.max_queues != def.max_queues { overlay.max_queues } else { base.max_queues },
+        max_messages_per_queue: if overlay.max_messages_per_queue != def.max_messages_per_queue { overlay.max_messages_per_queue } else { base.max_messages_per_queue },
+        max_message_size: if overlay.max_message_size != def.max_message_size { overlay.max_message_size } else { base.max_message_size },
+        default_visibility_timeout_secs: if overlay.default_visibility_timeout_secs != def.default_visibility_timeout_secs { overlay.default_visibility_timeout_secs } else { base.default_visibility_timeout_secs },
+        message_ttl_secs: if overlay.message_ttl_secs != def.message_ttl_secs { overlay.message_ttl_secs } else { base.message_ttl_secs },
+        max_receive_count: if overlay.max_receive_count != def.max_receive_count { overlay.max_receive_count } else { base.max_receive_count },
+        scanner_interval_ms: if overlay.scanner_interval_ms != def.scanner_interval_ms { overlay.scanner_interval_ms } else { base.scanner_interval_ms },
+        backpressure_threshold: if overlay.backpressure_threshold != def.backpressure_threshold { overlay.backpressure_threshold } else { base.backpressure_threshold },
+        dlq_max_entries: if overlay.dlq_max_entries != def.dlq_max_entries { overlay.dlq_max_entries } else { base.dlq_max_entries },
+        dlq_max_retries: if overlay.dlq_max_retries != def.dlq_max_retries { overlay.dlq_max_retries } else { base.dlq_max_retries },
+        enable_dlq: if overlay.enable_dlq != def.enable_dlq { overlay.enable_dlq } else { base.enable_dlq },
+        enable_scanners: if overlay.enable_scanners != def.enable_scanners { overlay.enable_scanners } else { base.enable_scanners },
+    }
+}
+
+fn merge_scheduler(base: SchedulerConfig, overlay: SchedulerConfig) -> SchedulerConfig {
+    let def = SchedulerConfig::default();
+    SchedulerConfig {
+        time_wheel_tick_ms: if overlay.time_wheel_tick_ms != def.time_wheel_tick_ms { overlay.time_wheel_tick_ms } else { base.time_wheel_tick_ms },
+        time_wheel_slots: if overlay.time_wheel_slots != def.time_wheel_slots { overlay.time_wheel_slots } else { base.time_wheel_slots },
+        priority_queue_tick_ms: if overlay.priority_queue_tick_ms != def.priority_queue_tick_ms { overlay.priority_queue_tick_ms } else { base.priority_queue_tick_ms },
+        max_jobs_per_queue: if overlay.max_jobs_per_queue != def.max_jobs_per_queue { overlay.max_jobs_per_queue } else { base.max_jobs_per_queue },
+        max_concurrent_jobs: if overlay.max_concurrent_jobs != def.max_concurrent_jobs { overlay.max_concurrent_jobs } else { base.max_concurrent_jobs },
+        default_job_timeout_secs: if overlay.default_job_timeout_secs != def.default_job_timeout_secs { overlay.default_job_timeout_secs } else { base.default_job_timeout_secs },
+        default_max_retries: if overlay.default_max_retries != def.default_max_retries { overlay.default_max_retries } else { base.default_max_retries },
+        default_retry_delay_secs: if overlay.default_retry_delay_secs != def.default_retry_delay_secs { overlay.default_retry_delay_secs } else { base.default_retry_delay_secs },
+        enable_startup_recovery: if overlay.enable_startup_recovery != def.enable_startup_recovery { overlay.enable_startup_recovery } else { base.enable_startup_recovery },
+        enable_catch_up: if overlay.enable_catch_up != def.enable_catch_up { overlay.enable_catch_up } else { base.enable_catch_up },
+    }
 }
 
 #[cfg(test)]

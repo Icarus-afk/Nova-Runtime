@@ -107,6 +107,16 @@ impl MemTable {
         })
     }
 
+    pub fn iter_with_tombstones(&self) -> impl Iterator<Item = (Key, Option<Value>)> + '_ {
+        self.data.iter().map(|(k, entry)| {
+            if entry.flags & 0x01 != 0 {
+                (Key::new(k.clone()), None)
+            } else {
+                (Key::new(k.clone()), Some(entry.value.clone()))
+            }
+        })
+    }
+
     pub fn set_immutable(&mut self) {
         self.immutable = true;
     }
@@ -270,6 +280,16 @@ struct DataBlockHeader {
 
 impl SSTable {
     pub fn create(dir: &Path, id: u64, level: u8, entries: Vec<(Key, Value)>) -> Result<Self> {
+        let opt: Vec<(Key, Option<Value>)> = entries.into_iter().map(|(k, v)| (k, Some(v))).collect();
+        Self::create_with_tombstones(dir, id, level, opt)
+    }
+
+    pub fn create_with_tombstones(
+        dir: &Path,
+        id: u64,
+        level: u8,
+        entries: Vec<(Key, Option<Value>)>,
+    ) -> Result<Self> {
         fs::create_dir_all(dir)?;
         let filename = format!("lsm_{:06}_l{}.sst", id, level);
         let path = dir.join(&filename);
@@ -282,7 +302,7 @@ impl SSTable {
 
         let mut bloom = BloomFilter::new(entries.len() as u32, DEFAULT_BLOOM_BITS_PER_KEY);
         let mut data_blocks: Vec<DataBlockHeader> = Vec::new();
-        let mut current_block_data: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut current_block_data: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
         let mut current_block_size = 0usize;
         let mut data_offset = 0u64;
 
@@ -295,15 +315,18 @@ impl SSTable {
             .map(|(k, _)| k.clone())
             .unwrap_or_else(|| Key::new(vec![]));
 
-        for (key, value) in &entries {
+        for (key, value_opt) in &entries {
             bloom.insert(key.as_bytes());
-            let entry_len = 4 + key.len() + 4 + value.len();
+            let val_len = value_opt.as_ref().map(|v| v.len()).unwrap_or(0);
+            // tombstone encoded as 4-byte 0xFFFFFFFF length, no value bytes
+            let entry_len = 4 + key.len() + 4 + val_len;
             if current_block_size + entry_len > DATA_BLOCK_TARGET_SIZE
                 && !current_block_data.is_empty()
             {
                 let first_k = current_block_data.first().unwrap().0.clone();
                 let last_k = current_block_data.last().unwrap().0.clone();
-                let compressed = Self::compress_block(&current_block_data)?;
+                let compressed =
+                    Self::compress_block_with_tombstones(&current_block_data)?;
                 let uncompressed_len = current_block_size as u64;
                 let block_offset = data_offset;
                 let block_len = compressed.len() as u64;
@@ -322,14 +345,17 @@ impl SSTable {
                 current_block_data.clear();
                 current_block_size = 0;
             }
-            current_block_data.push((key.as_bytes().to_vec(), value.as_bytes().to_vec()));
+            current_block_data.push((
+                key.as_bytes().to_vec(),
+                value_opt.as_ref().map(|v| v.as_bytes().to_vec()),
+            ));
             current_block_size += entry_len;
         }
 
         if !current_block_data.is_empty() {
             let first_k = current_block_data.first().unwrap().0.clone();
             let last_k = current_block_data.last().unwrap().0.clone();
-            let compressed = Self::compress_block(&current_block_data)?;
+            let compressed = Self::compress_block_with_tombstones(&current_block_data)?;
             let uncompressed_len = current_block_size as u64;
 
             file.seek(SeekFrom::Start(data_offset))?;
@@ -401,6 +427,7 @@ impl SSTable {
         })
     }
 
+    #[allow(dead_code)]
     fn compress_block(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
         for (key, value) in entries {
@@ -412,6 +439,22 @@ impl SSTable {
         compress_data(&buf, CompressionCodec::Snappy)
     }
 
+    fn compress_block_with_tombstones(entries: &[(Vec<u8>, Option<Vec<u8>>)]) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        for (key, value_opt) in entries {
+            buf.extend_from_slice(&(key.len() as u32).to_le_bytes());
+            buf.extend_from_slice(key);
+            if let Some(value) = value_opt {
+                buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+                buf.extend_from_slice(value);
+            } else {
+                buf.extend_from_slice(&u32::MAX.to_le_bytes());
+            }
+        }
+        compress_data(&buf, CompressionCodec::Snappy)
+    }
+
+    #[allow(dead_code)]
     fn decompress_block(data: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let raw = decompress_data(data, CompressionCodec::Snappy)?;
         let mut entries = Vec::new();
@@ -430,14 +473,57 @@ impl SSTable {
             if off + 4 > raw.len() {
                 break;
             }
-            let val_len = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap()) as usize;
+            let val_len_raw = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
             off += 4;
+            if val_len_raw == u32::MAX {
+                // tombstone sentinel — decode as empty but caller should treat as tombstone.
+                // For backward compat, expose as empty value; tombstone-aware path uses separate decoder.
+                entries.push((key, vec![]));
+                continue;
+            }
+            let val_len = val_len_raw as usize;
             if off + val_len > raw.len() {
                 break;
             }
             let value = raw[off..off + val_len].to_vec();
             off += val_len;
             entries.push((key, value));
+        }
+        Ok(entries)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn decompress_block_with_tombstones(data: &[u8]) -> Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
+        let raw = decompress_data(data, CompressionCodec::Snappy)?;
+        let mut entries = Vec::new();
+        let mut off = 0;
+        while off < raw.len() {
+            if off + 4 > raw.len() {
+                break;
+            }
+            let key_len = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap()) as usize;
+            off += 4;
+            if off + key_len > raw.len() {
+                break;
+            }
+            let key = raw[off..off + key_len].to_vec();
+            off += key_len;
+            if off + 4 > raw.len() {
+                break;
+            }
+            let val_len_raw = u32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
+            off += 4;
+            if val_len_raw == u32::MAX {
+                entries.push((key, None));
+                continue;
+            }
+            let val_len = val_len_raw as usize;
+            if off + val_len > raw.len() {
+                break;
+            }
+            let value = raw[off..off + val_len].to_vec();
+            off += val_len;
+            entries.push((key, Some(value)));
         }
         Ok(entries)
     }
@@ -551,7 +637,8 @@ impl SSTable {
         })
     }
 
-    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+    /// Returns `Some(Some(v))` for live entry, `Some(None)` for tombstone, `None` if not in this SSTable.
+    pub fn get_with_tombstone(&self, key: &Key) -> Result<Option<Option<Value>>> {
         if !self.bloom_filter.may_contain(key.as_bytes()) {
             return Ok(None);
         }
@@ -595,10 +682,14 @@ impl SSTable {
                 file.seek(SeekFrom::Start(block_off))?;
                 let mut block_data = vec![0u8; block_len as usize];
                 file.read_exact(&mut block_data)?;
-                let entries = Self::decompress_block(&block_data)?;
-                for (ek, ev) in entries {
+                let entries = Self::decompress_block_with_tombstones(&block_data)?;
+                for (ek, ev_opt) in entries {
                     if ek == key.as_bytes() {
-                        return Ok(Some(Value::new(ev)));
+                        if let Some(ev) = ev_opt {
+                            return Ok(Some(Some(Value::new(ev))));
+                        } else {
+                            return Ok(Some(None));
+                        }
                     }
                 }
             }
@@ -606,7 +697,18 @@ impl SSTable {
         Ok(None)
     }
 
-    pub fn scan(&self, range: &std::ops::Range<Key>) -> Result<Vec<(Key, Value)>> {
+    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+        match self.get_with_tombstone(key)? {
+            Some(Some(v)) => Ok(Some(v)),
+            Some(None) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    pub fn scan_with_tombstones(
+        &self,
+        range: &std::ops::Range<Key>,
+    ) -> Result<Vec<(Key, Option<Value>)>> {
         let mut results = Vec::new();
         let mut file = File::open(&self.path)?;
         let file_size = file.metadata()?.len();
@@ -654,14 +756,25 @@ impl SSTable {
             file.seek(SeekFrom::Start(block_off))?;
             let mut block_data = vec![0u8; block_len as usize];
             file.read_exact(&mut block_data)?;
-            let entries = Self::decompress_block(&block_data)?;
-            for (ek, ev) in entries {
+            let entries = Self::decompress_block_with_tombstones(&block_data)?;
+            for (ek, ev_opt) in entries {
                 if ek.as_slice() >= range.start.as_bytes() && ek.as_slice() < range.end.as_bytes() {
-                    results.push((Key::new(ek), Value::new(ev)));
+                    match ev_opt {
+                        Some(ev) => results.push((Key::new(ek), Some(Value::new(ev)))),
+                        None => results.push((Key::new(ek), None)),
+                    }
                 }
             }
         }
         Ok(results)
+    }
+
+    pub fn scan(&self, range: &std::ops::Range<Key>) -> Result<Vec<(Key, Value)>> {
+        let with = self.scan_with_tombstones(range)?;
+        Ok(with
+            .into_iter()
+            .filter_map(|(k, v_opt)| v_opt.map(|v| (k, v)))
+            .collect())
     }
 }
 

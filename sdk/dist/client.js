@@ -25,8 +25,7 @@ class TokenAuthProvider {
     }
 }
 class RefreshAuthProvider {
-    constructor(config, httpClient, refreshToken) {
-        this.config = config;
+    constructor(_config, httpClient, refreshToken) {
         this.httpClient = httpClient;
         this.accessToken = null;
         this.expiresAt = 0;
@@ -61,16 +60,12 @@ class RefreshAuthProvider {
         try {
             const response = await this.httpClient.request({
                 method: 'POST',
-                path: '/auth/token',
+                path: '/auth/refresh',
                 body: {
-                    grant_type: 'client_credentials',
-                    client_id: this.config.clientId,
-                    client_secret: this.config.clientSecret,
                     refresh_token: this.refreshTokenValue || undefined,
                 },
             });
             this.accessToken = response.data.access_token;
-            this.refreshTokenValue = response.data.refresh_token ?? this.refreshTokenValue;
             this.expiresAt = Date.now() + response.data.expires_in * 1000;
             return true;
         }
@@ -128,13 +123,34 @@ class FetchHttpClient {
             const signal = req.signal ? combineAbortSignals(req.signal, controller.signal) : controller.signal;
             const startTime = Date.now();
             try {
-                const body = req.body !== undefined ? JSON.stringify(req.body) : undefined;
+                // Detect FormData / Blob / Buffer / ArrayBuffer etc. to avoid JSON stringify
+                let body = undefined;
+                const isFormData = typeof globalThis.FormData !== 'undefined' && req.body instanceof globalThis.FormData;
+                const isBlob = typeof globalThis.Blob !== 'undefined' && req.body instanceof globalThis.Blob;
+                const isBuffer = typeof globalThis.Buffer !== 'undefined' && typeof req.body?.byteLength === 'number' && req.body instanceof Uint8Array;
+                const isArrayBuffer = req.body instanceof ArrayBuffer;
+                if (req.body !== undefined) {
+                    if (isFormData || isBlob || isBuffer || isArrayBuffer || (typeof req.body === 'object' && req.body instanceof Uint8Array)) {
+                        body = req.body;
+                        // Remove default JSON content-type for multipart so fetch sets boundary automatically
+                        if (isFormData && headers['Content-Type']) {
+                            delete headers['Content-Type'];
+                            delete headers['content-type'];
+                        }
+                    }
+                    else if (typeof req.body === 'string' || req.body instanceof String) {
+                        body = req.body;
+                    }
+                    else {
+                        body = JSON.stringify(req.body);
+                    }
+                }
                 const fetchInit = {
                     method: req.method,
                     headers,
                     signal,
                 };
-                if (body) {
+                if (body !== undefined) {
                     fetchInit.body = body;
                 }
                 const response = await (0, cross_fetch_1.default)(url, fetchInit);

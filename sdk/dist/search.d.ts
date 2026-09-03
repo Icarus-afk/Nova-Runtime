@@ -11,12 +11,17 @@ export declare class SearchClient {
         highlight?: string[];
         minScore?: number;
         explain?: boolean;
+        limit?: number;
+        offset?: number;
     }): Promise<SearchResponse<T>>;
-    suggest(index: string, prefix: string, options?: {
+    suggest(_index: string, _prefix: string, _options?: {
         field?: string;
         size?: number;
     }): Promise<Suggestion[]>;
-    listIndexes(options?: PaginationInput): Promise<Connection<SearchIndex>>;
+    listIndexes(options?: PaginationInput & {
+        limit?: number;
+        offset?: number;
+    }): Promise<Connection<SearchIndex>>;
     getIndex(name: string): Promise<SearchIndex>;
     createIndex(input: CreateIndexInput): Promise<SearchIndex>;
     deleteIndex(name: string): Promise<void>;
@@ -32,7 +37,16 @@ export declare class SearchClient {
         failedCount: number;
         errors?: string[];
     }>;
-    deleteDocument(index: string, id: string): Promise<void>;
+    addDocuments<T = Record<string, unknown>>(index: string, documents: T[]): Promise<{
+        status: string;
+        count: number;
+    }>;
+    deleteDocument(_index: string, _id: string): Promise<void>;
     getStats(): Promise<SearchStats>;
+    getIndexStats(name: string): Promise<{
+        num_docs: number;
+        num_terms: number;
+        field_count: number;
+    }>;
     listIndexesIterator(): AsyncIterable<SearchIndex>;
 }

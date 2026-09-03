@@ -128,7 +128,7 @@ async fn sql_query(
             if truncated {
                 rows.truncate(limit);
             }
-            let is_truncated = truncated || rows.len() == limit;
+            let is_truncated = truncated;
             Ok(Json(json!({
                 "columns": column_names,
                 "column_names": column_names,

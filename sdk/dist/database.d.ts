@@ -7,13 +7,16 @@ export declare class DatabaseClient {
         timeoutMs?: number;
         maxRows?: number;
         fetchSize?: number;
+        limit?: number;
     }): Promise<QueryResult<T>>;
-    execute(sql: string, params?: unknown[], options?: {
+    execute(sql: string, params?: unknown[], _options?: {
         timeoutMs?: number;
         dryRun?: boolean;
     }): Promise<{
         affectedRows: number;
         executionTimeMs: number;
+        affected_rows?: number;
+        execution_time_ms?: number;
         lastInsertedId?: string;
         warnings?: string[];
     }>;
@@ -21,10 +24,12 @@ export declare class DatabaseClient {
         schema?: string;
         pattern?: string;
         pagination?: PaginationInput;
+        limit?: number;
+        offset?: number;
     }): Promise<Connection<TableInfo>>;
     getTable(name: string): Promise<TableInfo>;
     createTable(input: CreateTableInput): Promise<TableInfo>;
-    dropTable(name: string, ifExists?: boolean): Promise<void>;
+    dropTable(name: string, _ifExists?: boolean): Promise<void>;
     explain(sql: string, params?: unknown[]): Promise<{
         plan: unknown;
         estimatedRows: number;

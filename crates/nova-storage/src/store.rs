@@ -193,6 +193,7 @@ impl Store {
     }
 
     pub fn close(&self) -> Result<()> {
+        self.flush_memtable()?;
         self.flush()?;
         let mut wal_guard = self.wal.lock();
         if let Some(mut w) = wal_guard.take() {
@@ -211,8 +212,8 @@ impl Store {
 
         let sstables = self.sstables.read();
         for sstable in sstables.iter().rev() {
-            if let Ok(Some(val)) = sstable.get(key) {
-                return Ok(Some(val));
+            if let Ok(Some(opt)) = sstable.get_with_tombstone(key) {
+                return Ok(opt);
             }
         }
         drop(sstables);
@@ -267,34 +268,59 @@ impl Store {
 
     pub fn scan(&self, range: Range<Key>) -> Result<Vec<(Key, Value)>> {
         let mut results = Vec::new();
-        let mt = self.memtable.read();
-        for (key, value) in mt.iter() {
-            if key.as_bytes() >= range.start.as_bytes() && key.as_bytes() < range.end.as_bytes() {
-                results.push((key, value));
+        let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        let mut tombstones: std::collections::BTreeSet<Vec<u8>> =
+            std::collections::BTreeSet::new();
+
+        {
+            let mt = self.memtable.read();
+            for (key, opt) in mt.iter_with_tombstones() {
+                if key.as_bytes() < range.start.as_bytes()
+                    || key.as_bytes() >= range.end.as_bytes()
+                {
+                    continue;
+                }
+                let kb = key.as_bytes().to_vec();
+                if tombstones.contains(&kb) || seen.contains(&kb) {
+                    continue;
+                }
+                if let Some(value) = opt {
+                    seen.insert(kb);
+                    results.push((key, value));
+                } else {
+                    tombstones.insert(kb);
+                }
             }
         }
-        drop(mt);
 
-        let mut seen: std::collections::BTreeSet<Vec<u8>> =
-            results.iter().map(|(k, _)| k.as_bytes().to_vec()).collect();
-
-        let sstables = self.sstables.read();
-        for sstable in sstables.iter() {
-            if let Ok(sst_results) = sstable.scan(&range) {
-                for (k, v) in sst_results {
-                    if seen.insert(k.as_bytes().to_vec()) {
-                        results.push((k, v));
+        {
+            let sstables = self.sstables.read();
+            for sstable in sstables.iter().rev() {
+                if let Ok(sst_results) = sstable.scan_with_tombstones(&range) {
+                    for (k, opt) in sst_results {
+                        let kb = k.as_bytes().to_vec();
+                        if tombstones.contains(&kb) || seen.contains(&kb) {
+                            continue;
+                        }
+                        if let Some(v) = opt {
+                            seen.insert(kb);
+                            results.push((k, v));
+                        } else {
+                            tombstones.insert(kb);
+                        }
                     }
                 }
             }
         }
-        drop(sstables);
 
-        let btree_results = self.btree.scan(&self.page_cache, range)?;
+        let btree_results = self.btree.scan(&self.page_cache, range.clone())?;
         for (k, v) in btree_results {
-            if seen.insert(k.as_bytes().to_vec()) {
-                results.push((k, v));
+            let kb = k.as_bytes().to_vec();
+            if tombstones.contains(&kb) || seen.contains(&kb) {
+                continue;
             }
+            seen.insert(kb);
+            results.push((k, v));
         }
         results.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         Ok(results)
@@ -432,13 +458,13 @@ impl Store {
         if mt.is_empty() {
             return Ok(());
         }
-        let entries: Vec<(Key, Value)> = mt.iter().collect();
+        let entries: Vec<(Key, Option<Value>)> = mt.iter_with_tombstones().collect();
         if entries.is_empty() {
             return Ok(());
         }
         let id = self.next_page_id.fetch_add(1, Ordering::Relaxed);
         let sst_dir = self.store_dir.join("sstables");
-        let sstable = SSTable::create(&sst_dir, id, 0, entries)?;
+        let sstable = SSTable::create_with_tombstones(&sst_dir, id, 0, entries)?;
         {
             let mut sstables = self.sstables.write();
             sstables.push(sstable);
@@ -453,12 +479,22 @@ impl Store {
             return Ok(());
         }
         let all_entries: Vec<(Key, Value)> = {
-            use std::collections::BTreeMap;
+            use std::collections::{BTreeMap, BTreeSet};
             let mut merged: BTreeMap<Vec<u8>, Value> = BTreeMap::new();
-            for sst in sstables.iter() {
-                let sst_entries = sst.scan(&(Key::new(vec![])..Key::new(vec![0xFF; 256])))?;
-                for (key, value) in sst_entries {
-                    merged.insert(key.as_bytes().to_vec(), value);
+            let mut tombstones: BTreeSet<Vec<u8>> = BTreeSet::new();
+            for sst in sstables.iter().rev() {
+                let sst_entries =
+                    sst.scan_with_tombstones(&(Key::new(vec![])..Key::new(vec![0xFF; 256])))?;
+                for (key, opt) in sst_entries {
+                    let kb = key.as_bytes().to_vec();
+                    if merged.contains_key(&kb) || tombstones.contains(&kb) {
+                        continue;
+                    }
+                    if let Some(value) = opt {
+                        merged.insert(kb, value);
+                    } else {
+                        tombstones.insert(kb);
+                    }
                 }
             }
             merged.into_iter().map(|(k, v)| (Key::new(k), v)).collect()

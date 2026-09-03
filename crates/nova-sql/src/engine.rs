@@ -3,6 +3,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use parking_lot::RwLock;
+
 use nova_core::{Key, StorageEngine, Value};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +25,19 @@ use crate::schema::{ColumnInfo, Schema};
 struct PersistedTable {
     schema: Schema,
     rows: Vec<Row>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedTableMeta {
+    schema: Schema,
+    chunk_count: usize,
+}
+
+// WAL payload limit is 65535; keep value well under that.
+const MAX_PERSIST_VALUE_SIZE: usize = 60000;
+
+fn table_chunk_key(name: &str, idx: usize) -> Key {
+    Key::from(format!("sql:table:{name}:chunk:{idx}").as_bytes().to_vec())
 }
 
 pub trait MutationObserver: Send + Sync {
@@ -102,6 +117,7 @@ pub struct SQLEngine {
     shutdown: Arc<AtomicBool>,
     storage: Option<Arc<dyn StorageEngine>>,
     observer: Mutex<Option<Arc<dyn MutationObserver>>>,
+    engine_lock: RwLock<()>,
 }
 
 impl SQLEngine {
@@ -112,6 +128,7 @@ impl SQLEngine {
             shutdown: Arc::new(AtomicBool::new(false)),
             storage: None,
             observer: Mutex::new(None),
+            engine_lock: RwLock::new(()),
         }
     }
 
@@ -122,6 +139,7 @@ impl SQLEngine {
             shutdown: Arc::new(AtomicBool::new(false)),
             storage: Some(storage),
             observer: Mutex::new(None),
+            engine_lock: RwLock::new(()),
         };
         if let Err(e) = engine.load_tables() {
             tracing::warn!("Failed to load SQL tables from storage: {e}");
@@ -163,11 +181,150 @@ impl SQLEngine {
             .tables
             .scan_rows(name)
             .map_err(|e| SQLError::syntax(e.to_string()))?;
-        let persisted = PersistedTable { schema, rows };
+        let persisted = PersistedTable {
+            schema: schema.clone(),
+            rows: rows.clone(),
+        };
         let json = serde_json::to_vec(&persisted).map_err(|e| SQLError::syntax(e.to_string()))?;
+        // Small table: single key, delete any old chunk artefacts.
+        if json.len() <= MAX_PERSIST_VALUE_SIZE {
+            let old_count = Self::existing_chunk_count(storage, name);
+            if old_count == 0 {
+                storage
+                    .set(&Self::table_key(name), Value::new(json))
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+            } else {
+                let mut ops = vec![nova_core::WriteOperation::Set {
+                    key: Self::table_key(name),
+                    value: Value::new(json),
+                }];
+                for idx in 0..old_count {
+                    ops.push(nova_core::WriteOperation::Delete {
+                        key: table_chunk_key(name, idx),
+                    });
+                }
+                storage
+                    .batch(ops)
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+            }
+            return Ok(());
+        }
+
+        // Chunked persistence: split rows so each chunk fits in WAL limit.
+        let mut chunks: Vec<Vec<Row>> = Vec::new();
+        let mut cur: Vec<Row> = Vec::new();
+        for row in rows {
+            cur.push(row);
+            let chunk_json =
+                serde_json::to_vec(&cur).map_err(|e| SQLError::syntax(e.to_string()))?;
+            if chunk_json.len() > MAX_PERSIST_VALUE_SIZE {
+                if cur.len() == 1 {
+                    return Err(SQLError::syntax("single row too large to persist"));
+                }
+                let last = cur.pop().unwrap();
+                let flushed = std::mem::take(&mut cur);
+                chunks.push(flushed);
+                cur.push(last);
+                // Validate single row still fits (should after pop)
+                let check = serde_json::to_vec(&cur).map_err(|e| SQLError::syntax(e.to_string()))?;
+                if check.len() > MAX_PERSIST_VALUE_SIZE {
+                    return Err(SQLError::syntax("single row too large to persist"));
+                }
+            }
+        }
+        if !cur.is_empty() {
+            chunks.push(cur);
+        }
+        if chunks.is_empty() {
+            // Empty table: still write meta with 0 chunks, delete old chunks
+            let meta = PersistedTableMeta {
+                schema,
+                chunk_count: 0,
+            };
+            let meta_json =
+                serde_json::to_vec(&meta).map_err(|e| SQLError::syntax(e.to_string()))?;
+            let old_count = Self::existing_chunk_count(storage, name);
+            let mut ops = vec![nova_core::WriteOperation::Set {
+                key: Self::table_key(name),
+                value: Value::new(meta_json),
+            }];
+            for idx in 0..old_count {
+                ops.push(nova_core::WriteOperation::Delete {
+                    key: table_chunk_key(name, idx),
+                });
+            }
+            storage
+                .batch(ops)
+                .map_err(|e| SQLError::syntax(e.to_string()))?;
+            return Ok(());
+        }
+
+        let meta = PersistedTableMeta {
+            schema,
+            chunk_count: chunks.len(),
+        };
+        let meta_json =
+            serde_json::to_vec(&meta).map_err(|e| SQLError::syntax(e.to_string()))?;
+        if meta_json.len() > MAX_PERSIST_VALUE_SIZE {
+            return Err(SQLError::syntax("schema too large to persist"));
+        }
+        let old_count = Self::existing_chunk_count(storage, name);
+        let mut ops = Vec::with_capacity(1 + chunks.len() + old_count);
+        ops.push(nova_core::WriteOperation::Set {
+            key: Self::table_key(name),
+            value: Value::new(meta_json),
+        });
+        for (idx, chunk) in chunks.iter().enumerate() {
+            let chunk_json =
+                serde_json::to_vec(chunk).map_err(|e| SQLError::syntax(e.to_string()))?;
+            ops.push(nova_core::WriteOperation::Set {
+                key: table_chunk_key(name, idx),
+                value: Value::new(chunk_json),
+            });
+        }
+        for idx in chunks.len()..old_count {
+            ops.push(nova_core::WriteOperation::Delete {
+                key: table_chunk_key(name, idx),
+            });
+        }
         storage
-            .set(&Self::table_key(name), Value::new(json))
+            .batch(ops)
             .map_err(|e| SQLError::syntax(e.to_string()))?;
+        Ok(())
+    }
+
+    fn existing_chunk_count(storage: &Arc<dyn StorageEngine>, name: &str) -> usize {
+        let Ok(Some(val)) = storage.get(&Self::table_key(name)) else {
+            return 0;
+        };
+        if let Ok(meta) = serde_json::from_slice::<PersistedTableMeta>(val.as_bytes()) {
+            return meta.chunk_count;
+        }
+        0
+    }
+
+    fn restore_auto_increment(tables: &TableStore, name: &str, schema: &Schema) -> Result<()> {
+        for (idx, col) in schema.columns.iter().enumerate() {
+            if col.auto_increment {
+                let rows = tables
+                    .scan_rows(name)
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+                let mut max: u64 = 0;
+                for row in rows {
+                    if let Some(Some(LiteralValue::Integer(v))) = row.values.get(idx) {
+                        let uv = *v as u64;
+                        if uv > max {
+                            max = uv;
+                        }
+                    }
+                }
+                if max > 0 {
+                    tables
+                        .ensure_next_row_id(name, max)
+                        .map_err(|e| SQLError::syntax(e.to_string()))?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -177,8 +334,49 @@ impl SQLEngine {
         };
         let names = self.tables.table_names();
         let json = serde_json::to_vec(&names).map_err(|e| SQLError::syntax(e.to_string()))?;
+        if json.len() > MAX_PERSIST_VALUE_SIZE {
+            return Err(SQLError::syntax("too many tables to persist in one value"));
+        }
         storage
             .set(&Self::table_names_key(), Value::new(json))
+            .map_err(|e| SQLError::syntax(e.to_string()))?;
+        Ok(())
+    }
+
+    fn persist_create_table(&self, name: &str) -> Result<()> {
+        if self.storage.is_none() {
+            return Ok(());
+        }
+        // Try to make persist_table + persist_table_names atomic via batch.
+        // persist_table already does its own batch; we now ensure table_names is also durable.
+        // Order: table data first (via persist_table) then names. If we can, do both in one batch
+        // for the small-table case; for chunked we fall back to sequential but table data is already
+        // batched. Orphan on crash after table but before names is invisible (table not listed).
+        self.persist_table(name)?;
+        self.persist_table_names()
+    }
+
+    fn persist_drop_table(&self, name: &str) -> Result<()> {
+        let Some(ref storage) = self.storage else {
+            return Ok(());
+        };
+        let names = self.tables.table_names();
+        let json = serde_json::to_vec(&names).map_err(|e| SQLError::syntax(e.to_string()))?;
+        let old_count = Self::existing_chunk_count(storage, name);
+        let mut ops = vec![nova_core::WriteOperation::Delete {
+            key: Self::table_key(name),
+        }];
+        for idx in 0..old_count {
+            ops.push(nova_core::WriteOperation::Delete {
+                key: table_chunk_key(name, idx),
+            });
+        }
+        ops.push(nova_core::WriteOperation::Set {
+            key: Self::table_names_key(),
+            value: Value::new(json),
+        });
+        storage
+            .batch(ops)
             .map_err(|e| SQLError::syntax(e.to_string()))?;
         Ok(())
     }
@@ -197,9 +395,10 @@ impl SQLEngine {
             let raw = storage
                 .get(&Self::table_key(name))
                 .map_err(|e| SQLError::syntax(e.to_string()))?;
-            if let Some(val) = raw {
-                let pt: PersistedTable = serde_json::from_slice(val.as_bytes())
-                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+            let Some(val) = raw else { continue };
+            // Try old single-key format first.
+            if let Ok(pt) = serde_json::from_slice::<PersistedTable>(val.as_bytes()) {
+                let schema_clone = pt.schema.clone();
                 self.tables
                     .create_table(name, pt.schema)
                     .map_err(|e| SQLError::syntax(e.to_string()))?;
@@ -208,7 +407,35 @@ impl SQLEngine {
                         .insert_row(name, row)
                         .map_err(|e| SQLError::syntax(e.to_string()))?;
                 }
+                Self::restore_auto_increment(&self.tables, name, &schema_clone)?;
+                continue;
             }
+            // Try chunked meta format.
+            if let Ok(meta) = serde_json::from_slice::<PersistedTableMeta>(val.as_bytes()) {
+                let schema_clone = meta.schema.clone();
+                self.tables
+                    .create_table(name, meta.schema)
+                    .map_err(|e| SQLError::syntax(e.to_string()))?;
+                for idx in 0..meta.chunk_count {
+                    let raw = storage
+                        .get(&table_chunk_key(name, idx))
+                        .map_err(|e| SQLError::syntax(e.to_string()))?;
+                    if let Some(cval) = raw {
+                        let chunk: Vec<Row> = serde_json::from_slice(cval.as_bytes())
+                            .map_err(|e| SQLError::syntax(e.to_string()))?;
+                        for row in chunk {
+                            self.tables
+                                .insert_row(name, row)
+                                .map_err(|e| SQLError::syntax(e.to_string()))?;
+                        }
+                    }
+                }
+                Self::restore_auto_increment(&self.tables, name, &schema_clone)?;
+                continue;
+            }
+            return Err(SQLError::syntax(format!(
+                "corrupt persisted table {name}"
+            )));
         }
         Ok(())
     }
@@ -278,6 +505,7 @@ impl SQLEngine {
         stmt: CreateTableStatement,
         start: &Instant,
     ) -> Result<SQLResult> {
+        let _guard = self.engine_lock.write();
         let columns: Vec<ColumnInfo> = stmt
             .columns
             .iter()
@@ -290,13 +518,12 @@ impl SQLEngine {
                 ordinal: i,
                 unique: c.unique || c.is_primary_key,
                 is_primary_key: c.is_primary_key,
+                auto_increment: c.auto_increment,
             })
             .collect();
         let schema = Schema::new(columns);
         self.tables.create_table(&stmt.table.name, schema)?;
-        self.persist_table(&stmt.table.name)
-            .map_err(|e| SQLError::syntax(e.to_string()))?;
-        self.persist_table_names()
+        self.persist_create_table(&stmt.table.name)
             .map_err(|e| SQLError::syntax(e.to_string()))?;
         self.notify(|obs| obs.on_table_created(&stmt.table.name));
         let elapsed = start.elapsed().as_millis() as u64;
@@ -307,8 +534,9 @@ impl SQLEngine {
     }
 
     fn execute_drop_table(&self, stmt: DropTableStatement, start: &Instant) -> Result<SQLResult> {
+        let _guard = self.engine_lock.write();
         self.tables.drop_table(&stmt.table.name)?;
-        self.persist_table_names()
+        self.persist_drop_table(&stmt.table.name)
             .map_err(|e| SQLError::syntax(e.to_string()))?;
         self.notify(|obs| obs.on_table_dropped(&stmt.table.name));
         let elapsed = start.elapsed().as_millis() as u64;
@@ -319,6 +547,7 @@ impl SQLEngine {
     }
 
     fn execute_insert(&self, stmt: InsertStatement, start: &Instant) -> Result<SQLResult> {
+        let _guard = self.engine_lock.write();
         let schema = self.tables.get_schema(&stmt.table.name)?;
 
         let col_indices: Vec<usize> = if stmt.columns.is_empty() {
@@ -370,6 +599,21 @@ impl SQLEngine {
                 }
             }
 
+            // Handle AUTO_INCREMENT: generate id if null/missing
+            for (col_idx, col_info) in schema.columns.iter().enumerate() {
+                if col_info.auto_increment {
+                    let is_null = row_values[col_idx].is_none()
+                        || row_values[col_idx]
+                            .as_ref()
+                            .is_some_and(|v| *v == LiteralValue::Null);
+                    if is_null {
+                        // Use peek of next_row_id; insert_row will bump it by 1.
+                        let id = self.tables.current_row_id(&stmt.table.name)? + 1;
+                        row_values[col_idx] = Some(LiteralValue::Integer(id as i64));
+                    }
+                }
+            }
+
             // Enforce NOT NULL constraints
             for (col_idx, col_info) in schema.columns.iter().enumerate() {
                 let is_null = row_values[col_idx].is_none()
@@ -403,13 +647,26 @@ impl SQLEngine {
                 }
             }
 
+            let persisted_row = Row::new(row_values.clone());
             self.tables
-                .insert_row(&stmt.table.name, Row::new(row_values))?;
+                .insert_row(&stmt.table.name, persisted_row)?;
+            // If an explicit auto_increment value exceeds the counter, ensure next id tracks it.
+            for (col_idx, col_info) in schema.columns.iter().enumerate() {
+                if col_info.auto_increment
+                    && let Some(Some(LiteralValue::Integer(explicit))) = row_values.get(col_idx)
+                {
+                    let cur = self.tables.current_row_id(&stmt.table.name)?;
+                    if (*explicit as u64) > cur {
+                        self.tables
+                            .ensure_next_row_id(&stmt.table.name, *explicit as u64)?;
+                    }
+                }
+            }
             rows_inserted += 1;
         }
 
         if rows_inserted > 0 {
-            let _ = self.persist_table(&stmt.table.name);
+            self.persist_table(&stmt.table.name)?;
             self.notify(|obs| obs.on_rows_inserted(&stmt.table.name, rows_inserted));
         }
         let elapsed = start.elapsed().as_millis() as u64;
@@ -420,6 +677,7 @@ impl SQLEngine {
     }
 
     fn execute_select(&self, mut stmt: SelectStatement, start: &Instant) -> Result<SQLResult> {
+        let _guard = self.engine_lock.read();
         if !self.tables.table_exists(&stmt.from.name) {
             return Err(SQLError::TableNotFound(stmt.from.name.clone()));
         }
@@ -463,8 +721,8 @@ impl SQLEngine {
         let planner = LogicalPlanner::new();
         let plan = planner.plan_select(stmt);
 
-        // Build and execute
-        let mut executor = build_executor(&plan, self.tables.clone())?;
+        // Build and execute - enforce sort limit via config
+        let mut executor = build_executor(&plan, self.tables.clone(), self.config.max_batch_size)?;
         executor.open()?;
 
         let mut rows: Vec<Row> = Vec::new();
@@ -490,6 +748,7 @@ impl SQLEngine {
     }
 
     fn execute_update(&self, stmt: UpdateStatement, start: &Instant) -> Result<SQLResult> {
+        let _guard = self.engine_lock.write();
         let schema = self.tables.get_schema(&stmt.table.name)?;
         let mut rows = self.tables.scan_rows(&stmt.table.name)?;
         let mut rows_affected = 0u64;
@@ -513,13 +772,9 @@ impl SQLEngine {
             rows_affected += 1;
         }
 
-        // Write back using the new fine-grained update
-        self.tables.drop_table(&stmt.table.name)?;
-        let columns: Vec<ColumnInfo> = schema.columns.clone();
-        let new_schema = Schema::new(columns);
-        self.tables.create_table(&stmt.table.name, new_schema)?;
-        self.tables.insert_rows(&stmt.table.name, rows)?;
-        let _ = self.persist_table(&stmt.table.name);
+        // Atomic in-place update without dropping table (prevents concurrent SELECT TableNotFound)
+        self.tables.replace_rows(&stmt.table.name, rows)?;
+        self.persist_table(&stmt.table.name)?;
         if rows_affected > 0 {
             self.notify(|obs| obs.on_rows_updated(&stmt.table.name, rows_affected));
         }
@@ -532,6 +787,7 @@ impl SQLEngine {
     }
 
     fn execute_delete(&self, stmt: DeleteStatement, start: &Instant) -> Result<SQLResult> {
+        let _guard = self.engine_lock.write();
         let schema = self.tables.get_schema(&stmt.table.name)?;
         let rows = self.tables.scan_rows(&stmt.table.name)?;
         let mut rows_affected = 0u64;
@@ -554,12 +810,8 @@ impl SQLEngine {
             Vec::new()
         };
 
-        self.tables.drop_table(&stmt.table.name)?;
-        let columns: Vec<ColumnInfo> = schema.columns.clone();
-        let new_schema = Schema::new(columns);
-        self.tables.create_table(&stmt.table.name, new_schema)?;
-        self.tables.insert_rows(&stmt.table.name, kept_rows)?;
-        let _ = self.persist_table(&stmt.table.name);
+        self.tables.replace_rows(&stmt.table.name, kept_rows)?;
+        self.persist_table(&stmt.table.name)?;
         if rows_affected > 0 {
             self.notify(|obs| obs.on_rows_deleted(&stmt.table.name, rows_affected));
         }

@@ -3,7 +3,7 @@ use crate::error::ApiError;
 use crate::routes::http::{Created, created, pagination_links};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Json, Response};
 use axum::{
     Router,
@@ -200,15 +200,15 @@ async fn download_blob(
 async fn delete_blob(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let mgr = state
         .blob_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Blob storage not available"))?;
     mgr.delete_blob(&id)
         .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    Ok(Json(json!({"status": "deleted"})))
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn blob_info(

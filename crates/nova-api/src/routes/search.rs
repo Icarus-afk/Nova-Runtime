@@ -2,7 +2,7 @@ use crate::admin::AdminState;
 use crate::error::ApiError;
 use crate::routes::http::{Created, created, pagination_links};
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use axum::{
     Router,
@@ -89,7 +89,7 @@ async fn create_index(
     {
         let mut reg = registry().write();
         if reg.contains_key(&req.name) {
-            return Err(ApiError::bad_request(format!(
+            return Err(ApiError::conflict(format!(
                 "index {} already exists",
                 req.name
             )));
@@ -191,19 +191,14 @@ async fn get_index(
             "created_at": m.created_at,
         })))
     } else {
-        Ok(Json(json!({
-            "name": name,
-            "num_docs": stats.num_docs,
-            "num_terms": stats.num_terms,
-            "field_count": stats.field_count,
-        })))
+        Err(ApiError::not_found(format!("index {name} not found")))
     }
 }
 
 async fn delete_index(
     State(state): State<Arc<AdminState>>,
     Path(name): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<StatusCode, ApiError> {
     let _mgr = state
         .search_mgr
         .as_ref()
@@ -212,7 +207,7 @@ async fn delete_index(
     if reg.remove(&name).is_none() {
         return Err(ApiError::not_found(format!("index {name} not found")));
     }
-    Ok(Json(json!({"status": "deleted", "name": name})))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -360,12 +355,15 @@ async fn search_query(
 
 async fn index_stats(
     State(state): State<Arc<AdminState>>,
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let mgr = state
         .search_mgr
         .as_ref()
         .ok_or_else(|| ApiError::internal("Search not available"))?;
+    if !registry().read().contains_key(&name) {
+        return Err(ApiError::not_found(format!("index {name} not found")));
+    }
     let stats = mgr.stats();
     Ok(Json(json!({
         "num_docs": stats.num_docs,

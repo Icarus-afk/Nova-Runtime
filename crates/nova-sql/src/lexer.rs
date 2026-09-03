@@ -118,7 +118,7 @@ impl Lexer {
                 continue;
             }
             let token = if ch == '\'' {
-                self.read_string()
+                self.read_string()?
             } else if ch.is_ascii_digit() {
                 self.read_number()
             } else if ch.is_ascii_alphabetic() || ch == '_' {
@@ -149,12 +149,17 @@ impl Lexer {
         }
     }
 
-    fn read_string(&mut self) -> Token {
+    fn read_string(&mut self) -> Result<Token> {
+        let start = self.pos;
         self.pos += 1;
         let mut s = String::new();
         loop {
             if self.pos >= self.chars.len() {
-                break;
+                return Err(SQLError::syntax_at(
+                    "unterminated string literal",
+                    start,
+                    self.pos,
+                ));
             }
             let ch = self.chars[self.pos];
             if ch == '\'' {
@@ -170,7 +175,7 @@ impl Lexer {
                 self.pos += 1;
             }
         }
-        Token::String(s)
+        Ok(Token::String(s))
     }
 
     fn read_number(&mut self) -> Token {

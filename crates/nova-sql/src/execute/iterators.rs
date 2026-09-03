@@ -504,6 +504,7 @@ pub struct SortExecutor {
     schema: Schema,
     rows: Vec<Row>,
     index: usize,
+    max_rows: usize,
 }
 
 impl SortExecutor {
@@ -514,6 +515,23 @@ impl SortExecutor {
             schema,
             rows: Vec::new(),
             index: 0,
+            max_rows: usize::MAX,
+        }
+    }
+
+    pub fn with_limit(
+        input: Box<dyn Executor>,
+        order_by: Vec<OrderByExpr>,
+        schema: Schema,
+        max_rows: usize,
+    ) -> Self {
+        SortExecutor {
+            input,
+            order_by,
+            schema,
+            rows: Vec::new(),
+            index: 0,
+            max_rows,
         }
     }
 }
@@ -524,6 +542,12 @@ impl Executor for SortExecutor {
         let mut rows = Vec::new();
         while let Some(row) = self.input.next()? {
             rows.push(row);
+            if rows.len() > self.max_rows {
+                return Err(crate::error::SQLError::QueryTooComplex(format!(
+                    "sort buffer exceeded limit {} (max_batch_size)", 
+                    self.max_rows
+                )));
+            }
         }
         self.input.close()?;
         let schema = self.schema.clone();

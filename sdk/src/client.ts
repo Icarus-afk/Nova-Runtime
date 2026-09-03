@@ -179,13 +179,32 @@ export class FetchHttpClient implements HttpClient {
       const startTime = Date.now();
 
       try {
-        const body = req.body !== undefined ? JSON.stringify(req.body) : undefined;
+        // Detect FormData / Blob / Buffer / ArrayBuffer etc. to avoid JSON stringify
+        let body: any = undefined;
+        const isFormData = typeof (globalThis as any).FormData !== 'undefined' && req.body instanceof (globalThis as any).FormData;
+        const isBlob = typeof (globalThis as any).Blob !== 'undefined' && req.body instanceof (globalThis as any).Blob;
+        const isBuffer = typeof (globalThis as any).Buffer !== 'undefined' && typeof (req.body as any)?.byteLength === 'number' && (req.body as any) instanceof Uint8Array;
+        const isArrayBuffer = req.body instanceof ArrayBuffer;
+        if (req.body !== undefined) {
+          if (isFormData || isBlob || isBuffer || isArrayBuffer || (typeof req.body === 'object' && (req.body as any) instanceof Uint8Array)) {
+            body = req.body as any;
+            // Remove default JSON content-type for multipart so fetch sets boundary automatically
+            if (isFormData && headers['Content-Type']) {
+              delete headers['Content-Type'];
+              delete (headers as any)['content-type'];
+            }
+          } else if (typeof req.body === 'string' || req.body instanceof String) {
+            body = req.body as string;
+          } else {
+            body = JSON.stringify(req.body);
+          }
+        }
         const fetchInit: RequestInit & { headers: Record<string, string> } = {
           method: req.method,
           headers,
           signal,
         };
-        if (body) {
+        if (body !== undefined) {
           fetchInit.body = body;
         }
 

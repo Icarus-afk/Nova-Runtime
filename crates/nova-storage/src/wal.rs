@@ -90,10 +90,14 @@ impl WalWriter {
                 if name.ends_with(".wal")
                     && let Some(stem) = name.strip_suffix(".wal")
                     && let Ok(num) = stem.parse::<u64>()
-                    && num > max_seg
                 {
-                    max_seg = num;
-                    max_lsn = Self::recover_lsn_from_segment(&entry.path())?;
+                    if num > max_seg {
+                        max_seg = num;
+                    }
+                    let lsn = Self::recover_lsn_from_segment(&entry.path())?;
+                    if lsn > max_lsn {
+                        max_lsn = lsn;
+                    }
                 }
             }
         }

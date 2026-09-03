@@ -1,6 +1,8 @@
 use crate::admin::AdminState;
 use crate::error::ApiError;
+use crate::routes::http::pagination_links;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::{
     Router,
@@ -127,12 +129,14 @@ async fn cache_batch_set(
 #[derive(Deserialize)]
 struct ListKeysParams {
     pattern: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 async fn cache_list_keys(
     State(state): State<Arc<AdminState>>,
     Query(params): Query<ListKeysParams>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     let mgr = state
         .cache_mgr
         .as_ref()
@@ -154,11 +158,31 @@ async fn cache_list_keys(
             keys.retain(|k| re.is_match(k));
         }
     }
-    Ok(Json(json!({
-        "data": keys,
-        "total": keys.len(),
-        "pattern": params.pattern,
-    })))
+    keys.sort();
+    let total = keys.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let has_more = offset + limit < total;
+    let data: Vec<String> = keys.into_iter().skip(offset).take(limit).collect();
+    let link = pagination_links(
+        "/api/v1/cache/keys",
+        &[("limit", limit.to_string())],
+        limit,
+        offset,
+        total,
+    );
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&link) {
+        headers.insert("link", v);
+    }
+    Ok((
+        headers,
+        Json(json!({
+            "data": data,
+            "pagination": {"offset": offset, "limit": limit, "total": total, "has_more": has_more},
+            "pattern": params.pattern,
+        })),
+    ))
 }
 
 async fn cache_stats(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, ApiError> {

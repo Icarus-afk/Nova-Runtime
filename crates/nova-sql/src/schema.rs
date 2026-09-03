@@ -38,6 +38,8 @@ pub struct ColumnInfo {
     pub ordinal: usize,
     pub unique: bool,
     pub is_primary_key: bool,
+    #[serde(default)]
+    pub auto_increment: bool,
 }
 
 #[derive(Debug, Clone)]

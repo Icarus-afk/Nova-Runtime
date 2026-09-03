@@ -1,8 +1,8 @@
 use crate::admin::{self, AdminState};
 use crate::error::ApiError;
 use crate::middleware::{
-    IdempotencyState, RateLimitState, auth_layer, cors_layer, idempotency_layer, rate_limit_layer,
-    request_logger,
+    IdempotencyState, RateLimitState, auth_layer, cors_layer, idempotency_layer,
+    payload_too_large_handler, rate_limit_layer, request_logger, request_timeout,
 };
 use crate::routes;
 use axum::http::StatusCode;
@@ -31,14 +31,23 @@ pub async fn start_server(
     let rate_limit_state = Arc::new(RateLimitState::new(600, 60_000));
     let idempotency_state = Arc::new(IdempotencyState::new());
 
-    let mut app = Router::new()
+    // Build base router first, merge GraphQL BEFORE applying auth so that
+    // /graphql is covered by the same auth_layer. Previously gql was merged
+    // after layers, bypassing auth entirely (critical bypass).
+    let mut base = Router::new()
         .nest("/", admin::routes(admin_state.clone()))
         .nest("/api/v1", routes::v1_routes(admin_state.clone()))
         .nest(
             "/api/v1",
             routes::ws_router().with_state(admin_state.clone()),
         )
-        .fallback(fallback)
+        .fallback(fallback);
+
+    if let Some(gql) = graphql_router {
+        base = base.merge(gql);
+    }
+
+    let app = base
         .layer(middleware::from_fn_with_state(
             admin_state.clone(),
             auth_layer,
@@ -53,12 +62,10 @@ pub async fn start_server(
         ))
         .layer(middleware::from_fn(cors_layer))
         .layer(middleware::from_fn(request_logger))
+        .layer(middleware::from_fn(request_timeout))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max request body
+        .layer(middleware::from_fn(payload_too_large_handler))
         .layer(TraceLayer::new_for_http());
-
-    if let Some(gql) = graphql_router {
-        app = app.merge(gql);
-    }
 
     let listener = TcpListener::bind(addr).await?;
     info!("HTTP server listening on {}", addr);

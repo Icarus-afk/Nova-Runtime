@@ -9,7 +9,11 @@ use crate::execute::table_store::TableStoreRef;
 use crate::plan::logical::LogicalNode;
 use crate::schema::{ColumnInfo, Schema};
 
-pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<dyn Executor>> {
+pub fn build_executor(
+    plan: &LogicalNode,
+    tables: TableStoreRef,
+    max_sort_rows: usize,
+) -> Result<Box<dyn Executor>> {
     match plan {
         LogicalNode::Scan {
             table_name,
@@ -23,7 +27,7 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
             )))
         }
         LogicalNode::Selection { input, predicate } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             let schema = resolve_schema(input, tables.as_ref())?;
             Ok(Box::new(FilterExecutor::new(
                 input_exec,
@@ -32,7 +36,7 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
             )))
         }
         LogicalNode::Projection { input, exprs } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             let in_schema = resolve_schema(input, tables.as_ref())?;
             let out_schema = projection_schema(exprs, &in_schema);
             Ok(Box::new(ProjectionExecutor::new_with_output(
@@ -48,7 +52,7 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
             group_by,
             having,
         } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             let schema = resolve_schema(input, tables.as_ref())?;
             Ok(Box::new(AggregateExecutor::new(
                 input_exec,
@@ -59,14 +63,15 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
             )))
         }
         LogicalNode::Sort { input, order_by } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             // Sort operates on the projected/aggregated output, so resolve the
             // output schema (aliases + ordinals) rather than the raw table.
             let schema = resolve_output_schema(input, tables.as_ref())?;
-            Ok(Box::new(SortExecutor::new(
+            Ok(Box::new(SortExecutor::with_limit(
                 input_exec,
                 order_by.clone(),
                 schema,
+                max_sort_rows,
             )))
         }
         LogicalNode::Limit {
@@ -74,16 +79,16 @@ pub fn build_executor(plan: &LogicalNode, tables: TableStoreRef) -> Result<Box<d
             limit,
             offset,
         } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             Ok(Box::new(LimitExecutor::new(input_exec, *limit, *offset)))
         }
         LogicalNode::Dedup { input } => {
-            let input_exec = build_executor(input, tables.clone())?;
+            let input_exec = build_executor(input, tables.clone(), max_sort_rows)?;
             Ok(Box::new(DedupExecutor::new(input_exec)))
         }
         LogicalNode::Join { left, right, on } => {
-            let left_exec = build_executor(left, tables.clone())?;
-            let right_exec = build_executor(right, tables.clone())?;
+            let left_exec = build_executor(left, tables.clone(), max_sort_rows)?;
+            let right_exec = build_executor(right, tables.clone(), max_sort_rows)?;
             let left_schema = resolve_schema(left, tables.as_ref())?;
             let right_schema = resolve_schema(right, tables.as_ref())?;
             let schema = combine_schemas(&left_schema, &right_schema);
@@ -129,6 +134,7 @@ fn projection_schema(exprs: &[(Expr, Option<String>)], _input: &Schema) -> Schem
                 ordinal,
                 unique: false,
                 is_primary_key: false,
+                auto_increment: false,
             }
         })
         .collect();

@@ -171,6 +171,47 @@ impl TableStore {
         let mut rows = data.rows.write();
         updater(&mut rows)
     }
+
+    pub fn replace_rows(&self, name: &str, new_rows: Vec<Row>) -> Result<()> {
+        let data = self
+            .tables
+            .get(name)
+            .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
+        let mut rows = data.rows.write();
+        *rows = new_rows;
+        Ok(())
+    }
+
+    pub fn allocate_row_id(&self, name: &str) -> Result<u64> {
+        let data = self
+            .tables
+            .get(name)
+            .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
+        let mut rid = data.next_row_id.write();
+        let id = *rid + 1;
+        *rid = id;
+        Ok(id)
+    }
+
+    pub fn current_row_id(&self, name: &str) -> Result<u64> {
+        let data = self
+            .tables
+            .get(name)
+            .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
+        Ok(*data.next_row_id.read())
+    }
+
+    pub fn ensure_next_row_id(&self, name: &str, min: u64) -> Result<()> {
+        let data = self
+            .tables
+            .get(name)
+            .ok_or_else(|| SQLError::TableNotFound(name.to_string()))?;
+        let mut rid = data.next_row_id.write();
+        if min > *rid {
+            *rid = min;
+        }
+        Ok(())
+    }
 }
 
 pub type TableStoreRef = Arc<TableStore>;
